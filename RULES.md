@@ -1,6 +1,6 @@
 # Arsune job rules
 
-These are proposed rules for the first demonstration. They define the coordinator behavior for the architecture in [Architecture](docs/ARCHITECTURE.md). The worker ownership and demonstration task remain subject to [Decisions](docs/DECISIONS.md).
+These are proposed rules for the first demonstration. They define the coordinator behavior for the architecture in [Architecture](docs/ARCHITECTURE.md). Arsune will operate its own workers. The demonstration task remains subject to [Decisions](docs/DECISIONS.md); supplier-specific rules remain conditional.
 
 ## Scope and assignment
 

@@ -8,7 +8,7 @@ Arsune is a proposed AI swarm service for the NEAR hackathon. A coordinator assi
 
 This repository contains planning documentation only. No application, contract, model integration, or tests have been built. The design below records the discussion before implementation. Technology choices remain proposals until tested.
 
-The architecture review of 4 November 2026 proposes FastAPI and Python, following Aldea and AprobaDoc. The main open product decision is whether Arsune operates its workers or hires another provider's agent.
+The architecture review of 4 November 2026 proposes FastAPI and Python, following Aldea and AprobaDoc. The user selected workers operated by Arsune. The first demonstration task remains open; supplier-data extraction is the earlier candidate.
 
 - [Architecture and agent roles](docs/ARCHITECTURE.md)
 - [Job rules and acceptance requirements](RULES.md)
@@ -45,7 +45,7 @@ The initial idea included our own marketplace, competing worker bids, and a paym
 
 **The current direction is to offer a specialized service through the existing marketplace.** Our main development work should be extraction, checking, evidence, and measurement.
 
-Arsune can be designed as one marketplace service while several agents perform the work internally. The documented seller API supports receiving and submitting work. A worker token cannot hire another agent or release payment. Paid subcontracting requires a separate buyer connection and is an open scope choice. See the integration findings for the API evidence and required live tests.
+Arsune will use one marketplace service while its own agents perform the work internally. The documented seller API supports receiving and submitting work. A worker token cannot hire another agent or release payment. Paid subcontracting is deferred. See the integration findings for the API evidence and required live tests.
 
 Do not treat the earlier standalone marketplace or custom payment contract as approved first-version scope. Build a separate contract only if a concrete requirement cannot be met through the marketplace.
 
@@ -87,7 +87,7 @@ flowchart TD
 
 The coordinator advances stored jobs. Extraction and checking run in separate Celery worker processes. Source documents and outputs stay outside the blockchain. PostgreSQL stores job records, check reports, and references to files. Redis carries work notifications; stored database state supports recovery.
 
-The current prototype proposal has Arsune operate the agents and checker. Separate roles or accounts provide traceability; they do not establish independent ownership or eliminate the need to trust the service. Paid external workers are a separate option for discussion.
+Arsune will operate the agents and checker. Separate roles or accounts provide traceability; they do not establish independent ownership or eliminate the need to trust the service. Paid external workers are outside the first build.
 
 ## Proposed technology and reasons
 
@@ -169,7 +169,7 @@ Defer a general marketplace, broad agent registration, cross-chain payments, and
 
 ## Next implementation decisions
 
-1. Choose worker ownership and confirm the first demonstration task in `docs/DECISIONS.md`.
+1. Select the first demonstration task in `docs/DECISIONS.md`. Worker ownership is settled: Arsune operates the agents.
 2. Prepare the reference dataset and have a person check its answers. `RULES.md` proposes the supplier task limits and cases.
 3. Implement the repeatable simulation and verify the proposed job rules.
 4. Measure a single-agent baseline and the swarm on the same held-out cases.

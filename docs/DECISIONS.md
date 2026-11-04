@@ -1,6 +1,6 @@
 # Arsune demonstration decisions
 
-The next discussion must decide what the swarm demonstrates and who operates its workers. FastAPI can support both options below. The current README proposes workers operated by Arsune and a supplier-data task.
+The user selected option A on 4 November 2026: Arsune operates its own workers. The first demonstration task remains open. Supplier-data extraction is the earlier candidate; other tasks are now being considered.
 
 ## Worker ownership
 
@@ -9,7 +9,7 @@ The next discussion must decide what the swarm demonstrates and who operates its
 | A — Arsune operates the swarm | A coordinator assigns two workers, a checker finds an error, and a worker corrects it. Arsune sells the combined result through one Agent Market listing. | Matches the current README. Internal worker budgets are cost controls. They are not independent agent payments. |
 | B — Arsune hires another provider | Arsune delegates one bounded subtask through Agent Market, checks the returned result, and combines it with its own work. | Adds buyer authentication, a real provider, payment authority, source-sharing rules, child deadlines, and child-result acceptance. |
 
-Recommendation: build A first if the priority is a complete working service within the current scope. Choose B now if a real economic exchange between agents is essential to the demonstration. B is a material product change, not a different Python framework.
+Decision: use A for the first build. B is deferred. The internal workers do not hire or pay other providers.
 
 The official AI Swarms track emphasizes coordination markets and economic activity between agents. Our assessment is that B demonstrates this more directly. A demonstrates coordinated work and checking, but its economic claim is limited to the customer hiring Arsune. This assessment is not a ruling on track eligibility. The published group-buying prompt is an example, not a requirement to build an auction or create a particular number of accounts. [Track example](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/05-swarms.md), [Hackathon tracks](https://nearhackathon.com/)
 
@@ -33,6 +33,6 @@ Confirm whether this is still the intended first task. If the product should per
 
 ## Discussion outcome
 
-Record A or B and one demonstration task. If B is selected, also settle the provider, source-sharing permission, and maximum real spend before enabling a buyer connection. No real-spend authority has been granted by this design work.
+Worker ownership is settled. Select one demonstration task next. Do not implement the supplier-specific rules or prepare its dataset until the task is selected. No real-spend authority has been granted by this design work.
 
 Implementation tasks and their dependencies are stored in beads. The scope decision is `arsune-1s7`. The original integration and dataset task, `arsune-pqj`, remains incomplete until this decision, reviewed reference answers, and confirmed acceptance rules are complete. The live seller connection has its own implementation task.

@@ -15,7 +15,7 @@ This is the architecture proposal as of 4 November 2026. No application exists. 
 
 Use two worker identities for separate source sections in the demonstration. They use the same implementation and may use the same model. Keep enough surrounding source context to interpret headings, units, and currency. The checker also examines coverage across sections, so a product omitted by all workers is detectable.
 
-For the initial operated-swarm proposal, all agents belong to Arsune. Separate roles improve traceability but do not establish independent ownership or independent judgment. The demo must show a rejected result and a bounded correction, not just several model calls.
+The user selected workers operated by Arsune for the first build. Separate roles improve traceability but do not establish independent ownership or independent judgment. The demo must show a rejected result and a bounded correction, not just several model calls.
 
 ## Runtime
 
