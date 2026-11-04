@@ -2,11 +2,20 @@
 
 **AI work. Checked against the source.**
 
-Arsune is a proposed service for the NEAR hackathon. AI agents extract structured data from source documents. A separate checker compares the results with the sources. The customer receives the dataset, source references, and a check report.
+Arsune is a proposed AI swarm service for the NEAR hackathon. A coordinator assigns work to agents. A separate checker compares their results with source evidence. The customer receives the combined result, source references, and a check report. Supplier-data extraction is the proposed first demonstration.
 
 ## Project status
 
 This repository contains planning documentation only. No application, contract, model integration, or tests have been built. The design below records the discussion before implementation. Technology choices remain proposals until tested.
+
+The architecture review of 4 November 2026 proposes FastAPI and Python, following Aldea and AprobaDoc. The main open product decision is whether Arsune operates its workers or hires another provider's agent.
+
+- [Architecture and agent roles](docs/ARCHITECTURE.md)
+- [Job rules and acceptance requirements](RULES.md)
+- [Agent Market findings and test limits](docs/MARKET_INTEGRATION.md)
+- [Decisions for the next discussion](docs/DECISIONS.md)
+
+Task status and dependencies are tracked in beads. Run `bd ready` to see available work.
 
 - Repository: https://github.com/encouver/arsune
 - Local folder: `/home/encouver/workspace/arsune`
@@ -36,7 +45,7 @@ The initial idea included our own marketplace, competing worker bids, and a paym
 
 **The current direction is to offer a specialized service through the existing marketplace.** Our main development work should be extraction, checking, evidence, and measurement.
 
-Arsune could appear as one service in the marketplace while several agents perform the work internally. Marketplace integration, internal worker payments, and result acceptance behavior need to be confirmed against its current API.
+Arsune can be designed as one marketplace service while several agents perform the work internally. The documented seller API supports receiving and submitting work. A worker token cannot hire another agent or release payment. Paid subcontracting requires a separate buyer connection and is an open scope choice. See the integration findings for the API evidence and required live tests.
 
 Do not treat the earlier standalone marketplace or custom payment contract as approved first-version scope. Build a separate contract only if a concrete requirement cannot be met through the marketplace.
 
@@ -44,55 +53,57 @@ Do not treat the earlier standalone marketplace or custom payment contract as ap
 
 1. The customer supplies documents and agrees to the job scope and acceptance rules.
 2. Arsune records the job and stores the source documents privately.
-3. An extraction agent prepares the dataset and source references.
-4. A separate checker runs code checks and compares values with the sources.
-5. Uncertain results enter a defined review process. Corrections must have a retry limit.
+3. The coordinator assigns source sections to workers, which prepare results and evidence.
+4. Code checks validate the output. A separate checking agent compares values and coverage with the original sources.
+5. The coordinator requests a bounded correction or routes uncertainty to human review with a deadline.
 6. The customer receives the dataset and check report.
 7. Acceptance and payment follow the confirmed marketplace integration.
 
-The exact relationship between the check report and payment release remains an integration decision. Do not claim that marketplace payments automatically follow our checker until that behavior is implemented and tested.
+The check report controls local submission eligibility. For ordinary marketplace hires, acceptance and payout remain marketplace actions; our checker cannot release payment. The live connection has not been tested.
 
 ## Proposed architecture
 
 ```mermaid
 flowchart TD
     U[Customer] --> M[NEAR Agent Market]
-    M -->|Integration to confirm| A[Arsune application server]
+    M <-->|Documented API, live test pending| C[Python coordinator]
     U --> W[Arsune web interface]
-    W --> A
+    W --> A[FastAPI API]
     A --> D[(PostgreSQL)]
     A --> S[(Private file storage)]
-    A --> Q[Background job queue]
-    Q --> E[Extraction agent]
+    C <--> D
+    C --> Q[Redis queue]
+    Q --> E[Python worker agents]
     E --> S
-    Q --> C[Separate checker]
-    S --> C
+    Q --> V[Separate checker]
+    S --> V
     E --> L[AI model service]
-    C --> L
-    C --> R[Check report]
+    V --> L
+    V --> R[Check report]
     R --> A
     A -->|Dataset and evidence| W
-    A -->|Service result| M
+    R --> C
 ```
 
-The server coordinates jobs. Extraction and checking run as background tasks. Source documents and outputs stay outside the blockchain. The database stores job records, check reports, and references to files.
+The coordinator advances stored jobs. Extraction and checking run in separate Celery worker processes. Source documents and outputs stay outside the blockchain. PostgreSQL stores job records, check reports, and references to files. Redis carries work notifications; stored database state supports recovery.
 
-For the prototype, we operate the agents and checker. Separate roles or accounts provide traceability; they do not establish independent ownership or eliminate the need to trust the service.
+The current prototype proposal has Arsune operate the agents and checker. Separate roles or accounts provide traceability; they do not establish independent ownership or eliminate the need to trust the service. Paid external workers are a separate option for discussion.
 
 ## Proposed technology and reasons
 
 | Component | Proposed technology | Reason |
 | --- | --- | --- |
-| Web interface and application server | Next.js, React, TypeScript | Keep the interface and server in one project and share data definitions. |
-| Agent execution | Node.js and TypeScript | Use explicit job steps, bounded retries, and allowed actions. |
+| Web interface | Next.js, React, TypeScript | Follow the existing web projects. |
+| Application API | FastAPI, Uvicorn, Pydantic | Follow the Python backend patterns in Aldea and AprobaDoc. |
+| Agent execution | Python and explicit workflow steps | Keep agent roles, limits, and evidence checks visible. |
 | AI model access | NEAR AI Cloud, subject to a quality and cost test | Evaluate models on our sample documents before selecting one. |
-| Database | PostgreSQL | Store related jobs, results, and activity records in one database. |
-| Background queue | pg-boss | Use PostgreSQL for queued tasks and avoid a separate queue service initially. |
+| Database | PostgreSQL, SQLAlchemy, Alembic | Store related jobs, results, and activity records in one database. |
+| Background queue | Celery with Redis | Reuse the worker approach in Aldea and test recovery explicitly. |
 | File storage | Private S3-compatible storage | Store documents and outputs with controlled access. |
-| Local and server setup | Docker | Make the development and execution environment repeatable. |
-| Marketplace integration | NEAR Agent Market API, pending review | Reuse existing service discovery and payment functions. |
-| Direct NEAR access, if needed | near-api-js and NEAR Wallet Selector | Support server transactions and customer wallet access. |
-| Custom contract, only if required | Rust with near-sdk | Implement narrowly defined payment rules on NEAR. |
+| Local and server setup | uv, Docker Compose, Ruff, pytest | Make development and verification repeatable. |
+| Marketplace integration | HTTPX and NEAR Agent Market REST API | Use the documented seller flow; verify it with an authorized live test. |
+
+Direct blockchain access and custom contracts are deferred unless the selected workflow establishes a concrete need.
 
 Pin dependency versions when implementation starts. No runtime versions or setup commands have been validated yet.
 
@@ -115,6 +126,7 @@ Each report should identify the source version, output version, check version, a
 - Keep private keys and credentials outside model inputs.
 - Treat source documents as data, not as instructions that can grant tools or payment authority.
 - Use private storage and temporary download links.
+- Use synthetic or public data for the first marketplace demonstration. Its documented `link=true` upload option creates a public capability link. Verify private artifact delivery before accepting private customer data.
 - Keep document text and private download addresses off the blockchain.
 - Make retries safe. A repeated job or callback must not cause a second payment.
 - Record confirmed payment status from the payment system. Do not infer payment success from a queued request.
@@ -146,7 +158,7 @@ These advantages are hypotheses. No customer demand, savings, accuracy improveme
 Proposed scope:
 
 - One document type and one extraction task.
-- An extraction agent and a separate checker.
+- A coordinator, two worker assignments, and a separate checker, under the operated-swarm proposal.
 - A small, reviewed reference dataset.
 - A job page with progress, results, and source evidence.
 - A repeatable simulation that does not require live AI calls.
@@ -157,18 +169,18 @@ Defer a general marketplace, broad agent registration, cross-chain payments, and
 
 ## Next implementation decisions
 
-1. Review the current Agent Market service API, payment flow, and test options.
-2. Select a document type and prepare a reviewed reference dataset.
-3. Write the acceptance rules, uncertainty policy, retry limits, and review deadlines.
-4. Measure a single-agent baseline and test candidate models.
-5. Confirm the smallest NEAR integration needed for the demonstration.
-6. Build one complete job flow and test both successful and failed jobs.
+1. Choose worker ownership and confirm the first demonstration task in `docs/DECISIONS.md`.
+2. Prepare the reference dataset and have a person check its answers. `RULES.md` proposes the supplier task limits and cases.
+3. Implement the repeatable simulation and verify the proposed job rules.
+4. Measure a single-agent baseline and the swarm on the same held-out cases.
+5. Test the documented marketplace flow with an authorized account and a bounded budget. No free sandbox was established by the review.
+6. Demonstrate successful work, a detected error, correction, uncertainty, and recovery after interruption.
 
 The earlier architecture estimate was 8–12 working days for two experienced developers. It assumed ready sample documents and familiar tools. It was a planning estimate, not a delivery commitment. Re-estimate after the integration review and scope selection.
 
 ## Hackathon context and references
 
-The event information reviewed during planning listed a development deadline of **14 November 2026 at 23:59 UTC**. It required a public repository and a public demo post on X, submitted through the event form. This repository was created as private. Confirm current rules before submission and make the repository public when ready to submit.
+The event site checked on 4 November 2026 lists a development deadline of **14 November 2026 at 23:59 UTC**. It requires a public repository and a public demo post on X, submitted through the event form. This repository remains private. Publication is a later submission action.
 
 - [NEAR hackathon](https://nearhackathon.com/)
 - [Official AI Swarms example](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/05-swarms.md)
@@ -181,4 +193,5 @@ The event information reviewed during planning listed a development deadline of 
 - [NEAR asynchronous calls](https://docs.near.org/smart-contracts/anatomy/crosscontract)
 - [NEAR Rust SDK](https://docs.rs/near-sdk/latest/near_sdk/)
 - [NEAR Sandbox](https://github.com/near/near-sandbox-rs/)
-- [pg-boss](https://github.com/timgit/pg-boss)
+- [FastAPI background work](https://fastapi.tiangolo.com/tutorial/background-tasks/)
+- [Celery task behavior](https://docs.celeryq.dev/en/stable/userguide/tasks.html)
