@@ -10,7 +10,7 @@ Build a working flow from a URL to an evidence report. Three specialists inspect
 
 The user approved workers operated by Arsune. The first build inspects at most five pages, starts with a controlled faulty website, and uses scripted responses before connecting a real model through the same workflow.
 
-Implementation has not started yet. The project currently contains the design and beads tasks. Runtime instructions and measured verification results will be added with the implementation.
+The local prototype includes the API, persistent worker, browser checks, controlled test website, and report interface. Scripted checks use actual browser observations. Model mode uses the same evidence checks and requires a configured service key and cost limit. Live model verification is still pending.
 
 ## Customer flow
 
@@ -27,9 +27,10 @@ Arsune does not repair the website. It does not submit forms, make purchases, lo
 - [Architecture and agent roles](docs/ARCHITECTURE.md)
 - [Job rules and completion checks](RULES.md)
 - [Product decisions](docs/DECISIONS.md)
+- [Setup and verification commands](docs/RUNNING.md)
 - [Agent Market research for a later integration](docs/MARKET_INTEGRATION.md)
 
-FastAPI and Python follow the patterns used in Aldea and AprobaDoc. The proposed runtime uses PostgreSQL, Celery with Redis, Playwright, and a Next.js interface. A protected local evidence volume supports the first local demonstration. Pin compatible dependency versions during implementation.
+FastAPI and Python follow the patterns used in Aldea and AprobaDoc. The runtime uses PostgreSQL, Celery with Redis, Playwright, and a Next.js interface. A protected local evidence volume stores screenshots. Python and frontend lockfiles record dependency versions.
 
 Task status and dependencies are stored in beads. Use bd ready to find available work.
 
@@ -38,6 +39,16 @@ Task status and dependencies are stored in beads. Use bd ready to find available
 The first goal requires a real API, worker, and browser run that confirms a known fault, rejects an incorrect finding, and returns evidence for every finding. An interrupted job must resume without duplicate results. Scripted and real-model verification must be reported separately.
 
 The controlled website must contain known faults and a corrected variant. These are repeatable test cases, not evidence of accuracy on every website.
+
+Local checks passed on 4 November 2026: 24 Python tests, three interface browser tests, a worker stop/restart test, and frontend/backend image builds. The faulty site produced eight confirmed findings across three fault types and one rejected false claim. The corrected site produced no confirmed findings. See [measured verification results](docs/VERIFICATION.md). The live model test remains open.
+
+## Current limits
+
+This is a local operator tool. It has no customer accounts or public-service access controls. The browser checks at most five selected pages under one origin. External resources and redirects are blocked and can affect page appearance; the report records these limits. For a redirect, submit the final permitted URL in a new job.
+
+Navigation checks use response status and source links. Mobile checks measure horizontal overflow. Consistency checks compare visible values with matching `data-fact-key` and `data-context` attributes. The controlled site supplies these attributes. General text consistency on ordinary websites needs a later extension.
+
+The model service proposes candidates. A separate browser check determines the result. A model reply alone cannot confirm a fault. If a worker stops during a paid request, the job must not repeat that request when its charge is uncertain.
 
 ## Later goals
 

@@ -40,13 +40,15 @@ Playwright supports page screenshots and network inspection. Measure the actual 
 
 | Record | Information |
 | --- | --- |
-| Job | Owner or local operator, URL, mode, limits, state, timestamps, selected pages |
+| Job | URL, mode, state, timestamps, deadline, worker generation, lease, and saved stage data |
 | Observation | URL, final URL, viewport, time, response, visible text, relevant elements, screenshot reference |
-| Attempt | Role, stage, generation, lease, provider and prompt version, state, elapsed time, cost |
+| Attempt | Worker generation, state, start time, and finish time |
 | Candidate | Stable ID, role, claim type, explanation, URLs, expected behavior, reproduction steps |
-| Check result | Candidate ID, status, fresh observations, evidence, explanation |
-| Event | Job, role, stage, time, message without secrets |
-| Pending action | Stable operation ID, job and stage, delivery state, retry time |
+| Check result | Candidate ID, status, fresh observations, evidence, and explanation, saved in stage data and the final report |
+| Event | Stable event ID, job ID, role, time, and message without secrets |
+| Pending action | Stable scan operation ID, job ID, and next publication time |
+
+Saved stage data also records selected pages, specialist outputs, model request reservations, and completed checks. The local operator is the only user; customer ownership and account records are not implemented.
 
 PostgreSQL is authoritative. Redis carries work notifications. Save a job change and its pending action in one database transaction. A coordinator publishes pending actions and reconciles unfinished work after restart.
 
@@ -57,6 +59,8 @@ Use bounded leases and attempt generations. Expired workers cannot overwrite new
 Validate HTTP and HTTPS targets under a configured policy. Reject embedded credentials and disallowed destinations, including redirects to internal services. The controlled demo origin is an explicit local exception, not general permission to inspect private networks. Apply the policy to browser and checker requests.
 
 The first deployment is a local operator tool, not a public scanning service. Keep model credentials on the server. Evidence routes must not expose arbitrary files. Isolate project containers and volumes from other local projects.
+
+The current browser permits resources only from the target origin. It blocks external resources and redirects and records blocked requests in coverage. This can change the appearance of sites that use external styles or scripts. A redirect requires a new job with the final permitted URL. The consistency checker currently requires matching `data-fact-key` and `data-context` attributes. Ordinary page text does not yet receive a general consistency check.
 
 ## Job sequence
 

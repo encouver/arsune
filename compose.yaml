@@ -1,0 +1,78 @@
+name: arsune
+x-backend: &backend
+  build: .
+  env_file:
+    - path: .env
+      required: false
+  environment: &environment
+    ARSUNE_DATABASE_URL: postgresql+psycopg://arsune:arsune@postgres:5432/arsune
+    ARSUNE_REDIS_URL: redis://redis:6379/0
+    ARSUNE_DEMO_URL: http://demo:8541
+    ARSUNE_EVIDENCE_DIR: /data/evidence
+  volumes:
+    - evidence:/data/evidence
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: arsune
+      POSTGRES_PASSWORD: arsune
+      POSTGRES_DB: arsune
+    ports: ["127.0.0.1:55432:5432"]
+    volumes: ["postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U arsune"]
+      interval: 2s
+      retries: 30
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:56379:6379"]
+    volumes: ["redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      retries: 30
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+  api:
+    <<: *backend
+    ports: ["127.0.0.1:8540:8540"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+  worker:
+    <<: *backend
+    command: ["celery", "-A", "arsune.queue:app", "worker", "--concurrency=1", "--loglevel=INFO"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+  coordinator:
+    <<: *backend
+    command: ["python", "-m", "arsune.coordinator"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+  demo:
+    <<: *backend
+    command: ["uvicorn", "arsune.demo:app", "--host", "0.0.0.0", "--port", "8541"]
+    ports: ["127.0.0.1:8541:8541"]
+  ui:
+    build:
+      context: ./frontend
+      args:
+        ARSUNE_API_URL: http://api:8540
+    environment:
+      ARSUNE_API_URL: http://api:8540
+    ports: ["127.0.0.1:3540:3540"]
+    depends_on: [api]
+volumes:
+  postgres:
+  redis:
+  evidence:

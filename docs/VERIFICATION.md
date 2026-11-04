@@ -1,0 +1,45 @@
+# Prototype verification — 4 November 2026
+
+The local scripted flow works from URL entry to an evidence report. Live model verification remains incomplete because no model service credential and test spending limit were supplied for this run. Model transport tests used a stub and are reported separately.
+
+## Results
+
+| Check | Measured result |
+| --- | --- |
+| Complete Python suite | 24 tests passed in 24.70 seconds against actual PostgreSQL and Chromium |
+| Engine tests | 18 tests passed, including faulty/corrected scans, policy limits, saved state, and model failure cases |
+| Backend tests | Six tests passed for claim fencing, repeat-safe records, API/evidence access, deadlines, example settings, and migration upgrade/downgrade/upgrade in an isolated schema |
+| Frontend checks | Production build, TypeScript check, format check, and three browser tests passed |
+| URL to report | Actual UI, API, coordinator, Celery worker, Redis, PostgreSQL, and Chromium used together |
+| Faulty fixture | Five selected pages; eight confirmed findings across broken links, mobile overflow, and matched price conflicts; one rejected injected claim |
+| Corrected fixture | New job completed with zero confirmed findings |
+| Evidence | Confirmed and rejected screenshots loaded through the API; reproduction steps were present |
+| Worker interruption | Worker stopped after saved observations; replacement finished the same job at generation 2 and retained saved screenshot names |
+| Repeated queue delivery | Repeated task reached the worker and completed; report, generation, and unique finding IDs stayed unchanged |
+| Public HTTPS smoke | `https://example.com/` returned HTTP 200 at desktop and mobile sizes; one page selected, no incomplete pages, zero findings |
+| Container checks | Backend and frontend images built; backend API import and Chromium launch also passed inside a container with network disabled |
+| Model transport | Stub tests cover request shape, authorization, token/cost bounds, malformed JSON, timeouts, role validation, and uncertain-charge recovery |
+| Live model service | Not run; remains required to complete the full build goal |
+
+The eight fixture findings include separate source-link and page-pair findings. They do not represent eight different defect categories. The fixture has three defect types.
+
+The complete suite emitted dependency deprecation notices. These did not fail a test. The full runtime flow was tested with host Python/Next processes and container PostgreSQL/Redis; image builds and container browser startup were additional checks, not a claim that every Compose service was tested together.
+
+## Local evidence identifiers
+
+- Latest recovery job: `49d47d3c-eff0-4677-a4f4-47091bb79846`.
+- Latest repeated task confirmed as consumed: `56206fb5-1820-4bae-8d0f-d2304371b368`.
+- Earlier recovery job: `cfacb7f7-abaf-41ba-b061-e4b4097d8d0e`.
+- Earlier repeated task confirmed as consumed: `099f6b97-e641-4460-85dc-0b5a6380564f`.
+- Public HTTPS smoke job: `85482330-69b8-4501-a248-b4ab1e5b8208`.
+- UI screenshots from the test run: `/tmp/arsune-desktop-report.png` and `/tmp/arsune-mobile-error.png`.
+
+Job data and screenshots are local test artifacts. They are not committed customer data. Use [the setup and check commands](RUNNING.md) to reproduce the checks.
+
+## Limits that remain
+
+Redirects and resources from other origins are blocked. The report states that rendering can be incomplete. Consistency confirmation requires explicitly matched fact/context attributes; it does not establish general consistency of ordinary website text. These limits are tracked in `arsune-dxk`.
+
+Model mode has three separate specialist requests and a browser checker, but no live provider result is claimed. Complete `arsune-5is` with a locally stored credential, a selected compatible model, current token prices, and an authorized test spending limit.
+
+This build has no customer accounts, public-service access controls, marketplace payments, website repairs, or production log connections. Incident investigation remains the second use case.

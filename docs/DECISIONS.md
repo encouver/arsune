@@ -43,4 +43,4 @@ Start that later goal with a supplied log bundle and a known incident. Productio
 - No blanket security, accessibility, or launch certification.
 - Real-model verification needs configured credentials and a numeric cost ceiling.
 
-Implementation and verification are tracked in beads. The product choice is resolved. Implementation-model availability is a separate execution constraint.
+Implementation and verification are tracked in beads. The user authorized parallel implementation with `gpt-6.1-sol`. This development model choice is separate from the model service that Arsune will use at runtime.
