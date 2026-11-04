@@ -4,9 +4,10 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
-from arsune import store
-from arsune.api import app
-from arsune.db import Attempt, Event, Job, PendingAction, Record, Session, utcnow
+from app.core.db import Session
+from app.core.models import Attempt, Event, Job, PendingAction, Record, utcnow
+from app.main import app
+from app.workers import store
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
@@ -82,8 +83,34 @@ def test_deadline_failure_clears_pending_work(job_id):
 
 
 def test_example_configuration_accepts_empty_model_prices():
-    from arsune.config import Settings
+    from app.core.config import Settings
 
     config = Settings(_env_file=".env.example")
     assert config.model_input_usd_per_million is None
     assert config.model_output_usd_per_million is None
+
+
+def test_job_response_preserves_report_fields_and_timestamps(job_id):
+    report = {
+        "findings": [{"id": "finding-1", "measurement": {"width": 901}}],
+        "coverage": {"requests": 23},
+        "provider": {"live_call": False},
+    }
+    with Session.begin() as session:
+        job = session.get(Job, job_id)
+        job.report = report
+        event = Event(id=f"{job_id}:event", job_id=job_id, role="checker", message="Checked")
+        session.add(event)
+        session.flush()
+        expected_created = job.created_at.isoformat()
+        expected_updated = job.updated_at.isoformat()
+        expected_event_created = event.created_at.isoformat()
+
+    response = TestClient(app).get(f"/api/jobs/{job_id}")
+    assert response.status_code == 200
+    value = response.json()
+    assert value["report"] == report
+    assert value["findings"] == report["findings"]
+    assert value["created_at"] == expected_created
+    assert value["updated_at"] == expected_updated
+    assert value["events"][0]["created_at"] == expected_event_created

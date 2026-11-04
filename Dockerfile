@@ -9,4 +9,4 @@ COPY backend ./backend
 COPY alembic.ini ./
 RUN uv sync --frozen --no-dev
 ENV PATH="/app/.venv/bin:$PATH"
-CMD ["uvicorn", "arsune.api:app", "--host", "0.0.0.0", "--port", "8540"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8540"]

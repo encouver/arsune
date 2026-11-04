@@ -1,9 +1,9 @@
 import asyncio
 import threading
 
-from arsune import store
-from arsune.config import settings
-from arsune.queue import app
+from app.core.config import settings
+from app.workers import store
+from app.workers.queue import app
 
 
 @app.task(name="arsune.scan")
@@ -34,7 +34,7 @@ def scan(job_id):
     thread = threading.Thread(target=renew, daemon=True)
     thread.start()
     try:
-        from arsune.engine import run_scan
+        from app.workers.workflow import run_scan
 
         output = settings.evidence_dir / job_id
         output.mkdir(parents=True, exist_ok=True)

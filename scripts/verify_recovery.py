@@ -11,8 +11,9 @@ import time
 from pathlib import Path
 
 import httpx
-from arsune.db import Attempt, Job, Session
-from arsune.queue import app
+from app.core.db import Session
+from app.core.models import Attempt, Job
+from app.workers.queue import app
 from sqlalchemy import select
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +25,7 @@ def start_worker(log):
         [
             str(ROOT / ".venv/bin/celery"),
             "-A",
-            "arsune.queue:app",
+            "app.workers.queue:app",
             "worker",
             "--concurrency=1",
             "--loglevel=INFO",

@@ -28,7 +28,7 @@ class Settings(BaseSettings):
 
     @property
     def model_enabled(self) -> bool:
-        from arsune.engine.model import model_configuration_error
+        from app.agents.model import model_configuration_error
 
         return model_configuration_error() is None
 

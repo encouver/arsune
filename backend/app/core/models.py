@@ -1,9 +1,7 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text, create_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
-
-from arsune.config import settings
+from sqlalchemy import JSON, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 def utcnow():
@@ -66,7 +64,3 @@ class PendingAction(Base):
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
     publish_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
-
-
-engine = create_engine(settings.database_url, pool_pre_ping=True)
-Session = sessionmaker(engine, expire_on_commit=False)

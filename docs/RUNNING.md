@@ -38,19 +38,19 @@ uv run alembic upgrade head
 Run each process below in a separate terminal at the repository root:
 
 ```sh
-uv run uvicorn arsune.api:app --host 127.0.0.1 --port 8540
+uv run uvicorn app.main:app --host 127.0.0.1 --port 8540
 ```
 
 ```sh
-uv run python -m arsune.demo
+uv run python -m app.demo
 ```
 
 ```sh
-uv run python -m arsune.coordinator
+uv run python -m app.workers.coordinator
 ```
 
 ```sh
-uv run celery -A arsune.queue:app worker --concurrency=1 --loglevel=INFO
+uv run celery -A app.workers.queue:app worker --concurrency=1 --loglevel=INFO
 ```
 
 ```sh

@@ -1,5 +1,6 @@
 from alembic import context
-from arsune.db import Base, engine
+from app.core.db import engine
+from app.core.models import Base
 
 
 def migrate(connection):

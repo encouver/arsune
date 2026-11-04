@@ -4,8 +4,9 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from arsune.config import settings
-from arsune.db import Attempt, Event, Job, PendingAction, Record, Session, utcnow
+from app.core.config import settings
+from app.core.db import Session
+from app.core.models import Attempt, Event, Job, PendingAction, Record, utcnow
 
 
 class LeaseLost(Exception):

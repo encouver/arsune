@@ -1,4 +1,5 @@
 """Destination policy shared by the API and the browser."""
+
 import asyncio
 import ipaddress
 import socket
@@ -25,14 +26,17 @@ async def validate_target(url: str, demo_origin: str | None = None) -> str:
         if len(url) > 2048 or any(ord(c) < 33 for c in url) or "\\" in url:
             raise TargetPolicyError("The URL contains unsupported characters.")
         target_origin = origin(url)
-        from arsune.config import settings
+        from app.core.config import settings
+
         demo = demo_origin or settings.demo_url
         if target_origin != origin(demo):
             records = await asyncio.wait_for(
                 asyncio.get_running_loop().getaddrinfo(
-                    parts.hostname, parts.port or (443 if parts.scheme == "https" else 80),
+                    parts.hostname,
+                    parts.port or (443 if parts.scheme == "https" else 80),
                     type=socket.SOCK_STREAM,
-                ), timeout=5,
+                ),
+                timeout=5,
             )
             if not records or any(not ipaddress.ip_address(r[4][0]).is_global for r in records):
                 raise TargetPolicyError("Private and local network destinations are not permitted.")

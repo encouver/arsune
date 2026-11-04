@@ -1,8 +1,8 @@
 from celery import Celery
 
-from arsune.config import settings
+from app.core.config import settings
 
-app = Celery("arsune", broker=settings.redis_url, include=["arsune.worker"])
+app = Celery("arsune", broker=settings.redis_url, include=["app.workers.tasks"])
 app.conf.update(
     task_acks_late=True,
     task_reject_on_worker_lost=True,

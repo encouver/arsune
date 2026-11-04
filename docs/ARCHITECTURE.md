@@ -20,10 +20,35 @@ Model mode replaces candidate generation through the same interface. Validate mo
 
 Use one repository, one Python backend package, and a Next.js frontend. Run the API, coordinator, and worker as separate processes. The API creates a job and returns its identifier. The UI polls progress and retrieves the report.
 
+## Backend structure
+
+The backend follows the application layout used in Aldea and AprobaDoc. It remains under `backend/` because this repository also contains the frontend.
+
+| Location | Responsibility |
+| --- | --- |
+| `backend/app/main.py` | Create the FastAPI application and connect middleware and routes |
+| `backend/app/core/` | Shared settings, database connection, database models, and scan constants |
+| `backend/app/core/schemas/` | API request and response formats |
+| `backend/app/v1/api.py` | Connect the API route groups |
+| `backend/app/v1/endpoints/` | Receive requests and call services |
+| `backend/app/v1/services/` | Create jobs, read reports, and locate evidence |
+| `backend/app/agents/` | Generate and validate specialist candidates and call the model service |
+| `backend/app/browser/` | Control browser requests, capture observations, and repeat checks |
+| `backend/app/workers/` | Run queued jobs, save progress, recover expired claims, and coordinate scan stages |
+| `backend/app/demo.py` | Serve the controlled test website |
+| `backend/migrations/` | Versioned database changes |
+| `backend/tests/` | API, persistence, migration, and browser checks |
+
+Package `__init__.py` files do not contain scan workflows. Database model definitions are separate from connection setup. API request and response formats are separate from route handlers.
+
+The `v1` folder groups the first API implementation. Existing public paths remain `/api/jobs`, `/api/config`, `/api/health`, and the job evidence route. The folder change does not change client URLs, stored records, or the registered queue task name `arsune.scan`.
+
+## Runtime components
+
 | Component | Choice | Purpose |
 | --- | --- | --- |
 | API | Python, FastAPI, Uvicorn | Jobs, progress, reports |
-| Validation | Pydantic | Request, observation, candidate, and finding formats |
+| API validation | Pydantic | Request and response formats; candidate limits are checked separately in the agent code |
 | Worker | Celery and Redis | Browser and agent work outside API requests |
 | Database | PostgreSQL, SQLAlchemy, Alembic | Persistent job state and recovery |
 | Browser | Playwright with Chromium | Desktop and mobile observations |

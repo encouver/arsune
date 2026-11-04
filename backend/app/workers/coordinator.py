@@ -4,9 +4,10 @@ from datetime import timedelta
 
 from sqlalchemy import select
 
-from arsune.config import settings
-from arsune.db import Attempt, Job, PendingAction, Session, utcnow
-from arsune.queue import app
+from app.core.config import settings
+from app.core.db import Session
+from app.core.models import Attempt, Job, PendingAction, utcnow
+from app.workers.queue import app
 
 logger = logging.getLogger(__name__)
 

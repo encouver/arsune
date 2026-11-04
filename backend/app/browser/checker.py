@@ -1,0 +1,58 @@
+from app.core.scan import VIEWPORTS
+
+
+async def check_candidate(item, observe):
+    fresh = [
+        await observe(
+            u,
+            VIEWPORTS["mobile"]
+            if item["claim_type"] == "horizontal_overflow"
+            else VIEWPORTS["desktop"],
+        )
+        for u in item["urls"]
+    ]
+    status, reason = (
+        "unverified",
+        "The supplied claim could not be checked with the supported measurements.",
+    )
+    details = item.get("details", {})
+    if all(o.get("status") is not None for o in fresh):
+        if item["claim_type"] == "broken_link":
+            source = next((o for o in fresh if o["url"] == details.get("source")), None)
+            target = next((o for o in fresh if o["url"] == details.get("target")), None)
+            if source and target and target["url"] in source["links"]:
+                status = "confirmed" if target["status"] >= 400 else "rejected"
+                reason = f"A fresh source-page read found the link. A fresh target request returned HTTP {target['status']}."
+        elif item["claim_type"] == "horizontal_overflow":
+            if fresh[0]["status"] < 400:
+                width = fresh[0].get("scroll_width", 0)
+                status = "confirmed" if width > 392 else "rejected"
+                reason = (
+                    f"Fresh measurement: content width {width} pixels; viewport width 390 pixels."
+                )
+        elif item["claim_type"] == "price_mismatch" and len(fresh) == 2:
+            values = [
+                [f["value"] for f in o["facts"] if f["key"] == details.get("key")] for o in fresh
+            ]
+            if all(len(v) == 1 for v in values):
+                status = "confirmed" if values[0] != values[1] else "rejected"
+                reason = f"Fresh page reads for context {details['key']}: {values[0][0]} and {values[1][0]}."
+    result = {
+        **item,
+        "status": status,
+        "checker_reason": reason,
+        "evidence": fresh,
+        "visitor_impact": "Visitors can have difficulty using this page or choosing the stated offer.",
+        "suggested_correction": {
+            "broken_link": "Repair the link or restore the destination page.",
+            "horizontal_overflow": "Make the content fit the mobile viewport.",
+            "price_mismatch": "Use the same value for the same product and billing context.",
+        }.get(item["claim_type"], "Review the supplied reproduction steps."),
+    }
+    if status == "rejected":
+        result["visitor_impact"] = "The fresh check did not reproduce this claimed fault."
+        result["suggested_correction"] = "No repair is needed for this tested claim."
+    elif status == "unverified":
+        result["visitor_impact"] = "The effect on visitors is not known."
+        result["suggested_correction"] = "Collect more evidence before deciding on a repair."
+    return result

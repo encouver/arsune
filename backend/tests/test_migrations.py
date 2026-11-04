@@ -6,7 +6,8 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from arsune.db import Base, engine
+from app.core.db import engine
+from app.core.models import Base
 from sqlalchemy import inspect
 
 

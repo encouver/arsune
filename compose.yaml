@@ -49,19 +49,19 @@ services:
         condition: service_completed_successfully
   worker:
     <<: *backend
-    command: ["celery", "-A", "arsune.queue:app", "worker", "--concurrency=1", "--loglevel=INFO"]
+    command: ["celery", "-A", "app.workers.queue:app", "worker", "--concurrency=1", "--loglevel=INFO"]
     depends_on:
       migrate:
         condition: service_completed_successfully
   coordinator:
     <<: *backend
-    command: ["python", "-m", "arsune.coordinator"]
+    command: ["python", "-m", "app.workers.coordinator"]
     depends_on:
       migrate:
         condition: service_completed_successfully
   demo:
     <<: *backend
-    command: ["uvicorn", "arsune.demo:app", "--host", "0.0.0.0", "--port", "8541"]
+    command: ["uvicorn", "app.demo:app", "--host", "0.0.0.0", "--port", "8541"]
     ports: ["127.0.0.1:8541:8541"]
   ui:
     build:

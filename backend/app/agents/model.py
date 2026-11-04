@@ -1,4 +1,5 @@
 """A bounded compatible chat-completion candidate provider."""
+
 import json
 import math
 
@@ -10,9 +11,17 @@ class ModelConfigurationError(ValueError):
 
 
 def model_config():
-    from arsune.config import settings
-    names = ["BASE_URL", "API_KEY", "NAME", "MAX_OUTPUT_TOKENS", "COST_CEILING_USD",
-             "INPUT_USD_PER_MILLION", "OUTPUT_USD_PER_MILLION"]
+    from app.core.config import settings
+
+    names = [
+        "BASE_URL",
+        "API_KEY",
+        "NAME",
+        "MAX_OUTPUT_TOKENS",
+        "COST_CEILING_USD",
+        "INPUT_USD_PER_MILLION",
+        "OUTPUT_USD_PER_MILLION",
+    ]
     return {name: getattr(settings, f"model_{name.lower()}") for name in names}
 
 
@@ -26,22 +35,30 @@ def model_configuration_error():
 
 def validate_config(config):
     if not all(config.values()):
-        raise ModelConfigurationError("Model mode requires endpoint, key, model, token cap, cost ceiling, and token prices.")
+        raise ModelConfigurationError(
+            "Model mode requires endpoint, key, model, token cap, cost ceiling, and token prices."
+        )
     try:
         cap = int(config["MAX_OUTPUT_TOKENS"])
         ceiling = float(config["COST_CEILING_USD"])
         input_rate = float(config["INPUT_USD_PER_MILLION"])
         output_rate = float(config["OUTPUT_USD_PER_MILLION"])
-        if not 1 <= cap <= 4096 or not all(math.isfinite(v) and v > 0 for v in [ceiling, input_rate, output_rate]):
+        if not 1 <= cap <= 4096 or not all(
+            math.isfinite(v) and v > 0 for v in [ceiling, input_rate, output_rate]
+        ):
             raise ValueError
     except ValueError as exc:
-        raise ModelConfigurationError("Model budget values must be finite positive numbers; token cap is at most 4096.") from exc
+        raise ModelConfigurationError(
+            "Model budget values must be finite positive numbers; token cap is at most 4096."
+        ) from exc
     if not config["BASE_URL"].startswith(("http://", "https://")):
         raise ModelConfigurationError("The configured model endpoint must use HTTP or HTTPS.")
     return cap, ceiling, input_rate, output_rate
 
 
-async def generate_candidates(observations: list[dict], transport=None, *, role=None) -> tuple[list[dict], dict]:
+async def generate_candidates(
+    observations: list[dict], transport=None, *, role=None
+) -> tuple[list[dict], dict]:
     config = model_config()
     cap, ceiling, input_rate, output_rate = validate_config(config)
     if role is not None:
@@ -61,17 +78,28 @@ async def generate_candidates(observations: list[dict], transport=None, *, role=
     input_bound = len((system + payload).encode()) + 1024
     reserve = (input_bound * input_rate + cap * output_rate) / 1_000_000
     if reserve > ceiling:
-        raise ModelConfigurationError("The configured cost ceiling is below the maximum reserved request cost.")
+        raise ModelConfigurationError(
+            "The configured cost ceiling is below the maximum reserved request cost."
+        )
     base = config["BASE_URL"].rstrip("/")
     if not base.startswith(("http://", "https://")):
         raise ModelConfigurationError("The configured model endpoint must use HTTP or HTTPS.")
     async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:  # noqa: SIM117
-        async with client.stream("POST", f"{base}/chat/completions", headers={
-            "Authorization": f"Bearer {config['API_KEY']}"}, json={
-                "model": config["NAME"], "max_tokens": cap, "temperature": 0,
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": payload}],
+        async with client.stream(
+            "POST",
+            f"{base}/chat/completions",
+            headers={"Authorization": f"Bearer {config['API_KEY']}"},
+            json={
+                "model": config["NAME"],
+                "max_tokens": cap,
+                "temperature": 0,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": payload},
+                ],
                 "response_format": {"type": "json_object"},
-            }) as response:
+            },
+        ) as response:
             response.raise_for_status()
             body = bytearray()
             async for chunk in response.aiter_bytes():
@@ -82,6 +110,11 @@ async def generate_candidates(observations: list[dict], transport=None, *, role=
     candidates = json.loads(content)["candidates"]
     if not isinstance(candidates, list) or len(candidates) > 20:
         raise ValueError("Model candidates must be a list of at most 20 items.")
-    return candidates, {"name": config["NAME"], "reserved_cost_usd": reserve,
-                        "cost_ceiling_usd": ceiling, "live_call": transport is None,
-                        "retries": 0, "charge_policy": "Full reservation retained after uncertain charges."}
+    return candidates, {
+        "name": config["NAME"],
+        "reserved_cost_usd": reserve,
+        "cost_ceiling_usd": ceiling,
+        "live_call": transport is None,
+        "retries": 0,
+        "charge_policy": "Full reservation retained after uncertain charges.",
+    }

@@ -32,6 +32,8 @@ Arsune does not repair the website. It does not submit forms, make purchases, lo
 
 FastAPI and Python follow the patterns used in Aldea and AprobaDoc. The runtime uses PostgreSQL, Celery with Redis, Playwright, and a Next.js interface. A protected local evidence volume stores screenshots. Python and frontend lockfiles record dependency versions.
 
+The backend package is `backend/app`. It separates application setup, shared schemas and database code, API endpoints and services, specialists, browser checks, and workers. Start the API with `uv run uvicorn app.main:app --host 127.0.0.1 --port 8540`. See the [backend structure](docs/ARCHITECTURE.md#backend-structure) and [process commands](docs/RUNNING.md).
+
 Task status and dependencies are stored in beads. Use bd ready to find available work.
 
 ## Completion evidence
@@ -40,7 +42,7 @@ The first goal requires a real API, worker, and browser run that confirms a know
 
 The controlled website must contain known faults and a corrected variant. These are repeatable test cases, not evidence of accuracy on every website.
 
-Local checks passed on 4 November 2026: 24 Python tests, three interface browser tests, a worker stop/restart test, and frontend/backend image builds. The faulty site produced eight confirmed findings across three fault types and one rejected false claim. The corrected site produced no confirmed findings. See [measured verification results](docs/VERIFICATION.md). The live model test remains open.
+Local checks passed on 4 November 2026: 25 Python tests, three interface browser tests, a worker stop/restart test, and frontend/backend image builds. The backend structure change also preserved the full stored job response and existing evidence access. The faulty site produced eight confirmed findings across three fault types and one rejected false claim. The corrected site produced no confirmed findings. See [measured verification results](docs/VERIFICATION.md). The live model test remains open.
 
 ## Current limits
 
