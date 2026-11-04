@@ -1,120 +1,79 @@
-# Arsune swarm architecture
+# Arsune website checking architecture
 
-Arsune coordinates agents that produce work, check it against source evidence, and return a traceable result. Agent Market is the proposed sales channel. Supplier-data extraction is the proposed first demonstration, not a general document platform.
-
-This is the architecture proposal as of 4 November 2026. No application exists. The product choice in [Decisions](DECISIONS.md) must be resolved before implementation. [Rules](../RULES.md) defines job behavior. [Market integration](MARKET_INTEGRATION.md) separates documented API behavior from live tests.
+Arsune checks a website for people who build with AI. Specialists propose findings. A separate checker reproduces those findings against the site. The customer receives explanations and evidence. [Product decisions](DECISIONS.md) defines scope; [Rules](../RULES.md) defines limits and acceptance checks.
 
 ## Agent roles
 
-| Role | Input | Output | Authority |
-| --- | --- | --- | --- |
-| Coordinator | Agreed scope, source versions, budget, deadline | Task assignments, correction requests, combined report | Assign work and enforce fixed rules. Python code implements this role initially. |
-| Worker | One task, permitted source sections, required fields | Candidate values and evidence references | Read assigned sources and call its configured model. |
-| Checker | Candidate output and original source context | Field findings, missing-item findings, correction reasons | Check evidence and coverage. Cannot edit the worker's result or accept payment. |
-| Human reviewer | Unresolved findings and source evidence | Recorded correction, acceptance of uncertainty, or rejection | Resolve ambiguity within the agreed scope. Cannot turn an unsupported claim into a supported one without evidence. |
-
-Use two worker identities for separate source sections in the demonstration. They use the same implementation and may use the same model. Keep enough surrounding source context to interpret headings, units, and currency. The checker also examines coverage across sections, so a product omitted by all workers is detectable.
-
-The user selected workers operated by Arsune for the first build. Separate roles improve traceability but do not establish independent ownership or independent judgment. The demo must show a rejected result and a bounded correction, not just several model calls.
-
-## Runtime
-
-```mermaid
-flowchart TD
-    U[Customer or operator] --> W[Next.js interface]
-    W --> A[FastAPI API]
-    A <--> D[(PostgreSQL)]
-    A <--> S[(Private file storage)]
-    P[Coordinator and market polling process] <--> D
-    P <--> M[NEAR Agent Market]
-    P --> Q[Redis queue]
-    Q --> E[Python Celery workers]
-    E <--> D
-    E <--> S
-    E <--> L[NEAR AI Cloud]
-```
-
-Keep one repository, one Python backend package, and one frontend. Run the API, coordinator, and Celery worker as separate processes from the same backend image. One coordinator is enough for the prototype; database claims must still prevent duplicate assignment. Poll the UI for progress initially.
-
-The API checks access, validates requests, stores jobs, and returns job identifiers. The coordinator advances stored jobs, publishes work, checks deadlines, and reconciles marketplace status. Celery runs the extraction and checking steps. The frontend displays agent activity, evidence, cost, and unresolved findings.
-
-## Technology choices
-
-| Component | Proposed choice | Reason |
+| Role | Responsibility | Evidence |
 | --- | --- | --- |
-| API | Python, FastAPI, Uvicorn | Follows Aldea and AprobaDoc. |
-| Data validation | Pydantic | Explicit request, task, result, and finding formats. |
-| Worker | Python and Celery with Redis | Reuses the worker approach present in Aldea. |
-| Workflow | Explicit Python functions and stored states | The first workflow has a small number of steps. |
-| Database | PostgreSQL, SQLAlchemy, Alembic | Related jobs, attempts, evidence, and submissions need consistent updates. |
-| Files | Private S3-compatible storage | Keep source bytes and result versions separate from database records. |
-| Frontend | Next.js, React, TypeScript | Follows both existing web projects. |
-| External requests | HTTPX; evaluate the NEAR AI Python SDK for model calls | Keep transport details outside the agent rules. |
-| Development | uv, Ruff, pytest, Docker Compose | Follows the Python projects already in use. |
+| Coordinator | Select at most five pages, assign roles, enforce limits, store progress, and assemble the report | Task and attempt history |
+| Navigation specialist | Find failed internal links and destinations | Source link, target URL, response, reproduction steps |
+| Mobile specialist | Find horizontal overflow and measurable layout faults | Viewport, element location, measurements, screenshot |
+| Consistency specialist | Compare equivalent facts across pages | Both URLs, visible text, matched context |
+| Checker | Revisit selected pages and independently test candidates | Fresh observations and confirmation or rejection reasons |
 
-Select and pin compatible versions after testing the chosen document parser and model client together. NEAR's Python inference SDK currently requires Python 3.12 or later. A signed model response does not establish that an extracted value is correct. [NEAR Python SDK](https://docs.near.ai/cloud/inference-sdk/python)
+The coordinator is Python code. Specialists share observation and candidate formats. Scripted mode uses deterministic analysis of real browser observations. It must not return a canned report without inspecting the target. A deliberate false candidate is limited to the labeled demonstration case.
 
-Use Aldea's separation of API and worker, and AprobaDoc's file ownership checks and storage interface. Their local reference files are `aldea/app/utilities/celery_app.py`, `aprobadoc/app/core/storage.py`, and `aprobadoc/app/v1/services/files.py`, relative to the parent workspace. Reuse patterns in a small Arsune implementation. Do not copy their full application or dependency lists.
+Model mode replaces candidate generation through the same interface. Validate model output before checking it. The checker repeats requests or browser measurements; specialist explanations are not proof. Unsupported claim types remain unverified.
 
-Long jobs must survive API restarts. FastAPI's request background tasks do not provide that recovery by themselves. Use a separate worker and saved job state. [FastAPI guidance](https://fastapi.tiangolo.com/tutorial/background-tasks/)
+## Runtime and technology
 
-## Persistent records
+Use one repository, one Python backend package, and a Next.js frontend. Run the API, coordinator, and worker as separate processes. The API creates a job and returns its identifier. The UI polls progress and retrieves the report.
 
-| Record | Required information |
+| Component | Choice | Purpose |
+| --- | --- | --- |
+| API | Python, FastAPI, Uvicorn | Jobs, progress, reports |
+| Validation | Pydantic | Request, observation, candidate, and finding formats |
+| Worker | Celery and Redis | Browser and agent work outside API requests |
+| Database | PostgreSQL, SQLAlchemy, Alembic | Persistent job state and recovery |
+| Browser | Playwright with Chromium | Desktop and mobile observations |
+| Evidence | Protected local volume for this local prototype | Screenshots and captured observations |
+| UI | Next.js, React, TypeScript | URL input, activity, and evidence |
+| Model access | HTTPX connection to a configured compatible endpoint | Same candidate format as scripted mode |
+| Development | uv, Ruff, pytest, Docker Compose | Reproducible execution and verification |
+
+A protected local evidence volume is sufficient for this local goal. Keep storage paths outside URL input and serve evidence through the API. S3-compatible storage remains a later deployment option.
+
+Playwright supports page screenshots and network inspection. Measure the actual page instead of inferring successful behavior from markup. [Screenshots](https://playwright.dev/python/docs/screenshots), [Network inspection](https://playwright.dev/python/docs/network)
+
+## Stored records and recovery
+
+| Record | Information |
 | --- | --- |
-| Job | Owner, scope version, source set, budget, deadline, processing state, marketplace reference |
-| Source | Owner, storage key, content hash, format, parser version, retained source locations |
-| Task | Job, source sections, role, output format version, deadline, cost allowance |
-| Attempt | Task, attempt number, model and prompt versions, start and end time, reserved and actual cost, outcome |
-| Result | Task and attempt, output version, candidate fields, evidence references |
-| Finding | Result version, field or omitted source item, rule version, outcome, evidence, explanation |
-| Submission | Assignment and local revision, report hash, uploaded artifact references, delivery state |
-| Event | Job, actor, action, time, related record identifiers |
-| Pending action | Operation identifier, target, payload reference, delivery attempts, next attempt time |
+| Job | Owner or local operator, URL, mode, limits, state, timestamps, selected pages |
+| Observation | URL, final URL, viewport, time, response, visible text, relevant elements, screenshot reference |
+| Attempt | Role, stage, generation, lease, provider and prompt version, state, elapsed time, cost |
+| Candidate | Stable ID, role, claim type, explanation, URLs, expected behavior, reproduction steps |
+| Check result | Candidate ID, status, fresh observations, evidence, explanation |
+| Event | Job, role, stage, time, message without secrets |
+| Pending action | Stable operation ID, job and stage, delivery state, retry time |
 
-Use PostgreSQL for authoritative job state. Redis carries work notifications. Store a state change and its pending action in one database transaction. The coordinator publishes pending actions, and can publish them again after a crash. A worker claims each operation in PostgreSQL before it acts.
+PostgreSQL is authoritative. Redis carries work notifications. Save a job change and its pending action in one database transaction. A coordinator publishes pending actions and reconciles unfinished work after restart.
 
-Use leases with expiry and a generation number. A worker must still hold the current lease when it saves a result. A late result from an expired attempt cannot overwrite a newer result. Enforce uniqueness for assignment plus revision and for task plus attempt.
+Use bounded leases and attempt generations. Expired workers cannot overwrite newer results. Save completed stages and stable finding IDs so repeated delivery does not duplicate results. Verify Celery acknowledgement behavior with real worker termination. [Celery task behavior](https://docs.celeryq.dev/en/stable/userguide/tasks.html)
 
-Celery acknowledgements alone are not sufficient for recovery. Test late acknowledgement, worker loss, expiry, and repeat delivery together. Reconcile unfinished database work after Redis or worker restarts. A model request with an unknown outcome can still incur cost; do not promise exactly one paid model call. [Celery task behavior](https://docs.celeryq.dev/en/stable/userguide/tasks.html)
+## Network and access boundary
 
-## One job sequence
+Validate HTTP and HTTPS targets under a configured policy. Reject embedded credentials and disallowed destinations, including redirects to internal services. The controlled demo origin is an explicit local exception, not general permission to inspect private networks. Apply the policy to browser and checker requests.
 
-```mermaid
-sequenceDiagram
-    participant M as Agent Market
-    participant C as Coordinator
-    participant W as Worker agents
-    participant V as Checker
-    participant H as Human reviewer
-    C->>M: Read assignments and source references
-    C->>C: Store job and validate scope
-    C->>M: Declare start before model work
-    C->>W: Assign source sections and task limits
-    W-->>C: Return candidates and evidence
-    C->>V: Check candidates against original sources
-    V-->>C: Return findings and coverage result
-    alt Correctable error within limits
-        C->>W: Request one correction
-        W-->>C: Return a new output version
-        C->>V: Check the new version
-        V-->>C: Return new findings
-    end
-    opt Unresolved finding
-        C->>H: Request review with a deadline
-        H-->>C: Record resolution or leave uncertainty
-    end
-    C->>C: Apply agreed completion rules
-    C->>M: Submit eligible report and permitted files
-    C->>M: Read subsequent marketplace state
-```
+The first deployment is a local operator tool, not a public scanning service. Keep model credentials on the server. Evidence routes must not expose arbitrary files. Isolate project containers and volumes from other local projects.
 
-An unresolved or expired review cannot silently become a passing result. Submission eligibility is defined in the rules. Payment status remains separate from processing and submission status.
+## Job sequence
 
-## Demonstration boundary
+1. Validate the URL and persist the job.
+2. Select at most five page URLs and capture desktop and mobile observations.
+3. Run navigation, mobile, and consistency specialists.
+4. Validate candidate findings.
+5. Have the checker reproduce supported claim types with fresh observations.
+6. Store confirmations, rejections, and unresolved cases.
+7. Return the report with evidence and completed-check coverage.
 
-The first build should show one job, two worker assignments, a separate checker, a correction, and an evidence report. A scripted mode must exercise the same coordinator and stored states without model or marketplace calls. Real mode replaces only those external connections.
+An interrupted run resumes stored stages. A rerun after repairs creates a new job and preserves the original evidence.
 
-The operated-swarm proposal excludes a custom marketplace, custom payment contract, general agent registration, OCR, broad document support, and automatic purchase of another provider's work. The external-hiring option in Decisions changes this boundary and needs its own buyer connection.
+## Verification boundary
 
-Before the real demonstration, verify one successful job, one unresolved job, a worker restart, repeat task delivery, and an uncertain submission response. Compare the swarm and a single-worker baseline on the same reviewed sources. Report accuracy, missed errors, false rejections, omissions, cost, and completion time. Do not claim a swarm benefit before measuring it.
+The controlled website includes a broken link, mobile overflow, inconsistent facts with matched context, and a healthy page for rejecting a deliberate false claim. Provide a corrected variant and explicit expected outcomes.
+
+Run the actual API, database, queue, worker, browser, and UI. Kill an active worker, restart it, and verify completion with unique result IDs. Mock endpoint tests validate model transport but do not establish a live model connection.
+
+Marketplace payments and production log connections are later goals. A real model connection remains part of this goal and must not be described as live-tested without a real call.

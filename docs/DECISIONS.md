@@ -1,38 +1,46 @@
-# Arsune demonstration decisions
+# Arsune product decisions
 
-The user selected option A on 4 November 2026: Arsune operates its own workers. The first demonstration task remains open. Supplier-data extraction is the earlier candidate; other tasks are now being considered.
+The user selected workers operated by Arsune and approved website checking as the first use case. The active build goal is a working flow from a website URL to an evidence report. Incident investigation is the second use case.
 
-## Worker ownership
+## Selected customer task
 
-| Choice | Demonstration | Scope consequence |
-| --- | --- | --- |
-| A — Arsune operates the swarm | A coordinator assigns two workers, a checker finds an error, and a worker corrects it. Arsune sells the combined result through one Agent Market listing. | Matches the current README. Internal worker budgets are cost controls. They are not independent agent payments. |
-| B — Arsune hires another provider | Arsune delegates one bounded subtask through Agent Market, checks the returned result, and combines it with its own work. | Adds buyer authentication, a real provider, payment authority, source-sharing rules, child deadlines, and child-result acceptance. |
+The customer builds a website with an AI tool but does not know what to check before launch. Arsune inspects up to five public pages on desktop and mobile. It explains confirmed problems, their effects, supporting evidence, and suggested corrections.
 
-Decision: use A for the first build. B is deferred. The internal workers do not hire or pay other providers.
+Three specialist agents check navigation, mobile layout, and consistency across pages. A separate checker reproduces reported faults and rejects unsupported claims. A Python coordinator enforces limits and stores progress.
 
-The official AI Swarms track emphasizes coordination markets and economic activity between agents. Our assessment is that B demonstrates this more directly. A demonstrates coordinated work and checking, but its economic claim is limited to the customer hiring Arsune. This assessment is not a ruling on track eligibility. The published group-buying prompt is an example, not a requirement to build an auction or create a particular number of accounts. [Track example](https://github.com/nearai/near-hackathon-prompt-examples/blob/main/tracks/05-swarms.md), [Hackathon tracks](https://nearhackathon.com/)
+Arsune does not repair the customer's website. The customer gives the report to their website builder and can request another check after changes. No source-code access is required.
 
-No option requires us to build a new marketplace or payment contract. [Market integration](MARKET_INTEGRATION.md) records the buyer and worker credential distinction.
+## Current goal
 
-## First task
+1. Update the plan for website checking and retain incident investigation as the second use case.
+2. Build the FastAPI API, stored job progress, and Python workers.
+3. Implement the three specialists and the separate checker.
+4. Provide a URL entry screen, progress view, and evidence report.
+5. Use a controlled website with known faults. Start with scripted responses and add a real model connection through the same workflow.
+6. Demonstrate a confirmed fault, a rejected incorrect finding, evidence for every finding, and recovery after interruption without duplicate results.
+7. Run real API, worker, and browser checks.
 
-The proposed customer request remains: turn a supplier price list into product names, prices, currencies, and evidence. For a small demonstration, [Rules](../RULES.md) narrows this to one PDF with selectable text and proposes synthetic test cases.
+The pasted goal supplied by the user on 4 November 2026 establishes this scope. It supersedes the supplier-document demonstration and the requirement to connect marketplace payments in this build.
 
-Confirm whether this is still the intended first task. If the product should perform another kind of work, name one concrete customer request and its required output before choosing agents or evaluation data. The coordination design can remain similar, but the checks and reference answers will change.
+## Agent ownership
 
-## What can remain fixed
+Arsune operates all specialists and the checker. They do not hire or pay another provider. Internal cost allowances are limits, not payments between independent agents.
 
-- FastAPI API and Python agent execution, with a Next.js interface.
-- Explicit task and evidence formats.
-- A coordinator that enforces deadlines, correction limits, and cost ceilings.
-- A checker with access to original sources and a record of unresolved findings.
-- Stored processing state, repeat-safe work, and separate marketplace status.
-- One repeatable simulation and one real model demonstration.
-- Synthetic or public data until private marketplace delivery is verified.
+Agent Market remains the intended sales channel. Marketplace payments, public listing, custom contracts, and direct NEAR Intents integration are later goals. The [marketplace research](MARKET_INTEGRATION.md) remains a reference for that work.
 
-## Discussion outcome
+## Incident investigation
 
-Worker ownership is settled. Select one demonstration task next. Do not implement the supplier-specific rules or prepare its dataset until the task is selected. No real-spend authority has been granted by this design work.
+The second use case will investigate a service failure from logs and deployment history. Reuse the coordinator, evidence records, checker, and report. Add timeline, error, and change analysis roles.
 
-Implementation tasks and their dependencies are stored in beads. The scope decision is `arsune-1s7`. The original integration and dataset task, `arsune-pqj`, remains incomplete until this decision, reviewed reference answers, and confirmed acceptance rules are complete. The live seller connection has its own implementation task.
+Start that later goal with a supplied log bundle and a known incident. Production connections need restricted read access, a service and time range, and sensitive-data handling. A likely cause must not be called proven merely because events occurred close together.
+
+## Scope boundaries
+
+- Five unique page URLs per job. Checker revisits do not expand the page set.
+- Public page inspection. No form submission, purchase, login, or website modification.
+- A controlled demonstration website with faults and a corrected variant.
+- Scripted and model modes are visibly identified.
+- No blanket security, accessibility, or launch certification.
+- Real-model verification needs configured credentials and a numeric cost ceiling.
+
+Implementation and verification are tracked in beads. The product choice is resolved. Implementation-model availability is a separate execution constraint.
