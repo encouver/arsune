@@ -123,6 +123,77 @@ async def network_fixture(page: str, request: Request):
     )
 
 
+def price_card(text: str, name: str = "Basic") -> str:
+    return f'<section class="plan"><h2>{name}</h2><p>{text}</p></section>'
+
+
+PRICE_CASES = {
+    "different": ("USD 19 per month, per seat", "USD 29 per month, per seat"),
+    "equal": ("USD 19 per month, per seat", "USD 19.00 per month, per seat"),
+    "annual": ("USD 19 per month, per seat", "USD 190 per year, per seat"),
+    "annual-equivalent": (
+        "USD 19 per month, per seat",
+        "USD 15 per month, per seat, billed annually",
+    ),
+    "currency": ("USD 19 per month, per seat", "EUR 29 per month, per seat"),
+    "unit": ("USD 19 per month, per seat", "USD 29 per month, per account"),
+    "qualifier": ("USD 19 per month, per seat for businesses", "USD 29 per month, per seat for students"),
+    "quantity": ("USD 19 per month for 1 seat", "USD 29 per month for 5 seats"),
+    "missing-period": ("USD 19", "USD 29"),
+    "missing-currency": ("19 per month, per seat", "29 per month, per seat"),
+    "ambiguous-dollar": ("$19 per month, per seat", "$29 per month, per seat"),
+    "from": ("From USD 19 per month, per seat", "From USD 29 per month, per seat"),
+    "trial": (
+        "USD 19 per month, per seat after a free trial",
+        "USD 29 per month, per seat after a free trial",
+    ),
+    "discount": (
+        "USD 19 per month, per seat with a 20% discount",
+        "USD 29 per month, per seat with a 20% discount",
+    ),
+    "strike": (
+        "<s>USD 99</s> USD 19 per month, per seat",
+        "<s>USD 89</s> USD 19 per month, per seat",
+    ),
+}
+
+
+@app.get("/prices/{case}/{page}", response_class=HTMLResponse)
+def price_fixture(case: str, page: str):
+    """Plain visible cards for checks that must not depend on test annotations."""
+    if page not in {"first", "second"}:
+        return HTMLResponse("Unknown page", status_code=404)
+    index = page == "second"
+    name = "Basic"
+    if case == "product":
+        text = "USD 29 per month, per seat" if index else "USD 19 per month, per seat"
+    elif case == "variant":
+        text = "USD 29 per month, per seat" if index else "USD 19 per month, per seat"
+        name = "Basic Plus" if index else "Basic"
+    elif case in {"hidden", "below-fold"}:
+        text = "USD 19 per month, per seat"
+    elif case in PRICE_CASES:
+        text = PRICE_CASES[case][index]
+        if case == "different" and comparison_state == "repaired":
+            text = PRICE_CASES[case][0]
+    else:
+        return HTMLResponse("Unknown pricing case", status_code=404)
+    hidden = (
+        '<section hidden><h2>Basic</h2><p>USD 99 per month, per seat</p></section>'
+        '<section style="display:none"><h2>Basic</h2><p>USD 89 per month, per seat</p></section>'
+        '<section style="visibility:hidden"><h2>Basic</h2><p>USD 79 per month, per seat</p></section>'
+        if case == "hidden" and index else ""
+    )
+    product = ("Analytics" if index else "Hosting") if case == "product" else "Plans"
+    spacing = '<div style="height:1500px">Product information</div>' if case == "below-fold" else ""
+    other = "first" if index else "second"
+    return f"""<!doctype html><html><head><title>Pricing fixture</title>
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <style>body{{font:18px sans-serif;margin:16px}}.plan{{max-width:300px}}</style>
+    </head><body><h1>{product}</h1><a href="/prices/{case}/{other}">Other offer page</a>
+    {spacing}{price_card(text, name)}{hidden}</body></html>"""
+
+
 @app.get("/{variant}/{page:path}", response_class=HTMLResponse)
 def demo(variant: str, page: str):
     if variant not in {"faulty", "corrected"}:

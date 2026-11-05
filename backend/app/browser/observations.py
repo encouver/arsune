@@ -5,6 +5,7 @@ from urllib.parse import urljoin, urlsplit
 from playwright.async_api import Error as BrowserError
 
 from app.browser.policy import document_scope
+from app.browser.prices import PRICE_BLOCKS_JS, extract_prices
 from app.browser.session import RESOURCE_READY_TIMEOUT_MS
 
 
@@ -52,12 +53,17 @@ async def observe_page(context, target, viewport, output_dir, site_url):
             scroll_width: document.documentElement.scrollWidth,
             client_width: document.documentElement.clientWidth,
             links: Array.from(document.querySelectorAll('a[href]')).slice(0,80).map(a => a.href),
-            facts: Array.from(document.querySelectorAll('[data-fact-key][data-context]')).slice(0,40).map(e => ({
+            facts: Array.from(document.querySelectorAll('[data-fact-key][data-context]')).filter(e => e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})).slice(0,40).map(e => ({
                 key: e.dataset.factKey + '|' + e.dataset.context,
-                value: e.innerText.trim(), selector: '[data-fact-key="' + e.dataset.factKey + '"]'
+                value: e.innerText.trim(), quote: e.innerText.trim(), source: 'explicit_fact', selector: '[data-fact-key="' + e.dataset.factKey + '"]'
             }))
         })""")
         )
+        pricing_blocks = await page.evaluate(PRICE_BLOCKS_JS)
+        pricing = extract_prices(pricing_blocks["blocks"])
+        observation["facts"].extend(pricing["facts"])
+        observation["price_exclusions"] = pricing["exclusions"]
+        observation["price_extraction_truncated"] = pricing_blocks["truncated"]
         observation["status"] = response.status if response else None
         observation["links"] = list(
             dict.fromkeys(
@@ -72,6 +78,15 @@ async def observe_page(context, target, viewport, output_dir, site_url):
         filename = f"capture-{uuid.uuid4().hex}.png"
         await page.screenshot(path=str(output_dir / filename), full_page=False, timeout=5000)
         observation["screenshot"] = filename
+        for fact in pricing["facts"]:
+            filename = f"capture-{uuid.uuid4().hex}.png"
+            try:
+                await page.locator(fact["selector"]).screenshot(
+                    path=str(output_dir / filename), timeout=2500
+                )
+                fact["screenshot"] = filename
+            except BrowserError:
+                fact["screenshot_error"] = "The browser could not capture this price card."
     except BrowserError:
         observation["error"] = "The browser could not complete this page request."
     finally:

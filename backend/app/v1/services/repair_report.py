@@ -126,40 +126,57 @@ def render_repair_report(job_id):
                     + escape(str(observation.get("viewport", {})))
                     + "</p>"
                 )
-                name = observation.get("screenshot")
-                if not name:
+                screenshots = [(observation.get("screenshot"), "Page screenshot")]
+                for fact in observation.get("facts", []):
+                    if fact.get("source") != "visible_price" or fact.get("key") != value.get(
+                        "details", {}
+                    ).get("key"):
+                        continue
                     pieces.append(
-                        "<p>No screenshot is available. Use the steps and evidence record above.</p>"
+                        "<h4>Matched price card</h4><blockquote>"
+                        + escape(fact.get("quote", ""))
+                        + "</blockquote><p>Context: "
+                        + escape(json.dumps(fact.get("context", {}), sort_keys=True))
+                        + "; source: "
+                        + escape(str(fact.get("selector", "")))
+                        + "</p>"
                     )
-                    continue
-                if (evidence_job, name) in embedded:
-                    pieces.append("<p>This screenshot is shown earlier in the report.</p>")
-                    continue
-                try:
-                    path = evidence_path(evidence_job, name)
-                    if (
-                        path.stat().st_size > 4_000_000
-                        or total_bytes + path.stat().st_size > 24_000_000
-                    ):
+                    screenshots.append((fact.get("screenshot"), "Price card screenshot"))
+                for name, caption in screenshots:
+                    pieces.append("<p>" + caption + "</p>")
+                    if not name:
                         pieces.append(
-                            "<p>The screenshot exceeds the export size limit. See the evidence reference above.</p>"
+                            "<p>No screenshot is available. Use the steps and evidence record above.</p>"
                         )
                         continue
-                    data = path.read_bytes()
-                    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                    if (evidence_job, name) in embedded:
+                        pieces.append("<p>This screenshot is shown earlier in the report.</p>")
                         continue
-                except (HTTPException, OSError):
+                    try:
+                        path = evidence_path(evidence_job, name)
+                        if (
+                            path.stat().st_size > 4_000_000
+                            or total_bytes + path.stat().st_size > 24_000_000
+                        ):
+                            pieces.append(
+                                "<p>The screenshot exceeds the export size limit. See the evidence reference above.</p>"
+                            )
+                            continue
+                        data = path.read_bytes()
+                        if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+                            continue
+                    except (HTTPException, OSError):
+                        pieces.append(
+                            "<p>The screenshot file is unavailable. Use the steps and evidence reference above.</p>"
+                        )
+                        continue
+                    embedded.add((evidence_job, name))
+                    total_bytes += len(data)
                     pieces.append(
-                        "<p>The screenshot file is unavailable. Use the steps and evidence reference above.</p>"
+                        '<img alt="Screenshot evidence" src="data:image/png;base64,'
+                        + base64.b64encode(data).decode("ascii")
+                        + '">'
                     )
-                    continue
-                embedded.add((evidence_job, name))
-                total_bytes += len(data)
-                pieces.append(
-                    '<img alt="Screenshot evidence" src="data:image/png;base64,'
-                    + base64.b64encode(data).decode("ascii")
-                    + '">'
-                )
         pieces.append("</section>")
     pieces.append("</html>")
     return HTMLResponse(

@@ -47,7 +47,7 @@ Job data and screenshots are local test artifacts. They are not committed custom
 
 ## Limits that remain
 
-The 5 November network update permits bounded same-site redirects and public rendering resources. Frames, workers, popups, forms, sockets, and data requests remain blocked. The report records these restrictions and incomplete layouts. Consistency confirmation still requires explicitly matched fact/context attributes; general text matching remains in `arsune-dxk`.
+The 5 November network update permits bounded same-site redirects and public rendering resources. Frames, workers, popups, forms, sockets, and data requests remain blocked. The report records these restrictions and incomplete layouts. Consistency supports explicit fact/context attributes and a limited visible-price grammar. General text matching remains unsupported.
 
 Model mode has three separate specialist requests and a browser checker, but no live provider result is claimed. Complete `arsune-5is` with a locally stored credential, a selected compatible model, current token prices, and an authorized test spending limit.
 
@@ -74,3 +74,19 @@ Ordinary worker recovery passed with job `67ebcbce-2039-4928-b7c9-4d31b45e6b0a`.
 The new features use scripted checks and require no paid model call. Reports can be reopened from a local job URL. Downloading an HTML repair report does not publish it or send it to another service.
 
 All eight frontend browser tests passed across the full run and one corrected test rerun. The corrected expectation distinguishes resolved claims on available pages from uncheckable claims on a failed page. Coverage includes all four comparison groups, active-job refresh, before/after links, preserved old reports, screenshot evidence, HTML download, and mobile layout. The production build and type check passed. Mobile test capture: `/tmp/arsune-comparison-mobile.png`.
+
+## Visible prices and saved history — 5 November 2026
+
+Twenty new Chromium price cases passed across two runs. The first run passed 19 cases and failed a quote assertion because Chromium inserted two line breaks. After the assertion was changed to compare normalized whitespace, nine affected cases passed again, including stronger checks that different commercial contexts produce different keys. Cases cover fresh mismatch evidence, repair resolution, equal prices, currencies, periods, products, units, quantities, ambiguous terms, hidden text, and price cards below the first screen. The original annotated fixtures remain unchanged.
+
+A separate real Chromium and database test passed for the HTML export of a price card below the first screen. Card images use the existing file-access and export-size limits. The checker requires fresh card evidence before it confirms an ordinary price mismatch.
+
+Ordinary recovery passed with job `544a57d3-fa8b-4f0e-ac4e-278e02067de2`. Comparison recovery passed with job `28f6cd6a-e6c1-46a2-bcc1-f9f13c0bd62b`. Both retained the controlled outcome of eight confirmed findings, one rejected claim, and five pages. The backend container build and Ruff check passed.
+
+The history API passed two actual PostgreSQL tests covering metadata-only reads, pagination with equal creation times, new inserts between pages, and invalid parameters. The frontend production build and type check passed. Each finding remains separate because its page pair, quoted text, images, and repair status can differ.
+
+The final backend verification covers 71 distinct tests across completed runs: 48 regression tests, 20 visible-price cases, and three price-card export and exclusion checks. Six affected tests passed again after the last narrow fixes for inherited crossed-out prices and signed amounts. The final backend container was rebuilt successfully. The regression run emitted four dependency deprecation warnings and no test failures.
+
+All 11 distinct interface browser tests passed across the full run and two corrected test reruns. The initial run passed nine tests. The two test corrections wait for the new scan to finish and accept the singular heading for one fault. The final rerun passed both cases against the final worker. Tests cover exact price quotes and card images, downloads, history reopening, older pages, excluded offers, baseline links, incomplete comparisons, new faults, and mobile evidence. Final TypeScript checks passed after the test changes. UI capture: `/tmp/arsune-price-history.png`.
+
+The incident plan is complete in [INCIDENT_PLAN.md](INCIDENT_PLAN.md). No incident analysis feature, production log connection, or paid model call was added by this update.

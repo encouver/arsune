@@ -44,3 +44,18 @@ class JobDetail(BaseModel):
     @field_serializer("created_at", "updated_at")
     def serialize_timestamp(self, value: datetime) -> str:
         return value.isoformat()
+
+
+class JobSummary(BaseModel):
+    id: str
+    url: str
+    mode: Literal["scripted", "model"]
+    status: str
+    baseline_job_id: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class JobPage(BaseModel):
+    items: list[JobSummary]
+    next_cursor: str | None

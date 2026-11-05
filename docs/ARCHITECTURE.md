@@ -89,7 +89,9 @@ Chromium request interception checks each redirect and resource before a connect
 
 Public styles, scripts, images, and fonts can load under the saved request and byte limits. Frames, workers, popups, forms, sockets, and data requests remain blocked. Added browser restrictions preserve the site's own content security policy. Redirect history and resource failures are saved with progress. Observations record layout completeness, and the checker does not confirm layout faults when essential resources are missing.
 
-The consistency checker still requires matching `data-fact-key` and `data-context` attributes. Ordinary page text does not yet receive a general consistency check.
+The consistency checker supports matching `data-fact-key` and `data-context` attributes and a limited English visible-price grammar. Ordinary price cards need a plan heading, explicit supported ISO currency, and monthly or yearly period. Product headings, units, and remaining offer terms form the context key; the amount does not. The separate checker reads both pages again and requires unique matching contexts and complete page evidence. Unsupported or ambiguous cards are recorded in price coverage with reasons. This does not provide a general text consistency check.
+
+The local history endpoint selects job metadata only. It orders jobs by creation time and ID, uses a cursor for older results, and limits each response to at most 50 records. The interface reopens the existing job URL and report.
 
 ## Job sequence
 

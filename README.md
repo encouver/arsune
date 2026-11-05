@@ -46,15 +46,17 @@ The first goal requires a real API, worker, and browser run that confirms a know
 
 The controlled website must contain known faults and a corrected variant. These are repeatable test cases, not evidence of accuracy on every website.
 
-Current verification includes 46 backend tests, eight interface browser tests, ordinary and comparison worker stop/restart checks, and builds. The faulty site produces eight confirmed findings across three fault types and one rejected false claim. The corrected site produces no confirmed findings. Comparisons require fresh evidence for resolved faults. See [measured verification results](docs/VERIFICATION.md). The live model test remains open.
+Current verification includes database and real browser tests, ordinary and comparison worker stop/restart checks, and builds. The faulty site produces eight confirmed findings across three fault types and one rejected false claim. The corrected site produces no confirmed findings. Comparisons require fresh evidence for resolved faults. See [measured verification results](docs/VERIFICATION.md). The live model test remains open.
 
 ## Current limits
 
-The 5 November update adds bounded redirects, public rendering resources, and detailed incomplete-layout reports. Verification includes 40 backend tests, a final font-failure regression test, five interface browser tests, and worker recovery. See [verification results](docs/VERIFICATION.md#network-coverage-update--5-november-2026).
+The 5 November updates add bounded redirects, public rendering resources, incomplete-layout reports, repair comparisons, visible price checks, and saved report history. See [verification results](docs/VERIFICATION.md).
 
 This is a local operator tool. It has no customer accounts or public-service access controls. The browser checks at most five page URLs, including redirect destinations. Document redirects permit the same hostname, its `www` counterpart, and HTTPS upgrades, with at most three redirects per chain. Public styles, scripts, images, and fonts can load after destination checks. Frames, workers, popups, forms, sockets, and data requests remain blocked. The report records resource failures and incomplete layout checks.
 
-Navigation checks use response status and source links. Mobile checks measure horizontal overflow. Consistency checks compare visible values with matching `data-fact-key` and `data-context` attributes. The controlled site supplies these attributes. General text consistency on ordinary websites needs a later extension.
+Navigation checks use response status and source links. Mobile checks measure horizontal overflow. Consistency checks support explicit `data-fact-key` and `data-context` attributes and ordinary visible price cards. Ordinary prices require a named plan, an explicit supported ISO currency, and a monthly or yearly period. The checker matches product context, units, and remaining offer terms before comparing amounts. Promotions, ambiguous currency symbols, and unsupported terms remain outside this check. Reports show excluded prices and their reasons. This is not a general text consistency check.
+
+The recent-check list lets the local operator reopen saved reports. Each result keeps its own evidence. The [incident investigation plan](docs/INCIDENT_PLAN.md) defines the next use case with a controlled log bundle; that feature is not yet implemented.
 
 The model service proposes candidates. A separate browser check determines the result. A model reply alone cannot confirm a fault. If a worker stops during a paid request, the job must not repeat that request when its charge is uncertain.
 

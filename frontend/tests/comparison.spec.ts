@@ -8,6 +8,9 @@ import { readFile } from "node:fs/promises";
 
 async function completed(page: Page) {
   await expect(
+    page.getByRole("button", { name: "Check website", exact: true }),
+  ).toBeEnabled();
+  await expect(
     page.getByRole("heading", { name: /\d+ confirmed faults?/ }),
   ).toBeVisible();
   const id = new URL(page.url()).searchParams.get("job");

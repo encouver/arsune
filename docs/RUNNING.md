@@ -19,6 +19,10 @@ Select **Download repair report** to save a readable HTML report with available 
 
 Existing installations must run `uv run alembic upgrade head` before starting the new API and worker. Migration `0002` adds the baseline link and comparison mapping; existing job history remains in place.
 
+The interface lists recent checks and opens saved reports with `/?job=<id>`. The metadata endpoint is `GET /api/jobs?limit=10`; pass its `next_cursor` as `cursor` to fetch older records. Limits are 1 through 50. This history belongs to the local operator; the application has no customer account separation.
+
+Scripted price checks need no model key. They support named visible price cards with explicit ISO currency and monthly or yearly terms. Check the report's price coverage before using the result: excluded offers are not passing checks. The isolated `/prices/{case}/{page}` demo routes support repeatable price tests.
+
 Compose binds the interface and service ports to the local machine. It uses separate Arsune database, queue, and evidence volumes. In container reports, the demo address is `http://demo:8541`; the browser on your machine can open the same fixture at http://127.0.0.1:8541/faulty/.
 
 To stop the stack and retain data:

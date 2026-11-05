@@ -59,7 +59,7 @@ test("a real job shows checked faults, rejected demo claim, evidence, and correc
   ).toBeVisible();
   await expect(page.getByText(/Inspected pages \(5\)/)).toBeVisible();
   await expect(page.getByRole("tabpanel")).toContainText(
-    "General page text is not checked for consistency.",
+    "Other text and ambiguous offers are not checked.",
   );
   await expect(page.getByRole("tabpanel")).toContainText(
     "At most three redirects per chain",

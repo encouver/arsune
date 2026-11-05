@@ -1029,3 +1029,66 @@ footer > span {
     padding: 12px;
   }
 }
+
+.recent-checks {
+  max-width: 1184px;
+  margin: 0 auto 45px;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--white);
+}
+.recent-checks p,
+.history-meta {
+  font-size: 12px;
+  color: var(--muted);
+}
+.recent-checks ul {
+  list-style: none;
+  padding: 0;
+}
+.recent-checks li {
+  border-top: 1px solid var(--line);
+  padding: 12px 0;
+}
+.history-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin-top: 8px;
+}
+.price-source {
+  padding: 12px;
+  margin: 12px 0;
+  background: var(--paper);
+  overflow-wrap: anywhere;
+}
+.price-source blockquote {
+  margin: 10px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--line);
+  font-size: 13px;
+}
+@media (max-width: 1100px) {
+  .recent-checks {
+    margin-left: 35px;
+    margin-right: 35px;
+  }
+}
+@media (max-width: 760px) {
+  .recent-checks {
+    margin-left: 23px;
+    margin-right: 23px;
+    padding: 20px;
+  }
+}
+.price-capture {
+  display: block;
+  max-width: 100%;
+  max-height: 250px;
+  margin: 10px 0;
+  border: 1px solid var(--line);
+  object-fit: contain;
+  object-position: left top;
+}

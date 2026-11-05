@@ -1,9 +1,28 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
+import RecentChecks from "./recent-checks";
 
 type Mode = "scripted" | "model";
 type FindingState = "confirmed" | "rejected" | "unverified";
+type PriceFact = {
+  screenshot?: string;
+  key: string;
+  value: string;
+  context?:
+    | string
+    | {
+        name?: string;
+        currency?: string;
+        period?: string;
+        unit?: string;
+        product_context?: string[];
+        qualifiers?: string[];
+      };
+  quote?: string;
+  selector?: string;
+  source_position?: unknown;
+};
 type Evidence = {
   url?: string;
   screenshot?: string;
@@ -11,6 +30,7 @@ type Evidence = {
   viewport?: { width: number; height: number };
   captured_at?: string;
   observations?: unknown;
+  facts?: PriceFact[];
   text?: string;
   selector?: string;
 };
@@ -31,6 +51,7 @@ type Finding = {
   reason?: string;
   checker_reason?: string;
   evidence?: Evidence[];
+  details?: { key?: string };
   candidate?: Partial<Finding>;
   checker?: { reason?: string; evidence?: Evidence[] };
   demo_injected?: boolean;
@@ -47,6 +68,20 @@ type Coverage = {
   redirect_policy?: string;
   browser_limits?: string;
   consistency_scope?: string;
+  price_consistency?: {
+    supported_scope: string;
+    extracted_count: number;
+    excluded_count: number;
+    comparable_contexts: number;
+    extraction_truncated_pages?: string[];
+    exclusions: {
+      url: string;
+      quote: string;
+      reason: string;
+      selector?: string;
+      source_position?: unknown;
+    }[];
+  };
   incomplete_pages?: string[];
   redirects?: {
     url: string;
@@ -161,6 +196,22 @@ function readable(value: unknown): string {
   return String(value);
 }
 
+function priceContext(fact: PriceFact): string {
+  const context = fact.context;
+  if (!context || typeof context === "string") return context || fact.key;
+  return [
+    context.name,
+    ...(context.product_context || []),
+    context.currency,
+    context.period && `per ${context.period}`,
+    context.unit &&
+      (context.unit === "offer" ? "whole offer" : `per ${context.unit}`),
+    ...(context.qualifiers || []),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
 function CoveragePanel({
   report,
   pages,
@@ -247,11 +298,51 @@ function CoveragePanel({
           "No check list was recorded."}
       </p>
       <p>{coverage?.scope || "Results apply only to the selected pages."}</p>
-      {coverage?.consistency_scope && (
-        <p>
-          This version compares only values that the site marks as the same
-          fact. General page text is not checked for consistency.
-        </p>
+      {coverage?.consistency_scope && <p>{coverage.consistency_scope}</p>}
+      {coverage?.price_consistency && (
+        <>
+          <h4>Price checks</h4>
+          <p>{coverage.price_consistency.supported_scope}</p>
+          <p>
+            {coverage.price_consistency.extracted_count} prices recorded ·{" "}
+            {coverage.price_consistency.comparable_contexts} comparable contexts
+            · {coverage.price_consistency.excluded_count} prices excluded
+          </p>
+          {!!coverage.price_consistency.extraction_truncated_pages?.length && (
+            <>
+              <p className="notice">
+                The price search limit was reached on these pages. Some prices
+                were not checked.
+              </p>
+              <ul>
+                {coverage.price_consistency.extraction_truncated_pages.map(
+                  (url) => (
+                    <li className="url" key={url}>
+                      {url}
+                    </li>
+                  ),
+                )}
+              </ul>
+            </>
+          )}
+          {!!coverage.price_consistency.exclusions.length && (
+            <>
+              <p>
+                Excluded prices were not checked. This does not mean that they
+                passed.
+              </p>
+              <ul>
+                {coverage.price_consistency.exclusions.map((item, index) => (
+                  <li key={index}>
+                    <span className="url">{item.url}</span>
+                    <q>{item.quote}</q>: {item.reason}
+                    {item.selector && <p>Page location: {item.selector}</p>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </>
       )}
       {coverage?.redirect_policy && <p>{coverage.redirect_policy}</p>}
       {coverage?.browser_limits && <p>{coverage.browser_limits}</p>}
@@ -411,6 +502,61 @@ function FindingCard({
           {url} ↗
         </a>
       ))}
+      {finding.claim_type === "price_mismatch" && (
+        <div className="price-evidence">
+          <h4>Compared prices</h4>
+          {evidence.map((item, index) => {
+            const facts = (item.facts || []).filter(
+              (fact) =>
+                !finding.details?.key || fact.key === finding.details.key,
+            );
+            return facts.length ? (
+              <div key={index} className="price-source">
+                <p className="url">{item.url}</p>
+                {facts.map((fact, factIndex) => (
+                  <div key={factIndex}>
+                    <p>
+                      <strong>Price:</strong>{" "}
+                      {typeof fact.context === "object" && fact.context.currency
+                        ? `${fact.context.currency} ${fact.value}`
+                        : fact.value}
+                    </p>
+                    <p>
+                      <strong>Context:</strong> {priceContext(fact)}
+                    </p>
+                    {fact.quote && <blockquote>{fact.quote}</blockquote>}
+                    {fact.screenshot && (
+                      <a
+                        href={`/api/jobs/${encodeURIComponent(jobId)}/evidence/${encodeURIComponent(fact.screenshot.split("/").pop()!)}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        <img
+                          className="price-capture"
+                          src={`/api/jobs/${encodeURIComponent(jobId)}/evidence/${encodeURIComponent(fact.screenshot.split("/").pop()!)}`}
+                          alt={`Price source: ${fact.value}`}
+                          loading="lazy"
+                        />
+                      </a>
+                    )}
+                    {fact.selector && (
+                      <p>
+                        <strong>Page location:</strong> {fact.selector}
+                      </p>
+                    )}
+                    {fact.source_position !== undefined && (
+                      <p>
+                        <strong>Page element position:</strong>{" "}
+                        {readable(fact.source_position)}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : null;
+          })}
+        </div>
+      )}
       <details>
         <summary>Evidence and steps to repeat</summary>
         {finding.reproduction_steps?.length ? (
@@ -867,6 +1013,7 @@ export default function Home() {
             </p>
           </div>
         </section>
+        <RecentChecks updated={`${job?.id || ""}:${job?.status || ""}`} />
         {job && (
           <section
             className="workspace"

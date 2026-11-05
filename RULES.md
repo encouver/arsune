@@ -67,6 +67,8 @@ Record the mode and provider. A mock endpoint is not a live model test. Missing 
 
 ## Report
 
+Ordinary visible price checks require exact supported commercial context. Do not infer a currency from an ambiguous symbol or compare different periods, products, units, quantities, or offer terms. Record excluded prices and the reason. Use fresh page evidence to confirm a mismatch; keep the amount out of the context identity so a corrected price can be checked against its baseline.
+
 Identify the requested site, inspected pages, capture times, viewports, agent mode, and completed or incomplete checks. Each confirmed issue explains the problem, visitor impact, evidence, and suggested correction in plain language.
 
 The customer or their website builder performs repairs. Arsune checks the site again on request; it does not modify the customer's website.

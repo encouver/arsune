@@ -50,9 +50,28 @@ async def check_candidate(item, observe):
             values = [
                 [f["value"] for f in o["facts"] if f["key"] == details.get("key")] for o in fresh
             ]
-            if all(len(v) == 1 for v in values):
+            facts = [[f for f in o["facts"] if f["key"] == details.get("key")] for o in fresh]
+            ordinary_complete = not any(
+                f.get("source") == "visible_price"
+                and not all(
+                    f.get(field) for field in ("context", "quote", "selector", "screenshot")
+                )
+                for group in facts
+                for f in group
+            )
+            same_context = len(facts[0]) == len(facts[1]) == 1 and facts[0][0].get(
+                "context"
+            ) == facts[1][0].get("context")
+            if all(len(v) == 1 for v in values) and ordinary_complete and same_context:
                 status = "confirmed" if values[0] != values[1] else "rejected"
-                reason = f"Fresh page reads for context {details['key']}: {values[0][0]} and {values[1][0]}."
+                fact = next(f for f in fresh[0]["facts"] if f["key"] == details["key"])
+                context = fact.get("context")
+                label = (
+                    f"{context['name']}, {context['currency']}, per {context['period']}, unit {context['unit']}"
+                    if context
+                    else details["key"]
+                )
+                reason = f"Fresh page reads for {label}: {values[0][0]} and {values[1][0]}."
     if item["claim_type"] == "horizontal_overflow" and any(
         not o.get("layout_complete", True) for o in fresh
     ):

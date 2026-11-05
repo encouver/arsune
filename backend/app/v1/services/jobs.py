@@ -1,10 +1,12 @@
+from base64 import urlsafe_b64decode, urlsafe_b64encode
+from binascii import Error as Base64Error
 from copy import deepcopy
-from datetime import timedelta
+from datetime import datetime, timedelta
 from urllib.parse import urlsplit, urlunsplit
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 
 from app.agents.candidates import validate_candidates
 from app.browser.policy import TargetPolicyError, document_scope, origin, validate_target
@@ -61,6 +63,37 @@ async def create_job(request: CreateJob):
         session.flush()
         session.add(PendingAction(id=f"{job_id}:scan", job_id=job_id))
         return detail(session, job)
+
+
+def list_jobs(limit: int = 10, cursor: str | None = None):
+    columns = (
+        Job.id,
+        Job.url,
+        Job.mode,
+        Job.status,
+        Job.baseline_job_id,
+        Job.created_at,
+        Job.updated_at,
+    )
+    query = select(*columns).order_by(Job.created_at.desc(), Job.id.desc())
+    if cursor is not None:
+        try:
+            timestamp, job_id = urlsafe_b64decode(cursor.encode()).decode().split("|", 1)
+            created_at = datetime.fromisoformat(timestamp)
+            if created_at.tzinfo is None or str(UUID(job_id)) != job_id:
+                raise ValueError("Invalid cursor")
+        except (ValueError, UnicodeError, Base64Error):
+            raise HTTPException(422, "Invalid history cursor") from None
+        query = query.where(tuple_(Job.created_at, Job.id) < tuple_(created_at, job_id))
+    with Session() as session:
+        rows = session.execute(query.limit(limit + 1)).mappings().all()
+        items = [dict(row) for row in rows[:limit]]
+    next_cursor = None
+    if len(rows) > limit:
+        last = items[-1]
+        value = f"{last['created_at'].isoformat()}|{last['id']}"
+        next_cursor = urlsafe_b64encode(value.encode()).decode()
+    return {"items": items, "next_cursor": next_cursor}
 
 
 def get_job(job_id: str):

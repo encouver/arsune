@@ -34,6 +34,8 @@ The second use case will investigate a service failure from logs and deployment 
 
 Start that later goal with a supplied log bundle and a known incident. Production connections need restricted read access, a service and time range, and sensitive-data handling. A likely cause must not be called proven merely because events occurred close together.
 
+The [incident implementation plan](INCIDENT_PLAN.md) defines bounded inputs, synthetic cases, specialist roles, source evidence, and acceptance checks for a first implementation without a model key. It is a plan, not a completed incident-investigation feature.
+
 ## Scope boundaries
 
 - Five unique page URLs per job. Checker revisits do not expand the page set.
