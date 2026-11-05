@@ -47,8 +47,18 @@ Job data and screenshots are local test artifacts. They are not committed custom
 
 ## Limits that remain
 
-Redirects and resources from other origins are blocked. The report states that rendering can be incomplete. Consistency confirmation requires explicitly matched fact/context attributes; it does not establish general consistency of ordinary website text. These limits are tracked in `arsune-dxk`.
+The 5 November network update permits bounded same-site redirects and public rendering resources. Frames, workers, popups, forms, sockets, and data requests remain blocked. The report records these restrictions and incomplete layouts. Consistency confirmation still requires explicitly matched fact/context attributes; general text matching remains in `arsune-dxk`.
 
 Model mode has three separate specialist requests and a browser checker, but no live provider result is claimed. Complete `arsune-5is` with a locally stored credential, a selected compatible model, current token prices, and an authorized test spending limit.
 
 This build has no customer accounts, public-service access controls, marketplace payments, website repairs, or production log connections. Incident investigation remains the second use case.
+
+## Network coverage update — 5 November 2026
+
+Controlled Chromium tests exercise redirect final addresses and relative styles, HTTPS and `www` changes, redirect loops and limits, external script execution and image loading, delayed and missing styles, five-URL limits, and saved request/transfer budgets. Private-address and changing-DNS tests use a listening sentinel and assert that forbidden requests never reach it. Test-only public-host routing maps a small fixed set of fixture names to the local server; production private-address checks are not relaxed.
+
+All five frontend browser tests passed against the updated API and worker in 45.6 seconds. They include actual redirects, missing stylesheet reasons, incomplete layout notices, old report support, screenshot evidence, corrected-site results, and connection errors. The frontend production build and type check passed.
+
+Worker recovery passed with job `e18e331c-b8da-4072-ae84-89d177af2898`: eight confirmed findings, one rejected injected claim, five pages, retained screenshots, and unchanged results after repeated delivery. The backend container build and import checks passed. No paid model calls were made.
+
+The full backend suite passed 40 tests in 92.30 seconds. A final targeted Chromium test also passed after the font readiness correction: a font response with invalid font data leaves layout incomplete, prevents confirmed overflow, and retains the reason after checkpoint recovery. Valid external font decoding has no separate acceptance test yet.

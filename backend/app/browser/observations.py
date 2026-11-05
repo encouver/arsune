@@ -4,12 +4,14 @@ from urllib.parse import urljoin, urlsplit
 
 from playwright.async_api import Error as BrowserError
 
-from app.browser.policy import origin
+from app.browser.policy import document_scope
+from app.browser.session import RESOURCE_READY_TIMEOUT_MS
 
 
 async def observe_page(context, target, viewport, output_dir, site_url):
     page = await context.new_page()
     await page.set_viewport_size(viewport)
+    await context._arsune_prepare_page(page)
     observation = {
         "url": target,
         "viewport": viewport,
@@ -20,7 +22,29 @@ async def observe_page(context, target, viewport, output_dir, site_url):
     }
     try:
         response = await page.goto(target, wait_until="domcontentloaded", timeout=12000)
-        await page.wait_for_timeout(200)
+        try:
+            await page.wait_for_load_state("networkidle", timeout=RESOURCE_READY_TIMEOUT_MS)
+            fonts_ready = await page.evaluate(
+                "() => Promise.race([document.fonts.ready.then(() => Array.from(document.fonts).every(font => font.status !== 'error')), new Promise(resolve => setTimeout(() => resolve(false), 1000))])"
+            )
+            if not fonts_ready:
+                page._arsune_resource_issues.append(
+                    {
+                        "url": page.url,
+                        "page_url": page.url,
+                        "resource_type": "Readiness",
+                        "reason": "Page fonts failed to load or exceeded the readiness deadline.",
+                    }
+                )
+        except BrowserError:
+            page._arsune_resource_issues.append(
+                {
+                    "url": page.url,
+                    "page_url": page.url,
+                    "resource_type": "Readiness",
+                    "reason": "Resource readiness deadline exceeded.",
+                }
+            )
         observation.update(
             await page.evaluate("""() => ({
             final_url: location.href,
@@ -39,8 +63,11 @@ async def observe_page(context, target, viewport, output_dir, site_url):
             dict.fromkeys(
                 urljoin(target, link).split("#")[0]
                 for link in observation["links"]
-                if urlsplit(link).scheme in {"http", "https"} and origin(link) == origin(site_url)
+                if urlsplit(link).scheme in {"http", "https"} and document_scope(site_url, link)
             )
+        )
+        page._arsune_resource_issues.extend(
+            await page.evaluate("() => window.__arsunePolicyIssues || []")
         )
         filename = f"capture-{uuid.uuid4().hex}.png"
         await page.screenshot(path=str(output_dir / filename), full_page=False, timeout=5000)
@@ -48,5 +75,18 @@ async def observe_page(context, target, viewport, output_dir, site_url):
     except BrowserError:
         observation["error"] = "The browser could not complete this page request."
     finally:
+        observation["resource_issues"] = list(page._arsune_resource_issues)
+        for issue in observation["resource_issues"]:
+            issue["viewport"] = viewport
+        observation["layout_complete"] = not observation.get("error") and not any(
+            issue["resource_type"]
+            in {"Document", "Stylesheet", "Script", "Image", "Font", "Readiness", "Policy"}
+            for issue in observation["resource_issues"]
+        )
         await page.close()
+        pending = list(page._arsune_pending)
+        if pending:
+            import asyncio
+
+            await asyncio.gather(*pending, return_exceptions=True)
     return observation

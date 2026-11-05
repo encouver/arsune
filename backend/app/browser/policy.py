@@ -45,3 +45,17 @@ async def validate_target(url: str, demo_origin: str | None = None) -> str:
         if isinstance(exc, TargetPolicyError):
             raise
         raise TargetPolicyError("The destination cannot be validated.") from exc
+
+
+def document_scope(source: str, target: str) -> bool:
+    """Allow the same host, its www counterpart, and an HTTPS upgrade."""
+    left, right = urlsplit(source), urlsplit(target)
+    left_host = (left.hostname or "").removeprefix("www.")
+    right_host = (right.hostname or "").removeprefix("www.")
+    if left_host != right_host or (left.scheme == "https" and right.scheme != "https"):
+        return False
+    left_port = left.port or (443 if left.scheme == "https" else 80)
+    right_port = right.port or (443 if right.scheme == "https" else 80)
+    return left_port == right_port or (
+        left.scheme == "http" and right.scheme == "https" and left_port == 80 and right_port == 443
+    )

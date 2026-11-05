@@ -85,7 +85,11 @@ Validate HTTP and HTTPS targets under a configured policy. Reject embedded crede
 
 The first deployment is a local operator tool, not a public scanning service. Keep model credentials on the server. Evidence routes must not expose arbitrary files. Isolate project containers and volumes from other local projects.
 
-The current browser permits resources only from the target origin. It blocks external resources and redirects and records blocked requests in coverage. This can change the appearance of sites that use external styles or scripts. A redirect requires a new job with the final permitted URL. The consistency checker currently requires matching `data-fact-key` and `data-context` attributes. Ordinary page text does not yet receive a general consistency check.
+Chromium request interception checks each redirect and resource before a connection to a validated numeric address. The browser retains the final URL, so relative links and resources use the correct base address. Document redirect chains permit the same hostname, its `www` counterpart, and HTTPS upgrades. Each chain has at most three redirects; every new document URL counts toward the five-URL limit.
+
+Public styles, scripts, images, and fonts can load under the saved request and byte limits. Frames, workers, popups, forms, sockets, and data requests remain blocked. Added browser restrictions preserve the site's own content security policy. Redirect history and resource failures are saved with progress. Observations record layout completeness, and the checker does not confirm layout faults when essential resources are missing.
+
+The consistency checker still requires matching `data-fact-key` and `data-context` attributes. Ordinary page text does not yet receive a general consistency check.
 
 ## Job sequence
 

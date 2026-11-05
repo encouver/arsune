@@ -5,7 +5,7 @@ from pathlib import Path
 from app.agents.specialists import propose_candidates
 from app.browser.checker import check_candidate
 from app.browser.observations import observe_page
-from app.browser.policy import origin, validate_target
+from app.browser.policy import document_scope, origin, validate_target
 from app.browser.session import inspection_browser
 from app.core.scan import VIEWPORTS
 from app.v1.services.reports import build_report
@@ -46,7 +46,7 @@ async def _scan(url, output_dir, mode, inject, checkpoint, save_checkpoint, emit
     if not isinstance(state.get("selected"), list) or len(state["selected"]) > 5:
         raise ValueError("Invalid checkpoint scope.")
     for selected_url in state["selected"]:
-        if origin(selected_url) != origin(url):
+        if not document_scope(url, selected_url):
             raise ValueError("Checkpoint includes an unrelated origin.")
         await validate_target(selected_url)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -65,7 +65,12 @@ async def _scan(url, output_dir, mode, inject, checkpoint, save_checkpoint, emit
     async with inspection_browser(url, demo, state, save) as (context, blocked):
 
         async def observe(target, viewport):
-            return await observe_page(context, target, viewport, output_dir, url)
+            observation = await observe_page(context, target, viewport, output_dir, url)
+            for issue in observation.get("resource_issues", []):
+                if issue not in state["resource_issues"] and len(state["resource_issues"]) < 400:
+                    state["resource_issues"].append(issue)
+            await save()
+            return observation
 
         index = 0
         while index < len(state["selected"]):

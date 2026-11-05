@@ -24,7 +24,7 @@ async def check_candidate(item, observe):
                 status = "confirmed" if target["status"] >= 400 else "rejected"
                 reason = f"A fresh source-page read found the link. A fresh target request returned HTTP {target['status']}."
         elif item["claim_type"] == "horizontal_overflow":
-            if fresh[0]["status"] < 400:
+            if fresh[0]["status"] < 400 and fresh[0].get("layout_complete", True):
                 width = fresh[0].get("scroll_width", 0)
                 status = "confirmed" if width > 392 else "rejected"
                 reason = (
@@ -37,6 +37,13 @@ async def check_candidate(item, observe):
             if all(len(v) == 1 for v in values):
                 status = "confirmed" if values[0] != values[1] else "rejected"
                 reason = f"Fresh page reads for context {details['key']}: {values[0][0]} and {values[1][0]}."
+    if item["claim_type"] == "horizontal_overflow" and any(
+        not o.get("layout_complete", True) for o in fresh
+    ):
+        status, reason = (
+            "unverified",
+            "Required page resources were unavailable or did not become ready.",
+        )
     result = {
         **item,
         "status": status,

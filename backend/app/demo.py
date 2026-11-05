@@ -1,9 +1,85 @@
 """Controlled faulty and corrected websites: python -m app.demo."""
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, RedirectResponse
+import asyncio
+
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 app = FastAPI()
+
+
+@app.get("/network/{page:path}")
+async def network_fixture(page: str, request: Request):
+    """Deterministic browser fixtures, without access to any customer website."""
+    port = request.url.port
+    external = f"http://cdn.test:{port}/network"
+    private = "http://127.0.0.1:8542/internal"
+    if page == "start":
+        return RedirectResponse("/network/final/index.html", status_code=302)
+    if page == "upgrade":
+        return RedirectResponse(f"https://site.test:{port}/network/final/index.html")
+    if page == "www":
+        return RedirectResponse(f"http://www.site.test:{port}/network/final/index.html")
+    if page.startswith("loop/"):
+        return RedirectResponse("/network/loop/b" if page.endswith("a") else "/network/loop/a")
+    if page.startswith("chain/"):
+        step = int(page.rsplit("/", 1)[1])
+        return RedirectResponse(f"/network/chain/{step + 1}")
+    if page == "private":
+        return RedirectResponse(private)
+    if page == "asset-private":
+        return RedirectResponse(private)
+    if page in {"site.css", "slow.css", "final/site.css"}:
+        if page == "slow.css":
+            await asyncio.sleep(1.0)
+        return Response(".wide{width:auto!important;max-width:100%}", media_type="text/css")
+    if page == "missing.css":
+        return Response("Missing", status_code=404, media_type="text/css")
+    if page == "invalid.woff2":
+        return Response(
+            b"This is not a font.",
+            media_type="font/woff2",
+            headers={"access-control-allow-origin": "*"},
+        )
+    if page == "script.js":
+        return Response(
+            "document.body.dataset.externalScript='loaded';", media_type="text/javascript"
+        )
+    if page == "image.svg":
+        return Response(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="7" height="9"><rect width="7" height="9"/></svg>',
+            media_type="image/svg+xml",
+        )
+    if page == "final/index.html":
+        content = '<link rel="stylesheet" href="site.css"><a href="child">Child</a>'
+    elif page == "external":
+        content = f'<link rel="stylesheet" href="{external}/site.css"><script defer src="{external}/script.js"></script><img id="external-image" src="{external}/image.svg">'
+    elif page == "failed-font":
+        content = (
+            '<script>const font = new FontFace("Broken", '
+            f"`url({external}/invalid.woff2)`);"
+            "document.fonts.add(font); font.load().catch(() => {});</script>"
+        )
+    elif page == "dns-resource":
+        content = '<link rel="stylesheet" href="http://rebind.test:8542/network/site.css">'
+    elif page == "private-resource":
+        content = f'<link rel="stylesheet" href="{external}/asset-private"><img src="{private}">'
+    elif page in {"delayed-style", "missing-style"}:
+        css = "slow.css" if page == "delayed-style" else "missing.css"
+        content = f'<link rel="stylesheet" href="{external}/{css}">'
+    elif page == "many-pages":
+        content = "".join(f'<a href="/network/page/{n}">{n}</a>' for n in range(8))
+    elif page.startswith("page/"):
+        content = "Healthy child page"
+    else:
+        content = "Healthy page"
+    width = "900px" if page in {"delayed-style", "missing-style", "failed-font"} else "auto"
+    return HTMLResponse(
+        '<!doctype html><html><head><meta name="viewport" '
+        'content="width=device-width, initial-scale=1"></head>'
+        f'<body>{content}<div class="wide" style="width:{width};min-height:20px">'
+        "Fixture</div></body></html>"
+    )
 
 
 @app.get("/{variant}/{page:path}", response_class=HTMLResponse)

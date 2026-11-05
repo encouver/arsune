@@ -78,6 +78,7 @@ def scripted(observations):
     for observation in observations:
         if (
             observation["viewport"] == VIEWPORTS["mobile"]
+            and observation.get("layout_complete", True)
             and observation.get("scroll_width", 0) > 392
         ):
             result.append(

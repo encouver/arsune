@@ -62,7 +62,7 @@ test("a real job shows checked faults, rejected demo claim, evidence, and correc
     "General page text is not checked for consistency.",
   );
   await expect(page.getByRole("tabpanel")).toContainText(
-    "Redirects are blocked",
+    "At most three redirects per chain",
   );
   await expect(page.getByRole("tabpanel")).not.toContainText("data-fact-key");
   await page.screenshot({
@@ -80,6 +80,109 @@ test("a real job shows checked faults, rejected demo claim, evidence, and correc
     page.getByRole("heading", { name: "No confirmed findings in this report" }),
   ).toBeVisible();
   expect(failures).toEqual([]);
+});
+
+test("coverage shows real redirects and incomplete layout checks", async ({
+  page,
+  request,
+}) => {
+  const response = await request.get("/api/config");
+  expect(response.ok()).toBe(true);
+  const config = await response.json();
+  const target = new URL("/network/start", config.demo_urls.faulty).href;
+  await page.goto("/");
+  await page.getByLabel("Website URL").fill(target);
+  await page
+    .getByRole("button", { name: "Check website", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: /\d+ confirmed faults/ }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "Coverage" }).click();
+  const coverage = page.getByRole("tabpanel");
+  await expect(coverage).toContainText(`Original URL: ${target}`);
+  await expect(coverage).toContainText(
+    `Final URL: ${new URL("/network/final/index.html", target).href}`,
+  );
+  await expect(coverage).toContainText("Followed:");
+  await expect(coverage).toContainText("(HTTP 302)");
+  await expect(coverage).not.toContainText("Redirects are blocked");
+  await expect(coverage).not.toContainText("External origins are blocked");
+
+  await page
+    .getByLabel("Website URL")
+    .fill(new URL("/network/missing-style", target).href);
+  const completed = page.waitForResponse(async (response) => {
+    if (!/\/api\/jobs\/[^/]+$/.test(response.url()) || !response.ok())
+      return false;
+    return (await response.json()).status === "completed";
+  });
+  await page
+    .getByRole("button", { name: "Check website", exact: true })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: /\d+ confirmed faults/ }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "Coverage" }).click();
+  await expect(coverage).toContainText("Mobile layout checks are incomplete");
+  await expect(coverage).toContainText(
+    "These pages have not passed the layout check.",
+  );
+  await expect(coverage).toContainText("missing.css");
+  await expect(coverage).toContainText("Page appearance can be incomplete.");
+  const result = await (await completed).json();
+  expect(result.report.coverage.resource_issues.length).toBeGreaterThan(0);
+  await expect(coverage).toContainText(
+    result.report.coverage.resource_issues[0].reason,
+  );
+});
+
+test("coverage can display a report from the old format", async ({ page }) => {
+  await page.route("**/api/config", (route) =>
+    route.fulfill({
+      json: {
+        modes: ["scripted"],
+        max_pages: 5,
+        demo_urls: {
+          faulty: "http://example.test/",
+          corrected: "http://example.test/",
+        },
+      },
+    }),
+  );
+  await page.route("**/api/jobs", (route) =>
+    route.fulfill({
+      json: {
+        id: "old-report",
+        status: "completed",
+        mode: "scripted",
+        url: "http://example.test/",
+        progress: { stage: "completed", message: "Done" },
+        events: [],
+        findings: [],
+        report: {
+          findings: [],
+          inspected_pages: ["http://example.test/"],
+          coverage: {
+            redirect_policy: "Redirects are blocked in this saved report.",
+            incomplete_pages: ["http://example.test/missing"],
+          },
+        },
+      },
+    }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Site with faults" }).click();
+  await page.getByRole("tab", { name: "Coverage" }).click();
+  await expect(page.getByRole("tabpanel")).toContainText(
+    "Redirects are blocked in this saved report.",
+  );
+  await expect(page.getByRole("tabpanel")).toContainText(
+    "http://example.test/missing",
+  );
+  await expect(
+    page.getByRole("heading", { name: "Redirect history" }),
+  ).toHaveCount(0);
 });
 
 test("invalid target shows service error and mobile layout fits", async ({

@@ -4,7 +4,10 @@ These rules implement the selected website-checking goal. They replace the suppl
 
 ## Job scope
 
-- Inspect at most five unique page URLs under the permitted origin.
+- Inspect at most five unique page URLs under the permitted site scope. Each new document redirect URL also counts.
+- Permit at most three redirects per chain. Document redirects stay on the same hostname or its `www` counterpart and can upgrade to HTTPS; they cannot downgrade to HTTP.
+- Check every resource destination and redirect before connecting. Public styles, scripts, images, and fonts are permitted. Private addresses remain blocked except the exact controlled demo origin.
+- Record resource failures and policy restrictions per page. A missing essential resource makes the layout check incomplete; it cannot support a confirmed layout fault.
 - Record fixed desktop and mobile viewport sizes.
 - Checker revisits do not expand the selected page set. Failed page attempts also count toward the five-page limit.
 - Bound link discovery, response sizes, browser time, retries, and model output. Static resources need limits and destination checks but do not count as pages.

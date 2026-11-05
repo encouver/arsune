@@ -46,7 +46,9 @@ Local checks passed on 4 November 2026: 25 Python tests, three interface browser
 
 ## Current limits
 
-This is a local operator tool. It has no customer accounts or public-service access controls. The browser checks at most five selected pages under one origin. External resources and redirects are blocked and can affect page appearance; the report records these limits. For a redirect, submit the final permitted URL in a new job.
+The 5 November update adds bounded redirects, public rendering resources, and detailed incomplete-layout reports. Verification includes 40 backend tests, a final font-failure regression test, five interface browser tests, and worker recovery. See [verification results](docs/VERIFICATION.md#network-coverage-update--5-november-2026).
+
+This is a local operator tool. It has no customer accounts or public-service access controls. The browser checks at most five page URLs, including redirect destinations. Document redirects permit the same hostname, its `www` counterpart, and HTTPS upgrades, with at most three redirects per chain. Public styles, scripts, images, and fonts can load after destination checks. Frames, workers, popups, forms, sockets, and data requests remain blocked. The report records resource failures and incomplete layout checks.
 
 Navigation checks use response status and source links. Mobile checks measure horizontal overflow. Consistency checks compare visible values with matching `data-fact-key` and `data-context` attributes. The controlled site supplies these attributes. General text consistency on ordinary websites needs a later extension.
 

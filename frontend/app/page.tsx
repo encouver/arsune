@@ -45,8 +45,24 @@ type Coverage = {
   scope?: string;
   external_resources?: string;
   redirect_policy?: string;
+  browser_limits?: string;
   consistency_scope?: string;
   incomplete_pages?: string[];
+  redirects?: {
+    url: string;
+    target: string;
+    resource_type: string;
+    status: number;
+    allowed: boolean;
+    reason?: string;
+  }[];
+  resource_issues?: {
+    url: string;
+    page_url: string;
+    resource_type: string;
+    reason: string;
+  }[];
+  incomplete_layout_pages?: string[];
 };
 type Report = {
   findings?: Finding[];
@@ -54,6 +70,7 @@ type Report = {
   inspected_pages?: string[];
   viewports?: Record<string, { width: number; height: number }>;
   coverage?: Coverage;
+  observations?: { url: string; final_url?: string }[];
   incomplete_checks?: unknown[];
   mode?: string;
   provider?: unknown;
@@ -139,6 +156,13 @@ function CoveragePanel({
   const provider = report.provider as
     { name?: string; live_call?: boolean } | undefined;
   const coverage = report.coverage;
+  const addresses = report.observations?.filter(
+    (item, index, all) =>
+      item.final_url &&
+      all.findIndex(
+        (other) => other.url === item.url && other.final_url === item.final_url,
+      ) === index,
+  );
   return (
     <div className="coverage">
       <h3>What this check covered</h3>
@@ -171,6 +195,22 @@ function CoveragePanel({
       ) : (
         <p>No page list was recorded.</p>
       )}
+      {!!addresses?.length && (
+        <>
+          <h4>Page addresses</h4>
+          <ul>
+            {addresses.map((item, index) => (
+              <li key={index}>
+                <strong>Original URL:</strong>{" "}
+                <span className="url">{item.url}</span>
+                <br />
+                <strong>Final URL:</strong>{" "}
+                <span className="url">{item.final_url}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       <h4>Viewports</h4>
       {report.viewports ? (
         <ul>
@@ -197,10 +237,68 @@ function CoveragePanel({
         </p>
       )}
       {coverage?.redirect_policy && <p>{coverage.redirect_policy}</p>}
+      {coverage?.browser_limits && <p>{coverage.browser_limits}</p>}
       {coverage?.external_resources && (
         <p className="notice">{coverage.external_resources}</p>
       )}
+      {coverage?.redirects && (
+        <>
+          <h4>Redirect history</h4>
+          {coverage.redirects.length ? (
+            <ul>
+              {coverage.redirects.map((item, index) => (
+                <li key={index}>
+                  <strong>{item.allowed ? "Followed" : "Blocked"}:</strong>{" "}
+                  <span className="url">{item.url}</span> →{" "}
+                  <span className="url">{item.target}</span> (HTTP {item.status}
+                  ){item.reason && <>. {item.reason}</>}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p>No redirects were recorded.</p>
+          )}
+        </>
+      )}
+      {coverage?.resource_issues && (
+        <>
+          <h4>Missing or blocked resources</h4>
+          {coverage.resource_issues.length ? (
+            <>
+              <p>
+                These files could not load. Page appearance can be incomplete.
+              </p>
+              <ul>
+                {coverage.resource_issues.map((item, index) => (
+                  <li key={index}>
+                    <span className="url">{item.url}</span>: {item.reason}
+                    <br />
+                    Page: <span className="url">{item.page_url}</span>
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : (
+            <p>No missing or blocked resources were recorded.</p>
+          )}
+        </>
+      )}
       <h4>Incomplete checks</h4>
+      {!!coverage?.incomplete_layout_pages?.length && (
+        <>
+          <p>
+            Mobile layout checks are incomplete for these pages because required
+            files did not load. These pages have not passed the layout check.
+          </p>
+          <ul>
+            {coverage.incomplete_layout_pages.map((page) => (
+              <li key={page} className="url">
+                {page}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       {coverage?.incomplete_pages?.length ? (
         <>
           <p>
@@ -216,7 +314,7 @@ function CoveragePanel({
           </ul>
         </>
       ) : (
-        <p>No incomplete page checks were recorded.</p>
+        <p>No incomplete page loads were recorded.</p>
       )}
       {report.incomplete_checks?.map((item, index) => (
         <p key={index}>{readable(item)}</p>
