@@ -1,6 +1,6 @@
 # Arsune product decisions
 
-The user selected workers operated by Arsune and approved website checking as the first use case. The active build goal is a working flow from a website URL to an evidence report. Incident investigation is the second use case.
+The user selected workers operated by Arsune and approved website checking as the first use case. Incident investigation from supplied test logs is the second use case. Both use saved jobs and independently checked evidence.
 
 ## Selected customer task
 
@@ -30,11 +30,11 @@ Agent Market remains the intended sales channel. Marketplace payments, public li
 
 ## Incident investigation
 
-The second use case will investigate a service failure from logs and deployment history. Reuse the coordinator, evidence records, checker, and report. Add timeline, error, and change analysis roles.
+The second use case investigates a service failure from supplied logs and deployment history. It reuses the coordinator, job records, worker claims, and history. Timeline, error, and change specialists propose claims; a separate checker reads the original source records again.
 
-Start that later goal with a supplied log bundle and a known incident. Production connections need restricted read access, a service and time range, and sensitive-data handling. A likely cause must not be called proven merely because events occurred close together.
+The user approved this build with synthetic log bundles and known incidents. Production connections remain separate work. A likely cause must not be called proven merely because events occurred close together.
 
-The [incident implementation plan](INCIDENT_PLAN.md) defines bounded inputs, synthetic cases, specialist roles, source evidence, and acceptance checks for a first implementation without a model key. It is a plan, not a completed incident-investigation feature.
+The [incident design](INCIDENT_PLAN.md) defines bounded inputs, synthetic cases, specialist roles, source evidence, and acceptance checks without a model key. Supported explanations remain distinct from reproduced causes.
 
 ## Scope boundaries
 

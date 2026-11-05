@@ -1,6 +1,6 @@
-# Incident investigation: next-use-case plan
+# Incident investigation: scope and design
 
-This is a design for the second use case. It does not add production log access to the website checker. The first implementation can run without a model key, using explicit rules and a supplied test bundle.
+This defines the second use case: investigate supplied event and deployment files with scripted specialists and an independent source checker. It uses no model key and does not connect to production logs. See [verification results](VERIFICATION.md) for tested behavior and [local instructions](RUNNING.md) for the upload flow.
 
 ## Input and limits
 

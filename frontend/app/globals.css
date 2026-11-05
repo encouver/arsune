@@ -1092,3 +1092,112 @@ footer > span {
   object-fit: contain;
   object-position: left top;
 }
+
+.task-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+  font-size: 12px;
+}
+.task-nav a {
+  text-underline-offset: 5px;
+}
+.task-nav a[aria-current="page"] {
+  font-weight: 700;
+  color: var(--green);
+}
+.incident-intro {
+  gap: 48px;
+  align-items: start;
+  padding-top: 50px;
+}
+.incident-intro h1 {
+  font-size: 53px;
+}
+.incident-form h2 {
+  margin-bottom: 20px;
+}
+.incident-form label {
+  display: block;
+}
+.incident-form input:not([type="file"]),
+.incident-form textarea {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  margin: 6px 0 14px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: #fcfdf9;
+  color: var(--ink);
+  font: inherit;
+}
+.incident-form textarea {
+  min-height: 80px;
+  resize: vertical;
+}
+.incident-form input[type="file"] {
+  width: 100%;
+  margin-top: 8px;
+  font-size: 12px;
+}
+.field-help {
+  font-size: 11px;
+  color: var(--muted);
+}
+.incident-format {
+  font-size: 12px;
+  margin-top: 25px;
+  overflow-wrap: anywhere;
+}
+.incident-format summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.incident-group {
+  margin: 32px 0;
+}
+.incident-group > h3 {
+  font-size: 23px;
+  font-family: var(--serif);
+  font-weight: 400;
+}
+.incident-evidence {
+  margin: 12px 0;
+}
+.source-record {
+  padding: 14px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  margin-top: 12px;
+}
+.source-record p {
+  font-size: 11px;
+}
+.source-hash {
+  overflow-wrap: anywhere;
+}
+.source-record pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font-size: 12px;
+}
+.incident-report .coverage {
+  margin-bottom: 22px;
+}
+.incident-report .activity > ol {
+  padding: 0 25px 18px 42px;
+  font-size: 12px;
+}
+@media (max-width: 760px) {
+  .task-nav {
+    font-size: 10px;
+    gap: 5px 12px;
+    justify-content: end;
+    max-width: 170px;
+  }
+  .incident-intro h1 {
+    font-size: 44px;
+  }
+}

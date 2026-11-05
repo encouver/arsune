@@ -23,6 +23,8 @@ def detail(session, job):
     return {
         "id": job.id,
         "url": job.url,
+        "kind": job.kind,
+        "title": job.url,
         "baseline_job_id": job.baseline_job_id,
         "comparison_mapping": job.comparison_mapping,
         "mode": job.mode,
@@ -69,6 +71,8 @@ def list_jobs(limit: int = 10, cursor: str | None = None):
     columns = (
         Job.id,
         Job.url,
+        Job.kind,
+        Job.url.label("title"),
         Job.mode,
         Job.status,
         Job.baseline_job_id,
@@ -109,6 +113,8 @@ async def rerun_job(baseline_id: str, request: RerunJob):
         baseline = session.get(Job, baseline_id)
         if not baseline:
             raise HTTPException(404, "Baseline job not found")
+        if baseline.kind != "website":
+            raise HTTPException(422, "Incident checks do not support website reruns.")
         if baseline.status != "completed" or not baseline.report:
             raise HTTPException(409, "The baseline must have a completed report.")
         report = baseline.report

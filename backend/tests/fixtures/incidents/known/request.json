@@ -1,0 +1,6 @@
+{
+  "description": "Checkout requests fail after v2",
+  "service": "checkout",
+  "start": "2026-11-05T09:55:00Z",
+  "end": "2026-11-05T10:10:00Z"
+}

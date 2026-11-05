@@ -13,6 +13,8 @@ from app.v1.services.jobs import get_job
 
 def render_repair_report(job_id):
     job = get_job(job_id)
+    if job["kind"] != "website":
+        raise HTTPException(422, "Incident checks do not support website report export.")
     if job["status"] != "completed" or not job["report"]:
         raise HTTPException(409, "The repair report needs a completed check.")
     report = job["report"]

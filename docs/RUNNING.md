@@ -17,7 +17,7 @@ On a completed report, select **Check again and compare** for a linked scan of t
 
 Select **Download repair report** to save a readable HTML report with available embedded screenshots. Missing or oversized evidence is identified in the file. Downloading does not publish the report or send it to anyone. JSON remains available for technical use.
 
-Existing installations must run `uv run alembic upgrade head` before starting the new API and worker. Migration `0002` adds the baseline link and comparison mapping; existing job history remains in place.
+Existing installations must run `uv run alembic upgrade head` before starting the new API and worker. Migration `0002` adds the baseline link and comparison mapping. Migration `0003` adds incident jobs and immutable source records. Existing website jobs and history remain in place.
 
 The interface lists recent checks and opens saved reports with `/?job=<id>`. The metadata endpoint is `GET /api/jobs?limit=10`; pass its `next_cursor` as `cursor` to fetch older records. Limits are 1 through 50. This history belongs to the local operator; the application has no customer account separation.
 
@@ -69,6 +69,22 @@ npm --prefix frontend run dev
 
 The host setup stores evidence in `.data/evidence`. PostgreSQL listens on port 55432 and Redis on port 56379. The API creates a job and a pending action in one transaction. The coordinator sends pending work to the queue and recovers expired worker claims.
 
+## Incident investigation
+
+Open http://127.0.0.1:3540/incidents. Select **Load synthetic example**, then **Investigate incident**. The example contains a failed migration and matching missing-column errors. The report shows observed facts and a supported explanation. It does not claim that the cause was reproduced or that a service was repaired.
+
+For a supplied bundle, select `events.ndjson` and `deployments.json`. Enter a description, service, and start and end timestamps with explicit UTC offsets, for example `2026-11-05T10:00:00Z`. The time window must be greater than zero and at most 24 hours. The combined files must be at most 10 MB, with at most 5,000 events and 20 deployments. Unknown fields and duplicate IDs are rejected. Blank event records are invalid. An empty deployment array can be used when deployment evidence is missing.
+
+Each event is one JSON object per line. Required fields are `id`, `timestamp`, `service`, `level`, and `message`. Optional fields are `request_id`, `error_code`, `revision`, and `column`. All values are text. Supported levels are `debug`, `info`, `warning`, `error`, and `critical`.
+
+The deployment file is a JSON array. Each record requires `id`, `timestamp`, `service`, `revision`, and `migration_status`. The optional `migration_column` identifies the affected column. Supported migration states are `failed`, `completed`, and `not_required`. The current explanation rule uses the exact event error code `missing_column` and matching revision and column fields. It does not infer a general cause from arbitrary message text.
+
+Use the source buttons in the report to open original records. Event references use physical line numbers; deployment references use record IDs and array positions. The report states selected and excluded record counts and display limits. Recent history opens saved incident reports through `/incidents?job=<id>`.
+
+The API accepts `POST /api/incidents` with six text fields: `description`, `service`, `start`, `end`, `events_text`, and `deployments_text`. Job progress and reports use `GET /api/jobs/{id}`. Source evidence uses `GET /api/incidents/{id}/evidence/{filename}?record_id=<id>`. No source update route is provided.
+
+This flow uses scripted checks only. No API key, production log connection, or paid model call is needed. The fixture bundles in `backend/tests/fixtures/incidents/` cover known, corrected, unrelated, incomplete, invalid, and instruction-like inputs.
+
 ## Model settings
 
 For local model work, create `.env` from `.env.example` if `.env` does not already exist. Set the model endpoint, key, model name, output-token cap, cost ceiling, and input/output token prices. Keep the key in `.env`; this file is excluded from Git. Restart the API and worker after settings change.
@@ -113,5 +129,13 @@ uv run python scripts/verify_recovery.py --comparison
 ```
 
 This script starts its own worker, stops it after saved observations, and starts a replacement. It checks retained evidence, a higher worker generation, unique findings, and a repeated queue message that completes without changing the report. It then stops only the worker it started. Restart the normal worker after this check. Do not run this test while another Arsune worker can claim the same jobs.
+
+For incident recovery, stop the normal worker under the same conditions and run:
+
+```sh
+uv run python scripts/verify_incident_recovery.py
+```
+
+The first test worker pauses after it commits specialist progress. The script kills that worker and starts a replacement. It checks retained source text and hashes, stable results and stage records, and repeat delivery. The parser, specialists, checker, database, and queue are real. The pause only makes the interruption point repeatable. Restart the normal worker after the check.
 
 If Chromium is installed in a custom folder, set `PLAYWRIGHT_BROWSERS_PATH` for Python browser tests and workers. Frontend tests can use an existing Chromium executable through `ARSUNE_CHROME_PATH`.

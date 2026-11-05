@@ -42,6 +42,23 @@ def scan(job_id):
         async def run():
             remaining = (claim["deadline"] - store.utcnow()).total_seconds()
             async with asyncio.timeout(max(0.01, remaining)):
+                if claim["kind"] == "incident":
+                    from app.incidents import run_incident, validate_bundle
+                    from app.v1.services.incidents import load_sources
+
+                    sources = load_sources(job_id)
+                    bundle = validate_bundle(
+                        **claim["incident_input"],
+                        events_text=sources["events.ndjson"],
+                        deployments_text=sources["deployments.json"],
+                    )
+                    return await run_incident(
+                        bundle,
+                        checkpoint=claim["checkpoint"],
+                        save_checkpoint=checkpoint,
+                        emit_event=event,
+                        source_loader=lambda: load_sources(job_id),
+                    )
                 return await run_scan(
                     claim["url"],
                     output,

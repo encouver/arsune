@@ -14,8 +14,11 @@ def evidence_path(job_id: str, name: str) -> Path:
     ):
         raise HTTPException(404, "Evidence not found")
     with Session() as session:
-        if not session.get(Job, job_id):
+        job = session.get(Job, job_id)
+        if not job:
             raise HTTPException(404, "Job not found")
+        if job.kind != "website":
+            raise HTTPException(422, "Use incident source evidence for this job.")
     root = (settings.evidence_dir / job_id).resolve()
     path = (root / name).resolve()
     if path.parent != root or not path.is_file():

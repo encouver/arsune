@@ -15,6 +15,8 @@ class Base(DeclarativeBase):
 class Job(Base):
     __tablename__ = "jobs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), default="website")
+    incident_input: Mapped[dict] = mapped_column(JSON, default=dict)
     baseline_job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
     comparison_mapping: Mapped[dict] = mapped_column(JSON, default=dict)
     url: Mapped[str] = mapped_column(Text)
@@ -66,3 +68,11 @@ class PendingAction(Base):
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), index=True)
     publish_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class IncidentSource(Base):
+    __tablename__ = "incident_sources"
+    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id"), primary_key=True)
+    filename: Mapped[str] = mapped_column(String(30), primary_key=True)
+    sha256: Mapped[str] = mapped_column(String(64))
+    content: Mapped[str] = mapped_column(Text)

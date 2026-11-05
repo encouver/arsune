@@ -864,10 +864,12 @@ export default function Home() {
           </span>
           arsune<span className="brand-dot">.</span>
         </a>
-        <span className="header-note">
-          <span className="status-dot" />
-          Local website checker
-        </span>
+        <nav className="task-nav" aria-label="Tasks">
+          <a href="/" aria-current="page">
+            Website checks
+          </a>
+          <a href="/incidents">Incident investigation</a>
+        </nav>
       </header>
       <main>
         <section className="intro">

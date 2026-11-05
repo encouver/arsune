@@ -2,11 +2,13 @@
 
 **AI work. Checked against the source.**
 
-Arsune is an AI swarm project for the NEAR hackathon. Its first use case checks websites for people who build with AI but do not know how to verify the result. Its second use case will investigate incidents from logs and deployment history.
+Arsune is an AI swarm project for the NEAR hackathon. Its first use case checks websites for people who build with AI but do not know how to verify the result. Its second use case investigates supplied incident logs and deployment records with scripted specialists and an independent source checker.
 
 ## Current build goal
 
 Build a working flow from a URL to an evidence report. Three specialists inspect navigation, mobile layout, and consistency across pages. A separate checker reproduces reported faults and rejects unsupported findings.
+
+The second local flow accepts incident event and deployment files, runs timeline, error, and change specialists, and checks their claims against the original records. It uses scripted rules without a model key.
 
 The user approved workers operated by Arsune. The first build inspects at most five pages, starts with a controlled faulty website, and uses scripted responses before connecting a real model through the same workflow.
 
@@ -25,6 +27,8 @@ Use **Check again and compare** on a completed report to create a linked check o
 **Download repair report** saves an HTML file with readable findings, steps, and available screenshot evidence. It can be given to the website builder. The original JSON download remains available.
 
 Arsune does not repair the website. It does not submit forms, make purchases, log in, or modify customer code in this version. It reports what was checked and what could not be verified.
+
+For incident investigation, select **Incident investigation**, load the synthetic example or select the two source files, and submit the service and time window. The report links each finding to source records and separates supported explanations from missing evidence. Saved incident reports appear in the same recent-check list.
 
 ## Design
 
@@ -56,13 +60,15 @@ This is a local operator tool. It has no customer accounts or public-service acc
 
 Navigation checks use response status and source links. Mobile checks measure horizontal overflow. Consistency checks support explicit `data-fact-key` and `data-context` attributes and ordinary visible price cards. Ordinary prices require a named plan, an explicit supported ISO currency, and a monthly or yearly period. The checker matches product context, units, and remaining offer terms before comparing amounts. Promotions, ambiguous currency symbols, and unsupported terms remain outside this check. Reports show excluded prices and their reasons. This is not a general text consistency check.
 
-The recent-check list lets the local operator reopen saved reports. Each result keeps its own evidence. The [incident investigation plan](docs/INCIDENT_PLAN.md) defines the next use case with a controlled log bundle; that feature is not yet implemented.
+The recent-check list lets the local operator reopen saved website and incident reports. Each result keeps its own evidence.
+
+Incident investigation is at `/incidents`. Load the synthetic example or upload event and deployment files. Timeline, error, and change specialists propose claims. The checker reads the original source records again and returns linked evidence. The first supported explanation rule matches missing-column errors to failed migrations with the same service, revision, and column. Other causes remain outside that rule. Logs alone do not prove a cause or a repair. See [incident scope](docs/INCIDENT_PLAN.md) and [input instructions](docs/RUNNING.md#incident-investigation).
 
 The model service proposes candidates. A separate browser check determines the result. A model reply alone cannot confirm a fault. If a worker stops during a paid request, the job must not repeat that request when its charge is uncertain.
 
 ## Later goals
 
-- Incident investigation from a supplied log bundle, followed by restricted production log connections.
+- Broader incident explanation rules and restricted production log connections.
 - Agent Market listing, seller connection, and payments.
 - Private customer deployment and cloud evidence storage.
 - Broader checks and supported user journeys.

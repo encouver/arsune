@@ -1,4 +1,4 @@
-# Arsune website checking architecture
+# Arsune architecture
 
 Arsune checks a website for people who build with AI. Specialists propose findings. A separate checker reproduces those findings against the site. The customer receives explanations and evidence. [Product decisions](DECISIONS.md) defines scope; [Rules](../RULES.md) defines limits and acceptance checks.
 
@@ -34,6 +34,7 @@ The backend follows the application layout used in Aldea and AprobaDoc. It remai
 | `backend/app/v1/services/` | Create jobs, read reports, and locate evidence |
 | `backend/app/agents/` | Generate and validate specialist candidates and call the model service |
 | `backend/app/browser/` | Control browser requests, capture observations, and repeat checks |
+| `backend/app/incidents/` | Parse incident sources, run scripted specialists, and check claims against original records |
 | `backend/app/workers/` | Run queued jobs, save progress, recover expired claims, and coordinate scan stages |
 | `backend/app/demo.py` | Serve the controlled test website |
 | `backend/migrations/` | Versioned database changes |
@@ -114,6 +115,18 @@ The workflow reserves baseline claim pages within the existing five-URL budget. 
 The baseline report is preserved. Saved rechecks survive worker recovery. Reports keep the ordinary finding fields and add a comparison section, so older report views still work.
 
 `GET /api/jobs/{job_id}/repair-report` returns a downloadable HTML file with escaped text, reproduction steps, and bounded local PNG evidence. It does not publish a report. The interface can reopen a saved job through `/?job={job_id}` and link back to the baseline.
+
+## Incident jobs
+
+`POST /api/incidents` accepts the incident description, service, time window, and the text of `events.ndjson` and `deployments.json`. The endpoint bounds the streamed request body and then applies the combined 10 MB decoded-source limit. It rejects invalid records before creating a job. Migration `0003` adds the job kind, incident input metadata, and the `incident_sources` table. Existing jobs default to website jobs.
+
+The API stores the job, original source texts and SHA-256 hashes, and pending queue action in one transaction. A database trigger rejects updates to accepted sources. Job detail and history do not expose full input files. Source evidence is read through a job-specific endpoint with fixed file names and a record selector. The endpoint verifies the stored hashes before it returns a record.
+
+The existing queue task dispatches incident jobs to a separate workflow. It saves timeline, error, and change stages under the existing worker lease and generation rules. The checker loads the original sources again, verifies hashes, and recomputes counts and joins. Saved source identity includes the incident scope, so a checkpoint cannot be reused for a different bundle or window.
+
+The first causal rule checks missing-column errors against failed migration records with the same service, revision, and column. Timing alone is insufficient. Other errors can appear as observed facts without a causal explanation. Results separate observed facts, supported explanations, rejected explanations, and cases that could not be verified. Logs alone never establish a reproduced cause or a successful repair.
+
+The interface at `/incidents` accepts files, shows progress, and opens source records. Saved incident links use `/incidents?job=<id>`. Website rerun, HTML repair export, and PNG routes do not apply to incident jobs. No browser request, model request, command execution, or URL fetch is permitted by log text.
 
 ## Verification boundary
 

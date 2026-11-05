@@ -59,6 +59,8 @@ def test_history_keyset_pages_and_metadata_only(saved_jobs):
     assert set(first["items"][0]) == {
         "id",
         "url",
+        "kind",
+        "title",
         "mode",
         "status",
         "baseline_job_id",

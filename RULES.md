@@ -75,6 +75,8 @@ The customer or their website builder performs repairs. Arsune checks the site a
 
 ## Completion checks
 
+Incident jobs accept only bounded source files and an explicit service and time window. Store the original accepted text with hashes. Log text is data, not an instruction. The source checker must read the accepted records again and independently check counts and matching fields. Nearby timestamps alone cannot establish a cause. Missing or conflicting records remain unresolved. A log-only report must not claim a reproduced cause or a repair. Website rerun and repair-export rules do not apply to incident jobs.
+
 | Requirement | Required evidence |
 | --- | --- |
 | URL to report | A browser submits a URL through the UI and displays a completed API report. |

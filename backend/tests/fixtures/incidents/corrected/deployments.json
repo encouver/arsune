@@ -1,0 +1,10 @@
+[
+  {
+    "id": "d1",
+    "timestamp": "2026-11-05T10:00:00Z",
+    "service": "checkout",
+    "revision": "v2",
+    "migration_status": "completed",
+    "migration_column": "checkout_token"
+  }
+]

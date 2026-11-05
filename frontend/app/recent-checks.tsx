@@ -5,6 +5,8 @@ import { useEffect, useState } from "react";
 type Summary = {
   id: string;
   url: string;
+  kind?: string;
+  title?: string;
   mode: string;
   status: string;
   baseline_job_id: string | null;
@@ -80,14 +82,20 @@ export default function RecentChecks({ updated }: { updated?: string }) {
       <ul>
         {history.items.map((item) => (
           <li key={item.id}>
-            <a className="url" href={`/?job=${encodeURIComponent(item.id)}`}>
-              {item.url}
+            <a
+              className="url"
+              href={`${item.kind === "incident" ? "/incidents" : "/"}?job=${encodeURIComponent(item.id)}`}
+            >
+              {item.kind === "incident"
+                ? item.title || "Incident investigation"
+                : item.url}
             </a>
             <div className="history-meta">
               <span className={`badge job-${item.status}`}>{item.status}</span>
               <time dateTime={item.created_at}>
                 {new Date(item.created_at).toLocaleString()}
               </time>
+              <span>{item.kind === "incident" ? "Incident" : "Website"}</span>
               <span>{item.mode === "scripted" ? "Scripted" : "Model"}</span>
               <span>Job {item.id.slice(0, 8)}</span>
               {item.baseline_job_id && (
