@@ -13,6 +13,12 @@ docker compose -p arsune ps
 
 Select **Site with faults** in the interface. This scans the controlled site and adds a labeled false claim. Select **Corrected site** to create a new report after all fixture faults are removed. Both buttons use scripted mode and do not make paid model calls.
 
+On a completed report, select **Check again and compare** for a linked scan of the same address. For the controlled faulty site, **Compare with corrected demo** uses the known corrected fixture and records that address mapping. Follow **Before report** to inspect the preserved baseline. The browser address includes the job identifier, so a refresh can reopen the saved report.
+
+Select **Download repair report** to save a readable HTML report with available embedded screenshots. Missing or oversized evidence is identified in the file. Downloading does not publish the report or send it to anyone. JSON remains available for technical use.
+
+Existing installations must run `uv run alembic upgrade head` before starting the new API and worker. Migration `0002` adds the baseline link and comparison mapping; existing job history remains in place.
+
 Compose binds the interface and service ports to the local machine. It uses separate Arsune database, queue, and evidence volumes. In container reports, the demo address is `http://demo:8541`; the browser on your machine can open the same fixture at http://127.0.0.1:8541/faulty/.
 
 To stop the stack and retain data:
@@ -94,6 +100,12 @@ For worker recovery, first stop the normal Arsune worker. Keep the API, demo, co
 
 ```sh
 uv run python scripts/verify_recovery.py
+```
+
+To stop and resume a comparison job after a baseline recheck has been saved, use:
+
+```sh
+uv run python scripts/verify_recovery.py --comparison
 ```
 
 This script starts its own worker, stops it after saved observations, and starts a replacement. It checks retained evidence, a higher worker generation, unique findings, and a repeated queue message that completes without changing the report. It then stops only the worker it started. Restart the normal worker after this check. Do not run this test while another Arsune worker can claim the same jobs.

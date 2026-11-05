@@ -20,6 +20,10 @@ The local prototype includes the API, persistent worker, browser checks, control
 4. Give the report to the tool or developer that built the website.
 5. Request a new check after the customer makes changes.
 
+Use **Check again and compare** on a completed report to create a linked check of the same address. The comparison separates problems that remain, problems proved resolved, new problems, and problems that could not be checked again. A missing candidate alone does not prove a repair. Each report has a local address that can be reopened after a refresh.
+
+**Download repair report** saves an HTML file with readable findings, steps, and available screenshot evidence. It can be given to the website builder. The original JSON download remains available.
+
 Arsune does not repair the website. It does not submit forms, make purchases, log in, or modify customer code in this version. It reports what was checked and what could not be verified.
 
 ## Design
@@ -42,7 +46,7 @@ The first goal requires a real API, worker, and browser run that confirms a know
 
 The controlled website must contain known faults and a corrected variant. These are repeatable test cases, not evidence of accuracy on every website.
 
-Local checks passed on 4 November 2026: 25 Python tests, three interface browser tests, a worker stop/restart test, and frontend/backend image builds. The backend structure change also preserved the full stored job response and existing evidence access. The faulty site produced eight confirmed findings across three fault types and one rejected false claim. The corrected site produced no confirmed findings. See [measured verification results](docs/VERIFICATION.md). The live model test remains open.
+Current verification includes 46 backend tests, eight interface browser tests, ordinary and comparison worker stop/restart checks, and builds. The faulty site produces eight confirmed findings across three fault types and one rejected false claim. The corrected site produces no confirmed findings. Comparisons require fresh evidence for resolved faults. See [measured verification results](docs/VERIFICATION.md). The live model test remains open.
 
 ## Current limits
 

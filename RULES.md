@@ -40,6 +40,12 @@ The checker records a separate result from fresh observations. A broken link nee
 
 A timeout does not prove a broken site. A blocked page is not a passing check. Keep execution failures separate from finding states.
 
+## Repeated checks
+
+A comparison links a new job to a completed baseline without changing the original report. Recheck each confirmed baseline claim against fresh observations. Classify it as remaining, resolved, or could not recheck. Only a supported fresh disproof can resolve a claim. A missing candidate, unavailable page, changed fact context, blocked resource, or excluded page cannot prove repair. Rejected demo claims do not count as repaired problems.
+
+New confirmed claims with different matched contexts appear as new problems. Reserve baseline claim pages before ordinary discovery uses the five-URL budget. Save completed rechecks so recovery does not duplicate findings. For ordinary sites, rerun the original address. The faulty-to-corrected fixture mapping is an explicit controlled demo action and must be recorded in the report.
+
 Every displayed finding includes a screenshot or complete reproduction steps. Rejected and unverified candidates remain available with reasons. The main problem list contains only confirmed findings.
 
 ## Agent modes

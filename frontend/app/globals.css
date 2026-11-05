@@ -917,3 +917,115 @@ footer > span {
     animation: none;
   }
 }
+
+.report-downloads,
+.report-links,
+.rescan-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 20px;
+}
+.report-downloads {
+  justify-content: flex-end;
+}
+.report-links a {
+  font-size: 12px;
+  color: var(--green);
+}
+.rescan-actions {
+  margin: 20px 0 26px;
+}
+.rescan-actions button {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 10px 14px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+}
+.rescan-actions p {
+  width: 100%;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.comparison {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 24px;
+  margin: 24px 0;
+  background: #f5f6ef;
+}
+.comparison-counts {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin: 20px 0;
+}
+.comparison-counts a {
+  color: var(--ink);
+  text-decoration: none;
+  padding: 12px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  font-size: 12px;
+}
+.comparison-counts strong {
+  display: block;
+  font-size: 22px;
+  font-weight: 500;
+}
+.comparison-group {
+  scroll-margin-top: 20px;
+}
+.comparison-group > h4 {
+  font-size: 14px;
+  margin: 22px 0 12px;
+}
+.comparison-entry {
+  padding: 16px;
+  margin: 10px 0;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+}
+.comparison-entry h5 {
+  font-size: 14px;
+  font-weight: 500;
+  margin: 0 0 10px;
+}
+.comparison-entry p,
+.comparison-empty,
+.comparison-entry summary {
+  font-size: 12px;
+}
+.comparison-entry summary {
+  cursor: pointer;
+  margin: 16px 0;
+}
+.comparison-entry .finding {
+  background: var(--paper);
+}
+@media (max-width: 760px) {
+  .comparison {
+    padding: 16px;
+  }
+  .comparison-counts {
+    grid-template-columns: 1fr 1fr;
+  }
+  .report-downloads {
+    justify-content: flex-start;
+  }
+  .report-heading {
+    flex-wrap: wrap;
+  }
+  .comparison-entry {
+    padding: 12px;
+  }
+  .comparison-entry .finding {
+    padding: 12px;
+  }
+}

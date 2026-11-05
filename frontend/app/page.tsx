@@ -64,7 +64,23 @@ type Coverage = {
   }[];
   incomplete_layout_pages?: string[];
 };
+type ComparisonState = "remaining" | "resolved" | "new" | "could_not_recheck";
+type Comparison = {
+  baseline_job_id: string;
+  summary: Record<ComparisonState, number>;
+  remaining: ComparisonEntry[];
+  resolved: ComparisonEntry[];
+  new: ComparisonEntry[];
+  could_not_recheck: ComparisonEntry[];
+};
+type ComparisonEntry = {
+  baseline_finding_id: string | null;
+  finding: Finding;
+  current_finding: Finding | null;
+  reason: string;
+};
 type Report = {
+  comparison?: Comparison;
   findings?: Finding[];
   selected_pages?: string[];
   inspected_pages?: string[];
@@ -90,6 +106,7 @@ type Job = {
   error: string | null;
   created_at: string;
   updated_at: string;
+  baseline_job_id?: string | null;
 };
 type Config = {
   modes: string[];
@@ -441,6 +458,101 @@ function FindingCard({
   );
 }
 
+function reportAddress(id: string) {
+  return `/?job=${encodeURIComponent(id)}`;
+}
+
+function ComparisonPanel({
+  comparison,
+  jobId,
+}: {
+  comparison: Comparison;
+  jobId: string;
+}) {
+  const sections: { key: ComparisonState; label: string }[] = [
+    { key: "remaining", label: "Still present" },
+    { key: "resolved", label: "Resolved" },
+    { key: "new", label: "New" },
+    { key: "could_not_recheck", label: "Could not recheck" },
+  ];
+  return (
+    <section className="comparison" aria-label="Before and after comparison">
+      <div className="report-heading">
+        <h3>Before and after</h3>
+        <div className="report-links">
+          <a href={reportAddress(comparison.baseline_job_id)}>Before report</a>
+          <a href={reportAddress(jobId)}>After report</a>
+        </div>
+      </div>
+      <p className="report-scope">
+        Only repeat checks with evidence can show a fault as resolved. A missing
+        finding does not prove a repair.
+      </p>
+      <div className="comparison-counts">
+        {sections.map(({ key, label }) => (
+          <a key={key} href={`#comparison-${key}`}>
+            <strong>{comparison.summary[key]}</strong> {label}
+          </a>
+        ))}
+      </div>
+      {sections.map(({ key, label }) => (
+        <section
+          key={key}
+          id={`comparison-${key}`}
+          className="comparison-group"
+        >
+          <h4>
+            {label} ({comparison.summary[key]})
+          </h4>
+          {(comparison[key] || []).map((entry, index) => (
+            <article
+              className="comparison-entry"
+              key={entry.baseline_finding_id || entry.finding.id || index}
+            >
+              <h5>
+                {entry.finding.title ||
+                  entry.finding.explanation ||
+                  displayMessage(entry.finding.claim_type)}
+              </h5>
+              <p>{entry.reason}</p>
+              <details>
+                <summary>
+                  {key === "new"
+                    ? "View new evidence"
+                    : "View before and after evidence"}
+                </summary>
+                <h5>{key === "new" ? "New finding" : "Before check"}</h5>
+                <FindingCard
+                  finding={entry.finding}
+                  jobId={key === "new" ? jobId : comparison.baseline_job_id}
+                />
+                {key !== "new" && (
+                  <>
+                    <h5>After check</h5>
+                    {entry.current_finding ? (
+                      <FindingCard
+                        finding={entry.current_finding}
+                        jobId={jobId}
+                      />
+                    ) : (
+                      <p>
+                        No repeat finding was recorded. See the reason above.
+                      </p>
+                    )}
+                  </>
+                )}
+              </details>
+            </article>
+          ))}
+          {!comparison[key]?.length && (
+            <p className="comparison-empty">No findings in this group.</p>
+          )}
+        </section>
+      ))}
+    </section>
+  );
+}
+
 export default function Home() {
   const [config, setConfig] = useState<Config | null>(null);
   const [url, setUrl] = useState("");
@@ -458,6 +570,33 @@ export default function Home() {
     request<Config>("/api/config")
       .then(setConfig)
       .catch((err: Error) => setError(err.message));
+  }, []);
+
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("job");
+    if (!id) return;
+    const controller = new AbortController();
+    setBusy(true);
+    request<Job>(`/api/jobs/${encodeURIComponent(id)}`, {
+      signal: controller.signal,
+    })
+      .then((saved) => {
+        if (controller.signal.aborted) return;
+        setJob(saved);
+        setUrl(saved.url);
+        setMode(saved.mode);
+        setTimeout(
+          () => reportRef.current?.scrollIntoView({ block: "start" }),
+          100,
+        );
+      })
+      .catch((err: Error) => {
+        if (!controller.signal.aborted) setError(err.message);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setBusy(false);
+      });
+    return () => controller.abort();
   }, []);
 
   useEffect(() => {
@@ -504,6 +643,7 @@ export default function Home() {
         }),
       });
       setJob(next);
+      window.history.replaceState(null, "", reportAddress(next.id));
       setDemo(inject);
       setTab("confirmed");
       setTimeout(
@@ -514,6 +654,32 @@ export default function Home() {
           }),
         100,
       );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rerun(demoCorrected = false) {
+    if (!job || busy || active) return;
+    setBusy(true);
+    setError("");
+    setConnectionError("");
+    try {
+      const next = await request<Job>(
+        `/api/jobs/${encodeURIComponent(job.id)}/rerun`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ demo_corrected: demoCorrected }),
+        },
+      );
+      setJob(next);
+      setUrl(next.url);
+      setDemo(false);
+      setTab("confirmed");
+      window.history.replaceState(null, "", reportAddress(next.id));
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -730,7 +896,10 @@ export default function Home() {
               <span>Started {new Date(job.created_at).toLocaleString()}</span>
               <span>Job {job.id.slice(0, 8)}</span>
             </div>
-            {demo && (
+            {(demo ||
+              findings.some(
+                (finding) => finding.demo_injected || finding.injected,
+              )) && (
               <p className="notice">
                 Controlled demo: one false claim was added to test the
                 independent checker.
@@ -739,6 +908,13 @@ export default function Home() {
             {connectionError && (
               <p className="error" role="alert">
                 {connectionError}
+              </p>
+            )}
+            {job.baseline_job_id && !job.report?.comparison && (
+              <p className="notice">
+                This check will compare results with the{" "}
+                <a href={reportAddress(job.baseline_job_id)}>before report</a>.
+                The before report stays unchanged.
               </p>
             )}
             {job.error && (
@@ -809,14 +985,51 @@ export default function Home() {
                       {count("confirmed") === 1 ? "fault" : "faults"}
                     </h3>
                   </div>
-                  <button className="text-button" onClick={download}>
-                    Download report ↓
-                  </button>
+                  <div className="report-downloads">
+                    <a
+                      className="text-button"
+                      href={`/api/jobs/${encodeURIComponent(job.id)}/repair-report`}
+                      download
+                    >
+                      Download repair report ↓
+                    </a>
+                    <button className="text-button" onClick={download}>
+                      Download report JSON ↓
+                    </button>
+                  </div>
                 </div>
                 <p className="report-scope">
                   Results apply to the pages and checks recorded below. They do
                   not establish that the whole website is fault-free.
                 </p>
+                {job.status === "completed" && (
+                  <div className="rescan-actions">
+                    <button
+                      disabled={busy || active}
+                      onClick={() => void rerun()}
+                    >
+                      Check again and compare
+                    </button>
+                    {config && job.url === config.demo_urls.faulty && (
+                      <button
+                        disabled={busy || active}
+                        onClick={() => void rerun(true)}
+                      >
+                        Compare with corrected demo
+                      </button>
+                    )}
+                    <p>
+                      A new check keeps this report and repeats its checks. The
+                      demo comparison uses the corrected demo site.
+                    </p>
+                  </div>
+                )}
+                {job.report.comparison && (
+                  <ComparisonPanel
+                    comparison={job.report.comparison}
+                    jobId={job.id}
+                  />
+                )}
                 <div
                   className="tabs"
                   role="tablist"

@@ -103,6 +103,16 @@ The consistency checker still requires matching `data-fact-key` and `data-contex
 
 An interrupted run resumes stored stages. A rerun after repairs creates a new job and preserves the original evidence.
 
+## Before and after checks
+
+`POST /api/jobs/{job_id}/rerun` creates a new job linked to a completed baseline. Migration `0002` adds `baseline_job_id` and `comparison_mapping` to jobs. Ordinary reruns retain the original target. A separate controlled demo option maps the exact faulty fixture to its corrected counterpart and records that mapping.
+
+The workflow reserves baseline claim pages within the existing five-URL budget. It checks the baseline's confirmed findings again with fresh browser observations and saves each result in `baseline_checks`. A fresh confirmed result remains a problem; a supported fresh disproof resolves it; insufficient evidence produces `could_not_recheck`. Newly confirmed contexts appear as new problems. The comparison service uses claim type, role, URLs, and matched context to identify findings. Candidate absence is never proof of repair.
+
+The baseline report is preserved. Saved rechecks survive worker recovery. Reports keep the ordinary finding fields and add a comparison section, so older report views still work.
+
+`GET /api/jobs/{job_id}/repair-report` returns a downloadable HTML file with escaped text, reproduction steps, and bounded local PNG evidence. It does not publish a report. The interface can reopen a saved job through `/?job={job_id}` and link back to the baseline.
+
 ## Verification boundary
 
 The controlled website includes a broken link, mobile overflow, inconsistent facts with matched context, and a healthy page for rejecting a deliberate false claim. Provide a corrected variant and explicit expected outcomes.

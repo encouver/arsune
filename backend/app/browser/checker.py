@@ -20,17 +20,33 @@ async def check_candidate(item, observe):
         if item["claim_type"] == "broken_link":
             source = next((o for o in fresh if o["url"] == details.get("source")), None)
             target = next((o for o in fresh if o["url"] == details.get("target")), None)
-            if source and target and target["url"] in source["links"]:
-                status = "confirmed" if target["status"] >= 400 else "rejected"
+            if (
+                source
+                and target
+                and 200 <= source["status"] < 300
+                and source.get("layout_complete", True)
+                and target["url"] in source["links"]
+            ):
+                status = (
+                    "confirmed"
+                    if target["status"] >= 400
+                    else "rejected"
+                    if 200 <= target["status"] < 300 and target.get("layout_complete", True)
+                    else "unverified"
+                )
                 reason = f"A fresh source-page read found the link. A fresh target request returned HTTP {target['status']}."
         elif item["claim_type"] == "horizontal_overflow":
-            if fresh[0]["status"] < 400 and fresh[0].get("layout_complete", True):
+            if 200 <= fresh[0]["status"] < 300 and fresh[0].get("layout_complete", True):
                 width = fresh[0].get("scroll_width", 0)
                 status = "confirmed" if width > 392 else "rejected"
                 reason = (
                     f"Fresh measurement: content width {width} pixels; viewport width 390 pixels."
                 )
-        elif item["claim_type"] == "price_mismatch" and len(fresh) == 2:
+        elif (
+            item["claim_type"] == "price_mismatch"
+            and len(fresh) == 2
+            and all(200 <= o["status"] < 300 and o.get("layout_complete", True) for o in fresh)
+        ):
             values = [
                 [f["value"] for f in o["facts"] if f["key"] == details.get("key")] for o in fresh
             ]

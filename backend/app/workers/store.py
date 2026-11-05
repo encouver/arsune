@@ -64,6 +64,11 @@ def claim(job_id):
         return {
             "id": job.id,
             "url": job.url,
+            "baseline_job_id": job.baseline_job_id,
+            "comparison_mapping": job.comparison_mapping,
+            "baseline_report": session.get(Job, job.baseline_job_id).report
+            if job.baseline_job_id
+            else None,
             "mode": job.mode,
             "inject_demo": job.inject_demo,
             "checkpoint": job.checkpoint,

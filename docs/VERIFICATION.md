@@ -62,3 +62,15 @@ All five frontend browser tests passed against the updated API and worker in 45.
 Worker recovery passed with job `e18e331c-b8da-4072-ae84-89d177af2898`: eight confirmed findings, one rejected injected claim, five pages, retained screenshots, and unchanged results after repeated delivery. The backend container build and import checks passed. No paid model calls were made.
 
 The full backend suite passed 40 tests in 92.30 seconds. A final targeted Chromium test also passed after the font readiness correction: a font response with invalid font data leaves layout incomplete, prevents confirmed overflow, and retains the reason after checkpoint recovery. Valid external font decoding has no separate acceptance test yet.
+
+## Comparison and repair report update — 5 November 2026
+
+The backend passed 46 tests in two groups: 44 regression, API, database, and migration tests in 99.23 seconds, plus two final real Chromium comparison tests in 141.29 seconds. Comparison cases include unchanged faults, repairs with fresh evidence, new faults, unavailable pages, blocked styles, excluded scope, explicit corrected-demo mapping, preserved baseline reports, and resumed saved checks. API checks also cover normalized input addresses, unfinished baselines, and escaped report text with rejected external evidence paths.
+
+Migration `0002` passed upgrade, downgrade, and upgrade in an isolated PostgreSQL schema and was applied to the local database. The backend package and container builds passed.
+
+Ordinary worker recovery passed with job `67ebcbce-2039-4928-b7c9-4d31b45e6b0a`. Comparison recovery passed with job `5a8de2b9-58ce-41bc-9423-421dc8f7ef96`, linked to baseline `ee0f459f-3a09-44ab-b1bc-440a40f492fc`. It resumed at generation 2 after a saved baseline check, kept the baseline unchanged, retained evidence, and ignored duplicate delivery. Its comparison recorded eight remaining faults and zero resolved, new, or uncheckable faults. The downloaded HTML report contained 30 embedded PNG references.
+
+The new features use scripted checks and require no paid model call. Reports can be reopened from a local job URL. Downloading an HTML repair report does not publish it or send it to another service.
+
+All eight frontend browser tests passed across the full run and one corrected test rerun. The corrected expectation distinguishes resolved claims on available pages from uncheckable claims on a failed page. Coverage includes all four comparison groups, active-job refresh, before/after links, preserved old reports, screenshot evidence, HTML download, and mobile layout. The production build and type check passed. Mobile test capture: `/tmp/arsune-comparison-mobile.png`.

@@ -10,6 +10,10 @@ class CreateJob(BaseModel):
     demo_fault_injection: bool = False
 
 
+class RerunJob(BaseModel):
+    demo_corrected: bool = False
+
+
 class JobEvent(BaseModel):
     id: str
     role: str
@@ -24,6 +28,8 @@ class JobEvent(BaseModel):
 class JobDetail(BaseModel):
     id: str
     url: str
+    baseline_job_id: str | None = None
+    comparison_mapping: dict[str, str] = Field(default_factory=dict)
     mode: Literal["scripted", "model"]
     status: str
     progress: dict[str, Any]

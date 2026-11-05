@@ -6,6 +6,47 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 app = FastAPI()
+comparison_state = "faulty"
+
+
+@app.post("/comparison-control")
+async def comparison_control(request: Request):
+    """Change only the controlled test site, while keeping its page URLs stable."""
+    global comparison_state
+    state = (await request.json()).get("state")
+    if state not in {"faulty", "repaired", "new_fault", "failed_page", "blocked_css"}:
+        return Response("Unknown comparison state", status_code=422)
+    comparison_state = state
+    return {"state": state}
+
+
+@app.get("/comparison/{page:path}", response_class=HTMLResponse)
+async def comparison_fixture(page: str):
+    if comparison_state == "failed_page" and not page:
+        return HTMLResponse("Page unavailable", status_code=503)
+    if comparison_state == "faulty" and page == "missing":
+        return HTMLResponse("Page missing", status_code=404)
+    links = "".join(
+        f'<a href="/comparison/{target}">{target}</a> '
+        for target in ["pricing", "missing", "healthy", "extra-1", "extra-2", "extra-3"]
+    )
+    price = "$29" if comparison_state == "faulty" and page == "pricing" else "$19"
+    overflow = (comparison_state == "faulty" and not page) or (
+        comparison_state == "new_fault" and page == "healthy"
+    )
+    style = "width:900px" if overflow else "max-width:100%"
+    blocked = (
+        '<link rel="stylesheet" href="http://127.0.0.1:8542/private.css">'
+        if comparison_state == "blocked_css" and not page
+        else ""
+    )
+    return f"""<!doctype html><html><head><meta name="viewport"
+    content="width=device-width, initial-scale=1">{blocked}
+    <style>body{{font:18px sans-serif;margin:16px}}a{{display:inline-block;margin:6px}}</style>
+    </head><body><h1>Controlled comparison fixture</h1><nav>{links}</nav>
+    <p>Basic plan, USD, per month, one seat:</p>
+    <p data-fact-key="basic-price" data-context="USD|month|one-seat">{price}</p>
+    <div style="{style}">Product details</div></body></html>"""
 
 
 @app.get("/network/{page:path}")

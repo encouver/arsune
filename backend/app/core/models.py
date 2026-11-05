@@ -15,6 +15,8 @@ class Base(DeclarativeBase):
 class Job(Base):
     __tablename__ = "jobs"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    baseline_job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
+    comparison_mapping: Mapped[dict] = mapped_column(JSON, default=dict)
     url: Mapped[str] = mapped_column(Text)
     mode: Mapped[str] = mapped_column(String(20))
     inject_demo: Mapped[bool] = mapped_column(default=False)

@@ -7,6 +7,7 @@ then restarts it and checks the report and duplicate delivery.
 import os
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -70,19 +71,35 @@ def main():
             )
             response.raise_for_status()
             job_id = response.json()["id"]
+            baseline = None
+            if "--comparison" in sys.argv:
+
+                def baseline_complete():
+                    value = client.get(f"/api/jobs/{job_id}").json()
+                    if value["status"] == "failed":
+                        raise AssertionError(value["error"])
+                    return value if value["status"] == "completed" else None
+
+                baseline = wait_for(baseline_complete)
+                response = client.post(f"/api/jobs/{job_id}/rerun", json={})
+                response.raise_for_status()
+                job_id = response.json()["id"]
 
             def saved_observations():
                 with Session() as session:
                     job = session.get(Job, job_id)
                     return (
-                        len(job.checkpoint.get("observations", [])) >= 2 and job.status == "running"
-                    )
+                        bool(job.checkpoint.get("baseline_checks"))
+                        if baseline
+                        else len(job.checkpoint.get("observations", [])) >= 2
+                    ) and job.status == "running"
 
             wait_for(saved_observations)
             stop_worker(worker)
             with Session() as session:
                 before = session.get(Job, job_id)
                 assert before.checkpoint["observations"]
+                saved_baseline_checks = before.checkpoint.get("baseline_checks", {})
                 old_generation = before.generation
                 saved_captures = {
                     o["screenshot"]
@@ -99,6 +116,14 @@ def main():
 
             result = wait_for(complete)
             assert result["generation"] > old_generation
+            if baseline:
+                comparison = result["report"]["comparison"]
+                assert comparison["summary"]["remaining"] == len(baseline["report"]["confirmed"])
+                assert comparison["summary"]["resolved"] == 0
+                assert client.get(f"/api/jobs/{baseline['id']}").json() == baseline
+                with Session() as session:
+                    saved = session.get(Job, job_id).checkpoint["baseline_checks"]
+                    assert all(saved[key] == value for key, value in saved_baseline_checks.items())
             report = result["report"]
             assert saved_captures <= {o.get("screenshot") for o in report["observations"]}
             assert len(report["inspected_pages"]) == 5

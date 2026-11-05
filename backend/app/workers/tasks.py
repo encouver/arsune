@@ -48,6 +48,9 @@ def scan(job_id):
                     mode=claim["mode"],
                     inject_demo_false_positive=claim["inject_demo"],
                     checkpoint=claim["checkpoint"],
+                    baseline_report=claim["baseline_report"],
+                    baseline_job_id=claim["baseline_job_id"],
+                    comparison_mapping=claim["comparison_mapping"],
                     save_checkpoint=checkpoint,
                     emit_event=event,
                 )

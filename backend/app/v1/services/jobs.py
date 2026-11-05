@@ -1,14 +1,17 @@
+from copy import deepcopy
 from datetime import timedelta
+from urllib.parse import urlsplit, urlunsplit
 from uuid import uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from app.browser.policy import TargetPolicyError, origin, validate_target
+from app.agents.candidates import validate_candidates
+from app.browser.policy import TargetPolicyError, document_scope, origin, validate_target
 from app.core.config import settings
 from app.core.db import Session
 from app.core.models import Event, Job, PendingAction, utcnow
-from app.core.schemas.jobs import CreateJob
+from app.core.schemas.jobs import CreateJob, RerunJob
 
 
 def detail(session, job):
@@ -18,6 +21,8 @@ def detail(session, job):
     return {
         "id": job.id,
         "url": job.url,
+        "baseline_job_id": job.baseline_job_id,
+        "comparison_mapping": job.comparison_mapping,
         "mode": job.mode,
         "status": job.status,
         "progress": job.progress,
@@ -63,4 +68,76 @@ def get_job(job_id: str):
         job = session.get(Job, job_id)
         if not job:
             raise HTTPException(404, "Job not found")
+        return detail(session, job)
+
+
+async def rerun_job(baseline_id: str, request: RerunJob):
+    with Session() as session:
+        baseline = session.get(Job, baseline_id)
+        if not baseline:
+            raise HTTPException(404, "Baseline job not found")
+        if baseline.status != "completed" or not baseline.report:
+            raise HTTPException(409, "The baseline must have a completed report.")
+        report = baseline.report
+
+        def normalized(value):
+            parts = urlsplit(value)
+            return urlunsplit((parts.scheme, parts.netloc, parts.path or "/", parts.query, ""))
+
+        if (
+            normalized(report.get("site_url", "")) != normalized(baseline.url)
+            or not isinstance(report.get("inspected_pages"), list)
+            or not isinstance(report.get("confirmed"), list)
+            or len(report["inspected_pages"]) > 5
+        ):
+            raise HTTPException(409, "The baseline report has no valid saved scope.")
+        selected = report["inspected_pages"]
+        try:
+            if (
+                not selected
+                or len(set(selected)) != len(selected)
+                or any(
+                    not isinstance(u, str) or not document_scope(baseline.url, u) for u in selected
+                )
+            ):
+                raise ValueError("Invalid baseline page scope")
+            claims = report["confirmed"]
+            if any(
+                not isinstance(f, dict)
+                or not isinstance(f.get("id"), str)
+                or f.get("status") != "confirmed"
+                for f in claims
+            ):
+                raise ValueError("Invalid baseline claims")
+            validate_candidates(deepcopy(claims), selected)
+        except (ValueError, TypeError, KeyError):
+            raise HTTPException(409, "The baseline has invalid saved pages or claims.") from None
+        url, mapping = baseline.url, {}
+        if request.demo_corrected:
+            source = settings.demo_url.rstrip("/") + "/faulty/"
+            target = settings.demo_url.rstrip("/") + "/corrected/"
+            if url != source or any(not u.startswith(source) for u in report["inspected_pages"]):
+                raise HTTPException(422, "This mapping requires the exact controlled faulty demo.")
+            url, mapping = target, {source: target}
+        mode, inject = baseline.mode, baseline.inject_demo
+    try:
+        await validate_target(url, demo_origin=settings.demo_url)
+    except (TargetPolicyError, ValueError) as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if mode == "model" and not settings.model_enabled:
+        raise HTTPException(409, "Model mode needs a configured endpoint, model, and credential.")
+    job_id = str(uuid4())
+    with Session.begin() as session:
+        job = Job(
+            id=job_id,
+            url=url,
+            mode=mode,
+            inject_demo=inject,
+            baseline_job_id=baseline_id,
+            comparison_mapping=mapping,
+            deadline=utcnow() + timedelta(seconds=settings.job_deadline_seconds),
+        )
+        session.add(job)
+        session.flush()
+        session.add(PendingAction(id=f"{job_id}:scan", job_id=job_id))
         return detail(session, job)
