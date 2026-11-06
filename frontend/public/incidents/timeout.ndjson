@@ -1,0 +1,1 @@
+{"id":"unrelated-timeout","timestamp":"2026-11-05T10:01:00Z","service":"checkout","level":"error","message":"Upstream request timed out","error_code":"upstream_timeout","revision":"v2","request_id":"timeout-1"}

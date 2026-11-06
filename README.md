@@ -16,6 +16,8 @@ The local prototype includes the API, persistent worker, browser checks, control
 
 ## Customer flow
 
+The [local demo](http://127.0.0.1:3540/demo) guides the operator through both use cases. It uses real scripted jobs and local test data without a model key.
+
 1. Enter a website address.
 2. Watch the agents inspect the selected pages.
 3. Read confirmed problems with screenshots or reproduction steps.
@@ -29,6 +31,8 @@ Use **Check again and compare** on a completed report to create a linked check o
 Arsune does not repair the website. It does not submit forms, make purchases, log in, or modify customer code in this version. It reports what was checked and what could not be verified.
 
 For incident investigation, select **Incident investigation**, load the synthetic example or select the two source files, and submit the service and time window. The report links each finding to source records and separates supported explanations from missing evidence. Saved incident reports appear in the same recent-check list.
+
+The unrelated-timeout control tests that deployment timing alone does not support the migration explanation. **Download incident report** saves a portable HTML file with verified cited records and source hashes. Export limits and omissions are stated in the file.
 
 ## Design
 

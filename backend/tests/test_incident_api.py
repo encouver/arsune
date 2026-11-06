@@ -176,3 +176,146 @@ def test_reject_invalid_and_bounded_uploads(client, monkeypatch):
     monkeypatch.setattr(incidents, "MAX_REQUEST_BYTES", 100)
     assert client.post("/api/incidents", content=(b"x" * 101)).status_code == 413
     assert client.get(f"/api/incidents/{uuid4()}/evidence/events.ndjson?line=1").status_code == 404
+
+
+def test_download_incident_report_is_portable_and_escaped(client):
+    from html import escape
+
+    payload = bundle()
+    payload["description"] = "<img src=x onerror=alert(1)> Checkout failures"
+    job_id = client.post("/api/incidents", json=payload).json()["id"]
+    route = f"/api/incidents/{job_id}/report"
+    assert client.get(route).status_code == 409
+    scan.run(job_id)
+    response = client.get(route)
+    assert response.status_code == 200, response.text
+    assert response.headers["content-disposition"] == (
+        f'attachment; filename="arsune-incident-{job_id}.html"'
+    )
+    assert response.headers["content-type"].startswith("text/html")
+    assert "default-src 'none'" in response.headers["content-security-policy"]
+    assert "base-uri 'none'" in response.headers["content-security-policy"]
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["cache-control"] == "no-store"
+    html = response.text
+    assert "<script>" not in html and "<img " not in html
+    assert "&lt;script&gt;inert&lt;/script&gt;" in html
+    assert escape(payload["description"]) in html
+    assert escape(payload["events_text"].rstrip("\n")) in html
+    # Exact JSON record text retains the accepted internal deployment spacing.
+    deployment_text = payload["deployments_text"]
+    assert (
+        escape(deployment_text[deployment_text.index("{") : deployment_text.rindex("}") + 1])
+        in html
+    )
+    assert '"migration_status": "failed"'.replace('"', "&quot;") in html
+    for title in (
+        "Timeline",
+        "Observed facts",
+        "Supported explanations",
+        "Rejected explanations",
+        "Could not verify",
+        "Missing evidence",
+        "Next checks",
+        "Coverage and omissions",
+        "Mode: scripted",
+    ):
+        assert title in html
+    for key in ("events_text", "deployments_text"):
+        assert hashlib.sha256(payload[key].encode()).hexdigest() in html
+    assert 'href="#evidence-' in html
+    assert 'href="http' not in html and 'src="http' not in html
+    assert "No cause was reproduced" in html
+
+
+def test_report_guards_sources_and_saved_citations(client):
+    job_id = client.post("/api/incidents", json=bundle()).json()["id"]
+    scan.run(job_id)
+    route = f"/api/incidents/{job_id}/report"
+    assert client.get(f"/api/incidents/{uuid4()}/report").status_code == 404
+    with Session.begin() as session:
+        job = session.get(Job, job_id)
+        original = job.report
+        job.report = {
+            **original,
+            "timeline": [
+                {
+                    **original["timeline"][0],
+                    "evidence": {
+                        **original["timeline"][0]["evidence"],
+                        "record_id": "../../etc/passwd",
+                    },
+                }
+            ],
+        }
+    assert client.get(route).status_code == 409
+    with Session.begin() as session:
+        job = session.get(Job, job_id)
+        job.report = {**original, "coverage": {**original["coverage"], "source_hashes": {}}}
+    assert client.get(route).status_code == 409
+    with Session.begin() as session:
+        job = session.get(Job, job_id)
+        job.report = original
+        job.kind = "website"
+    assert client.get(route).status_code == 422
+    with Session.begin() as session:
+        session.get(Job, job_id).kind = "incident"
+        session.execute(
+            delete(IncidentSource).where(
+                IncidentSource.job_id == job_id,
+                IncidentSource.filename == "deployments.json",
+            )
+        )
+    response = client.get(route)
+    assert response.status_code == 409 and "unavailable" in response.text
+
+
+def test_report_rejects_tampered_source(client):
+    job_id = client.post("/api/incidents", json=bundle()).json()["id"]
+    scan.run(job_id)
+    with engine.begin() as connection:
+        connection.exec_driver_sql(
+            "ALTER TABLE incident_sources DISABLE TRIGGER immutable_incident_sources"
+        )
+        try:
+            connection.execute(
+                text("UPDATE incident_sources SET content = :value WHERE job_id = :id"),
+                {"value": "tampered", "id": job_id},
+            )
+        finally:
+            connection.exec_driver_sql(
+                "ALTER TABLE incident_sources ENABLE TRIGGER immutable_incident_sources"
+            )
+    response = client.get(f"/api/incidents/{job_id}/report")
+    assert response.status_code == 409 and "hash" in response.text
+
+
+def test_report_evidence_limits_and_known_bundle(client, monkeypatch):
+    from pathlib import Path
+
+    from app.v1.services import incident_report
+
+    fixture = Path(__file__).parent / "fixtures/incidents/known"
+    payload = json.loads((fixture / "request.json").read_text())
+    payload.update(
+        events_text=(fixture / "events.ndjson").read_text(),
+        deployments_text=(fixture / "deployments.json").read_text(),
+    )
+    job_id = client.post("/api/incidents", json=payload).json()["id"]
+    scan.run(job_id)
+    route = f"/api/incidents/{job_id}/report"
+    response = client.get(route)
+    assert response.status_code == 200, response.text
+    assert "failed migration" in response.text
+    assert "checkout_token" in response.text
+    assert "timeline omitted" in response.text
+    monkeypatch.setattr(incident_report, "MAX_RECORD_BYTES", 1)
+    limited = client.get(route)
+    assert limited.status_code == 200
+    assert "exact record omitted: export size limit" in limited.text
+    assert "<pre>{" not in limited.text.split("<h2>Exact cited source records</h2>")[1]
+    monkeypatch.setattr(incident_report, "MAX_RECORD_BYTES", 64_000)
+    monkeypatch.setattr(incident_report, "MAX_EVIDENCE_BYTES", 1)
+    assert "exact record omitted: export size limit" in client.get(route).text
+    monkeypatch.setattr(incident_report, "MAX_OUTPUT_BYTES", 1)
+    assert client.get(route).status_code == 409

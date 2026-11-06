@@ -5,8 +5,14 @@ from starlette.requests import ClientDisconnect
 
 from app.core.schemas.jobs import JobDetail
 from app.v1.services import incidents
+from app.v1.services.incident_report import render_incident_report
 
 router = APIRouter()
+
+
+@router.get("/incidents/{job_id}/report")
+def incident_report(job_id: str):
+    return render_incident_report(job_id)
 
 
 @router.post("/incidents", status_code=202, response_model=JobDetail)

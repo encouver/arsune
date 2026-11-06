@@ -869,6 +869,7 @@ export default function Home() {
             Website checks
           </a>
           <a href="/incidents">Incident investigation</a>
+          <a href="/demo">Local demo</a>
         </nav>
       </header>
       <main>
@@ -958,7 +959,7 @@ export default function Home() {
                 <span aria-hidden="true">↗</span>
               </button>
             </form>
-            <div className="demo-block">
+            <div className="demo-block" id="website-demo">
               <p>Try the controlled demo</p>
               <div className="demo-actions">
                 <button

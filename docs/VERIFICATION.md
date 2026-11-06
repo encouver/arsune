@@ -104,3 +104,13 @@ Six incident interface scenarios passed against the real API, worker, queue, and
 The final frontend production build and type check passed. A final browser check exercised the result-area navigation after both submission and reopening. UI capture: `/tmp/arsune-incident-report.png`. Migration tests cover upgrade/downgrade/upgrade and preservation of a website job from schema `0002`. The final backend container build and Ruff checks passed. No production log connection or paid model call was used.
 
 Backend verification covers 107 distinct tests. The full regression run passed its 105 collected tests in 454.72 seconds and emitted four dependency deprecation warnings. Two later tests, for original deployment timestamp evidence and preservation of a pre-incident website job, passed separately. Existing website engine, comparison, export, database, and migration checks remain included in this result.
+
+## Local demo and incident downloads
+
+The `/demo` page guides real scripted website scans, corrected-site comparison, known-incident investigation, and the unrelated-timeout control. Completed incident jobs can export a self-contained HTML report with checked source hashes and exact cited record text. The export preserves internal JSON spacing in deployment records, escapes source text, blocks external resources and scripts, and states evidence omissions.
+
+The backend passed 45 targeted tests covering the incident API and engine, website comparison API, and real Chromium price-card exports. New export checks cover exact source content, attachment and content-security headers, unknown and unfinished jobs, wrong job kinds, missing or altered sources, mismatched citations, and evidence and output limits. Ruff and whitespace checks passed.
+
+All 19 relevant browser cases passed across the main run and one corrected test rerun. The main run passed 18 cases. The remaining test needed a specific error selector and an expectation that preserved the original JSON quote escapes. Its final run passed, including an offline file check with no active source HTML or external requests. Tests include real faulty/corrected website jobs, known and unrelated incident inputs, scripted-mode checks, downloaded evidence, and the existing incident and history flows. The final production build and type check passed. The demo mobile view had no horizontal overflow. Review captures: `/tmp/arsune-demo-page.png`, `/tmp/arsune-demo-mobile.png`, and `/tmp/arsune-incident-download.png`.
+
+The live model configuration remains incomplete: no key, model name, or endpoint was configured at the start of this work. No live model call was made. This update does not complete live model verification.

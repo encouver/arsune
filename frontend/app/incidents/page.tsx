@@ -161,13 +161,22 @@ export default function Incidents() {
   const [pollError, setPollError] = useState("");
   const [busy, setBusy] = useState(false);
   const [retry, setRetry] = useState(0);
+  const [exampleKind, setExampleKind] = useState("");
+  const [downloadError, setDownloadError] = useState("");
+  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     if (job?.id) resultRef.current?.scrollIntoView({ block: "start" });
   }, [job?.id]);
 
   useEffect(() => {
-    setJobId(new URLSearchParams(window.location.search).get("job") || "");
+    const params = new URLSearchParams(window.location.search);
+    setJobId(params.get("job") || "");
+    if (
+      !params.has("job") &&
+      ["known", "control"].includes(params.get("example") || "")
+    )
+      void example(params.get("example") === "control" ? "control" : "known");
   }, []);
   useEffect(() => {
     if (!jobId) return;
@@ -203,6 +212,7 @@ export default function Incidents() {
     kind: "events" | "deployments",
   ) {
     if (!file) return;
+    setExampleKind("");
     if (kind === "events") {
       setEvents("");
       setEventsName(file.name);
@@ -234,12 +244,16 @@ export default function Incidents() {
     }
   }
 
-  async function example() {
+  async function example(kind: "known" | "control" = "known") {
     setBusy(true);
     setError("");
     try {
       const responses = await Promise.all([
-        fetch("/incidents/events.ndjson"),
+        fetch(
+          kind === "control"
+            ? "/incidents/timeout.ndjson"
+            : "/incidents/events.ndjson",
+        ),
         fetch("/incidents/deployments.json"),
       ]);
       if (responses.some((response) => !response.ok))
@@ -249,9 +263,18 @@ export default function Incidents() {
       );
       setEvents(eventText);
       setDeployments(deploymentText);
-      setEventsName("Synthetic events.ndjson");
+      setEventsName(
+        kind === "control"
+          ? "Synthetic timeout.ndjson"
+          : "Synthetic events.ndjson",
+      );
       setDeploymentsName("Synthetic deployments.json");
-      setDescription("Checkout requests fail after deployment v2.");
+      setDescription(
+        kind === "control"
+          ? "Checkout requests time out after deployment v2."
+          : "Checkout requests fail after deployment v2.",
+      );
+      setExampleKind(kind);
       setService("checkout");
       setStart("2026-11-05T09:55:00Z");
       setEnd("2026-11-05T10:15:00Z");
@@ -262,8 +285,39 @@ export default function Incidents() {
     }
   }
 
+  async function downloadReport() {
+    if (!job) return;
+    setDownloadError("");
+    setDownloading(true);
+    try {
+      const response = await fetch(
+        `/api/incidents/${encodeURIComponent(job.id)}/report`,
+        { cache: "no-store" },
+      );
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(
+          typeof body?.detail === "string"
+            ? body.detail
+            : "The report could not be downloaded. Try again.",
+        );
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `arsune-incident-${job.id}.html`;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (cause) {
+      setDownloadError((cause as Error).message);
+    } finally {
+      setDownloading(false);
+    }
+  }
+
   async function submit(event: FormEvent) {
     event.preventDefault();
+    setDownloadError("");
     setError("");
     try {
       if (!events.trim() || !deployments.trim())
@@ -320,6 +374,7 @@ export default function Incidents() {
         </a>
         <nav className="task-nav" aria-label="Tasks">
           <a href="/">Website checks</a>
+          <a href="/demo">Local demo</a>
           <a href="/incidents" aria-current="page">
             Incident investigation
           </a>
@@ -453,10 +508,26 @@ export default function Incidents() {
               >
                 Load synthetic example
               </button>
+              <button
+                type="button"
+                className="text-button"
+                disabled={busy}
+                onClick={() => void example("control")}
+              >
+                Load unrelated timeout control
+              </button>
               <p className="field-help">
                 Loads safe sample records and the time window. Then select
-                Investigate incident.
+                Investigate incident. This check uses scripted mode. No model
+                key is required.
               </p>
+              {exampleKind && (
+                <p className="notice">
+                  {exampleKind === "known"
+                    ? "Expected check: the missing column and failed migration support one possible deployment cause. Open the source records to check the evidence."
+                    : "Expected check: the timeout does not support a migration cause. Supported explanations must be empty, even though a deployment occurred."}
+                </p>
+              )}
             </div>
           </form>
         </section>
@@ -509,6 +580,25 @@ export default function Incidents() {
                 {job.report && (
                   <>
                     <h2>Incident report</h2>
+                    {job.status === "completed" && (
+                      <p>
+                        <button
+                          type="button"
+                          className="text-button"
+                          disabled={downloading}
+                          onClick={() => void downloadReport()}
+                        >
+                          {downloading
+                            ? "Downloading report…"
+                            : "Download incident report"}
+                        </button>
+                      </p>
+                    )}
+                    {downloadError && (
+                      <p role="alert" className="error">
+                        {downloadError}
+                      </p>
+                    )}
                     <p>{job.report.description}</p>
                     <p>
                       {job.report.service} · {job.report.start} to{" "}

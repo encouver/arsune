@@ -2,6 +2,10 @@
 
 The first build is a local operator tool. The interface is at http://127.0.0.1:3540 and the API documentation is at http://127.0.0.1:8540/api/docs. Model mode stays unavailable until its server settings are valid.
 
+The local demo starts at http://127.0.0.1:3540/demo. It links to real website and incident checks, using scripted mode and local examples. No model key is required.
+
+For the website demo, select **Site with faults**, read the confirmed findings and rejected false claim, then select **Compare with corrected demo**. For the incident demo, load the known incident and run the investigation, then repeat with the unrelated timeout control. The control must not support a failed-migration explanation from deployment timing alone. Each run creates a real job and saved report.
+
 ## Docker setup
 
 Use Docker with Compose. From the repository root:
@@ -82,6 +86,10 @@ The deployment file is a JSON array. Each record requires `id`, `timestamp`, `se
 Use the source buttons in the report to open original records. Event references use physical line numbers; deployment references use record IDs and array positions. The report states selected and excluded record counts and display limits. Recent history opens saved incident reports through `/incidents?job=<id>`.
 
 The API accepts `POST /api/incidents` with six text fields: `description`, `service`, `start`, `end`, `events_text`, and `deployments_text`. Job progress and reports use `GET /api/jobs/{id}`. Source evidence uses `GET /api/incidents/{id}/evidence/{filename}?record_id=<id>`. No source update route is provided.
+
+On a completed incident, **Download incident report** saves a self-contained HTML file. It includes the timeline, result groups, limits, missing evidence, suggested next checks, accepted file hashes, and cited source records. It can be opened offline. The export verifies the stored sources and citations before it returns the file. It does not include every log record or publish the report.
+
+The export endpoint is `GET /api/incidents/{id}/report`. Unknown jobs return 404, website jobs return 422, and unfinished jobs or invalid source evidence return 409. Source records above 64,000 bytes or beyond the 512,000-byte combined evidence limit are omitted with a notice. The saved report limit is 2,000,000 bytes and the final HTML limit is 4,000,000 bytes; an oversized report returns 409.
 
 This flow uses scripted checks only. No API key, production log connection, or paid model call is needed. The fixture bundles in `backend/tests/fixtures/incidents/` cover known, corrected, unrelated, incomplete, invalid, and instruction-like inputs.
 

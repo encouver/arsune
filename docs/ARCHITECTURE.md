@@ -128,6 +128,10 @@ The first causal rule checks missing-column errors against failed migration reco
 
 The interface at `/incidents` accepts files, shows progress, and opens source records. Saved incident links use `/incidents?job=<id>`. Website rerun, HTML repair export, and PNG routes do not apply to incident jobs. No browser request, model request, command execution, or URL fetch is permitted by log text.
 
+`GET /api/incidents/{job_id}/report` exports a completed incident as self-contained HTML. It verifies the accepted source hashes, report scope, and citation positions and timestamps. Cited event lines and deployment objects are embedded as escaped text with stable internal links. The document blocks scripts and external resources, including when opened offline. Bounded record and output sizes prevent unbounded exports; omitted record occurrences are stated explicitly.
+
+The `/demo` page links the controlled website flow and the known-incident and unrelated-timeout inputs. It reuses the existing job APIs and workers, so demo reports come from actual checks.
+
 ## Verification boundary
 
 The controlled website includes a broken link, mobile overflow, inconsistent facts with matched context, and a healthy page for rejecting a deliberate false claim. Provide a corrected variant and explicit expected outcomes.
