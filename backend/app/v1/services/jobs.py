@@ -1,3 +1,4 @@
+import re
 from base64 import urlsafe_b64decode, urlsafe_b64encode
 from binascii import Error as Base64Error
 from copy import deepcopy
@@ -14,6 +15,16 @@ from app.core.config import settings
 from app.core.db import Session
 from app.core.models import Event, Job, PendingAction, utcnow
 from app.core.schemas.jobs import CreateJob, RerunJob
+
+# Jobs are created with str(uuid4()); other text cannot name a job and may not reach the database.
+JOB_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def find_job(session, job_id):
+    job = session.get(Job, job_id) if JOB_ID.fullmatch(job_id) else None
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return job
 
 
 def detail(session, job):
@@ -102,17 +113,12 @@ def list_jobs(limit: int = 10, cursor: str | None = None):
 
 def get_job(job_id: str):
     with Session() as session:
-        job = session.get(Job, job_id)
-        if not job:
-            raise HTTPException(404, "Job not found")
-        return detail(session, job)
+        return detail(session, find_job(session, job_id))
 
 
 async def rerun_job(baseline_id: str, request: RerunJob):
     with Session() as session:
-        baseline = session.get(Job, baseline_id)
-        if not baseline:
-            raise HTTPException(404, "Baseline job not found")
+        baseline = find_job(session, baseline_id)
         if baseline.kind != "website":
             raise HTTPException(422, "Incident checks do not support website reruns.")
         if baseline.status != "completed" or not baseline.report:

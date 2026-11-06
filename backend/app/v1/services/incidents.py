@@ -1,6 +1,5 @@
 """Accept bounded local incident files and serve verified source records."""
 
-import hashlib
 import json
 from datetime import timedelta
 from html import escape
@@ -11,7 +10,8 @@ from fastapi import HTTPException
 from app.core.config import settings
 from app.core.db import Session
 from app.core.models import IncidentSource, Job, PendingAction, utcnow
-from app.v1.services.jobs import detail
+from app.incidents.parser import deployment_texts, digest
+from app.v1.services.jobs import detail, find_job
 
 FILENAMES = {"events.ndjson", "deployments.json"}
 MAX_SOURCE_BYTES = 10 * 1024 * 1024
@@ -71,7 +71,7 @@ def create_incident(payload):
                 IncidentSource(
                     job_id=job_id,
                     filename=filename,
-                    sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    sha256=digest(text),
                     content=text,
                 )
             )
@@ -86,7 +86,7 @@ def load_sources(job_id):
             raise ValueError("Incident source files are unavailable.")
         result = {}
         for source in sources:
-            if hashlib.sha256(source.content.encode("utf-8")).hexdigest() != source.sha256:
+            if digest(source.content) != source.sha256:
                 raise ValueError("Incident source hash does not match.")
             result[source.filename] = source.content
         return result
@@ -98,10 +98,7 @@ def source_evidence(job_id, filename, record_id=None, line=None):
     if (record_id is None) == (line is None):
         raise HTTPException(422, "Supply one record_id or line selector.")
     with Session() as session:
-        job = session.get(Job, job_id)
-        if not job:
-            raise HTTPException(404, "Job not found.")
-        if job.kind != "incident":
+        if find_job(session, job_id).kind != "incident":
             raise HTTPException(422, "This job has no incident sources.")
     try:
         sources = load_sources(job_id)
@@ -109,25 +106,19 @@ def source_evidence(job_id, filename, record_id=None, line=None):
         raise HTTPException(409, str(exc)) from exc
     text = sources[filename]
     if filename == "events.ndjson":
-        rows = [
-            (index, raw, json.loads(raw))
-            for index, raw in enumerate(text.splitlines(), 1)
-            if raw.strip()
-        ]
+        texts = text.splitlines()
     else:
         if line is not None:
             raise HTTPException(422, "Select deployments by record_id.")
-        rows = [
-            (index, json.dumps(record, ensure_ascii=False), record)
-            for index, record in enumerate(json.loads(text), 1)
-        ]
-    for index, raw, record in rows:
+        texts = deployment_texts(text)
+    for index, raw in enumerate(texts, 1):
+        record = json.loads(raw)
         if (record_id is not None and record.get("id") == record_id) or (
             line is not None and index == line
         ):
             return {
                 "filename": filename,
-                "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                "sha256": digest(text),
                 "record_id": record["id"],
                 "line": index if filename == "events.ndjson" else None,
                 "record_index": index,

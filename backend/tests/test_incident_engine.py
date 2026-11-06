@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from app.incidents import check_candidate, run_incident, validate_bundle
+from app.incidents import check_candidate, recompute, run_incident, validate_bundle
 from app.incidents.engine import propose
 
 FIXTURES = Path(__file__).parent / "fixtures" / "incidents"
@@ -236,3 +236,10 @@ async def test_deployment_excerpt_keeps_original_offset_and_fields():
     assert ref["timestamp"] == "2026-11-05T10:00:00.000000+00:00"
     assert ref["sha256"] == accepted["sources"]["deployments.json"]["sha256"]
     assert ref["record"] == 1
+
+
+@pytest.mark.parametrize("name", ["known", "corrected", "unrelated", "missing_deployment"])
+async def test_recompute_matches_the_worker_report(name):
+    # The incident export relies on this: a saved worker report must match a fresh recompute.
+    original = bundle(name)
+    assert recompute(original) == await run_incident(original) | {"activity": []}

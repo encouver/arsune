@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useRef, useState } from "react";
 import RecentChecks from "./recent-checks";
+import SiteHeader from "./site-header";
 
 type Mode = "scripted" | "model";
 type FindingState = "confirmed" | "rejected" | "unverified";
@@ -857,21 +858,7 @@ export default function Home() {
 
   return (
     <>
-      <header className="site-header">
-        <a href="/" className="brand" aria-label="Arsune home">
-          <span className="brand-mark" aria-hidden="true">
-            a
-          </span>
-          arsune<span className="brand-dot">.</span>
-        </a>
-        <nav className="task-nav" aria-label="Tasks">
-          <a href="/" aria-current="page">
-            Website checks
-          </a>
-          <a href="/incidents">Incident investigation</a>
-          <a href="/demo">Local demo</a>
-        </nav>
-      </header>
+      <SiteHeader current="/" />
       <main>
         <section className="intro">
           <div className="intro-copy">

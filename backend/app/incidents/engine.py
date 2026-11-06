@@ -9,6 +9,8 @@ from datetime import datetime
 
 from .parser import digest, validate_bundle
 
+ROLES = ("timeline", "error", "change")
+
 
 def stable_id(kind, context):
     return (
@@ -61,14 +63,6 @@ def selected(bundle, name):
 
 
 def reference(bundle, record, filename):
-    if filename == "events.ndjson":
-        excerpt = bundle["sources"][filename]["text"].splitlines()[record["_line"] - 1]
-    else:
-        excerpt = json.dumps(
-            json.loads(bundle["sources"][filename]["text"])[record["_record"] - 1],
-            ensure_ascii=False,
-            sort_keys=True,
-        )
     return {
         "filename": filename,
         "sha256": bundle["sources"][filename]["sha256"],
@@ -76,7 +70,7 @@ def reference(bundle, record, filename):
         "record": record.get("_record"),
         "record_id": record["id"],
         "timestamp": record["timestamp"],
-        "excerpt": html.escape(excerpt[:400], quote=True),
+        "excerpt": html.escape(record["_text"][:400], quote=True),
     }
 
 
@@ -122,13 +116,24 @@ def propose(bundle, role):
     return result
 
 
+def proposals(bundle, role):
+    candidates = propose(bundle, role)
+    for candidate in candidates:
+        candidate["id"] = stable_id("claim", candidate)
+    return candidates
+
+
 def _refs(bundle, records, filename):
     return [reference(bundle, record, filename) for record in records[:10]]
 
 
 async def check_candidate(candidate, bundle, source_loader=None):
     """Never use specialist counts, statements, or saved checks as source evidence."""
-    fresh = await read_sources(bundle, source_loader)
+    return check(candidate, await read_sources(bundle, source_loader))
+
+
+def check(candidate, fresh):
+    """Check one candidate against freshly read and validated source records."""
     events, deployments = selected(fresh, "events"), selected(fresh, "deployments")
     failures = [r for r in events if r["level"] in {"error", "critical"}]
     kind = candidate.get("claim_type")
@@ -257,17 +262,14 @@ async def run_incident(
     )
     if state.get("source_identity") != source_identity:
         raise ValueError("Checkpoint does not match the accepted source hashes and incident scope.")
-    for role in ("timeline", "error", "change"):
+    for role in ROLES:
         if role not in state["stages"]:
-            candidates = propose(fresh, role)
-            for candidate in candidates:
-                candidate["id"] = stable_id("claim", candidate)
-            state["stages"][role] = candidates
+            state["stages"][role] = proposals(fresh, role)
             message = f"The {role} specialist read the selected source records."
             state["activity"].append({"role": role, "message": message})
             await _call(emit_event, role, message)
             await _call(save_checkpoint, copy.deepcopy(state))
-    candidates = [c for role in ("timeline", "error", "change") for c in state["stages"][role]]
+    candidates = [c for role in ROLES for c in state["stages"][role]]
     if len(candidates) > 43:
         raise ValueError("Checkpoint exceeds the candidate limit.")
     findings = [await check_candidate(candidate, bundle, source_loader) for candidate in candidates]
@@ -277,7 +279,24 @@ async def run_incident(
         state["checker_completed"] = True
         await _call(emit_event, "checker", message)
         await _call(save_checkpoint, copy.deepcopy(state))
+    return summarize(fresh, findings, state["activity"])
+
+
+def recompute(bundle):
+    """Recompute the report from one validated bundle; only the worker records activity."""
+    findings = [check(c, bundle) for role in ROLES for c in proposals(bundle, role)]
+    return summarize(bundle, findings, [])
+
+
+def summarize(fresh, findings, activity):
     events, deployments = selected(fresh, "events"), selected(fresh, "deployments")
+    groups = len(
+        {
+            json.dumps(signature(r), sort_keys=True)
+            for r in events
+            if r["level"] in {"error", "critical"}
+        }
+    )
     timeline = [
         {
             "id": r["id"],
@@ -317,26 +336,10 @@ async def run_incident(
             "timeline_limit": 100,
             "error_group_limit": 20,
             "timeline_omitted": max(0, len(timeline) - 100),
-            "error_groups_total": len(
-                {
-                    json.dumps(signature(r), sort_keys=True)
-                    for r in events
-                    if r["level"] in {"error", "critical"}
-                }
-            ),
-            "error_groups_omitted": max(
-                0,
-                len(
-                    {
-                        json.dumps(signature(r), sort_keys=True)
-                        for r in events
-                        if r["level"] in {"error", "critical"}
-                    }
-                )
-                - 20,
-            ),
+            "error_groups_total": groups,
+            "error_groups_omitted": max(0, groups - 20),
             "source_hashes": {name: value["sha256"] for name, value in fresh["sources"].items()},
         },
-        "activity": state["activity"],
+        "activity": activity,
         "reproduced_cause": False,
     }

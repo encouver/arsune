@@ -20,8 +20,24 @@ EVENT_FIELDS = {
 DEPLOY_FIELDS = {"id", "timestamp", "service", "revision", "migration_status", "migration_column"}
 
 
+_SEPARATORS = re.compile(r"[ \t\r\n,]*")
+
+
 def digest(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def deployment_texts(text):
+    """Return the exact source text of each record in a valid deployments array."""
+    # Slices keep each record's spacing, field order and escapes; re-serializing would not.
+    decoder = json.JSONDecoder()
+    texts = []
+    position = _SEPARATORS.match(text, text.index("[") + 1).end()
+    while text[position] != "]":
+        end = decoder.raw_decode(text, position)[1]
+        texts.append(text[position:end])
+        position = _SEPARATORS.match(text, end).end()
+    return texts
 
 
 def timestamp(value, location):
@@ -121,14 +137,15 @@ def validate_bundle(description, service, start, end, events_text, deployments_t
         if item["id"] in ids:
             raise ValueError(f"{location}: duplicate event id {item['id']}.")
         ids.add(item["id"])
-        events.append({**item, "_line": line})
+        events.append({**item, "_line": line, "_text": raw})
         if len(events) > 5000:
             raise ValueError(f"{location}: more than 5000 events.")
     deployments = _json(deployments_text, "deployments.json line 1")
     if not isinstance(deployments, list) or len(deployments) > 20:
         raise ValueError("deployments.json line 1: expected an array of at most 20 records.")
     normalized, ids = [], set()
-    for index, raw in enumerate(deployments, 1):
+    texts = deployment_texts(deployments_text)
+    for index, (raw, text) in enumerate(zip(deployments, texts, strict=True), 1):
         location = f"deployments.json record {index}"
         item = _record(
             raw,
@@ -141,7 +158,7 @@ def validate_bundle(description, service, start, end, events_text, deployments_t
         if item["id"] in ids:
             raise ValueError(f"{location}: duplicate deployment id {item['id']}.")
         ids.add(item["id"])
-        normalized.append({**item, "_record": index})
+        normalized.append({**item, "_record": index, "_text": text})
     sources = {
         name: {"text": text, "sha256": digest(text)}
         for name, text in [("events.ndjson", events_text), ("deployments.json", deployments_text)]

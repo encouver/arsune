@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import { pathToFileURL } from "node:url";
 
 const reportHeading = { name: "Incident report", exact: true };
 
@@ -99,7 +100,7 @@ test("local demo uses real website and incident checks with a timeout control", 
 test("download keeps unsafe source text inert offline and shows server errors", async ({
   page,
   context,
-}) => {
+}, testInfo) => {
   const marker =
     '<img src="https://invalid.example/source" onerror="window.incidentExecuted=true">';
   const response = await page.request.post("/api/incidents", {
@@ -146,7 +147,7 @@ test("download keeps unsafe source text inert offline and shows server errors", 
   const html = await readFile((await download.path())!, "utf8");
   expect(html).toContain("&lt;img");
   expect(html).not.toContain('<img src="https://invalid.example/source"');
-  const offlinePath = `/tmp/arsune-incident-offline-${id}.html`;
+  const offlinePath = testInfo.outputPath("offline-incident-report.html");
   await download.saveAs(offlinePath);
   const offline = await context.newPage();
   const external: string[] = [];
@@ -155,7 +156,7 @@ test("download keeps unsafe source text inert offline and shows server errors", 
   });
   await context.setOffline(true);
   try {
-    await offline.goto(`file://${offlinePath}`);
+    await offline.goto(pathToFileURL(offlinePath).href);
     await expect(offline.locator("#evidence-1 pre")).toContainText(
       JSON.stringify({
         id: "unsafe-text",
@@ -179,4 +180,82 @@ test("download keeps unsafe source text inert offline and shows server errors", 
     await context.setOffline(false);
     await offline.close();
   }
+});
+
+test("every page shows the same brand and task links", async ({ page }) => {
+  const tasks = [
+    ["/", "Website checks"],
+    ["/incidents", "Incident investigation"],
+    ["/demo", "Local demo"],
+  ];
+  for (const [path, current] of tasks) {
+    await page.goto(path);
+    await expect(
+      page.getByRole("banner").getByRole("link", { name: "Arsune home" }),
+    ).toBeVisible();
+    await expect(page.getByRole("banner").locator(".brand-mark")).toBeVisible();
+    const nav = page.getByRole("navigation", { name: "Tasks" });
+    await expect(nav.getByRole("link")).toHaveText(
+      tasks.map(([, label]) => label),
+    );
+    for (const [href, label] of tasks)
+      await expect(
+        nav.getByRole("link", { name: label, exact: true }),
+      ).toHaveAttribute("href", href);
+    await expect(nav.locator("[aria-current='page']")).toHaveText(current);
+  }
+});
+
+test("a late download response for an earlier job does not reach the next job", async ({
+  page,
+}) => {
+  const investigate = page.getByRole("button", {
+    name: "Investigate incident",
+    exact: true,
+  });
+  const download = page.getByRole("button", {
+    name: "Download incident report",
+    exact: true,
+  });
+  await page.goto("/incidents?example=known");
+  await expect(page.getByLabel("Service", { exact: true })).toHaveValue(
+    "checkout",
+  );
+  await investigate.click();
+  await expect(download).toBeVisible();
+  const firstId = new URL(page.url()).searchParams.get("job")!;
+  const firstReport = `**/api/incidents/${firstId}/report`;
+  let release = () => {};
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(firstReport, async (route) => {
+    await held;
+    await route
+      .fulfill({ status: 409, json: { detail: "Late failure for job A." } })
+      .catch(() => undefined);
+  });
+  const aborted = page.waitForEvent("requestfailed", (request) =>
+    request.url().endsWith(`/api/incidents/${firstId}/report`),
+  );
+  await download.click();
+  await expect(
+    page.getByRole("button", { name: "Downloading report…" }),
+  ).toBeDisabled();
+
+  await investigate.click();
+  await page.waitForURL((url) => url.searchParams.get("job") !== firstId);
+  const secondId = new URL(page.url()).searchParams.get("job")!;
+  await expect(page.getByText(`Job ${secondId}`)).toBeVisible();
+  await expect(download).toBeEnabled();
+  await aborted;
+  release();
+  await page.unrouteAll({ behavior: "wait" });
+  await expect(page.locator(".incident-report").getByRole("alert")).toHaveCount(
+    0,
+  );
+
+  const downloadEvent = page.waitForEvent("download");
+  await download.click();
+  expect((await downloadEvent).suggestedFilename()).toBe(
+    `arsune-incident-${secondId}.html`,
+  );
 });

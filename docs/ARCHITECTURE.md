@@ -84,7 +84,7 @@ Use bounded leases and attempt generations. Expired workers cannot overwrite new
 
 Validate HTTP and HTTPS targets under a configured policy. Reject embedded credentials and disallowed destinations, including redirects to internal services. The controlled demo origin is an explicit local exception, not general permission to inspect private networks. Apply the policy to browser and checker requests.
 
-The first deployment is a local operator tool, not a public scanning service. Keep model credentials on the server. Evidence routes must not expose arbitrary files. Isolate project containers and volumes from other local projects.
+The first deployment is a local operator tool, not a public scanning service. Keep model credentials on the server. Evidence routes must not expose arbitrary files. Every route that looks up a job ID uses one shared lookup. It accepts only the lowercase UUID form that job creation produces, so other IDs return 404 before a database query. Isolate project containers and volumes from other local projects.
 
 Chromium request interception checks each redirect and resource before a connection to a validated numeric address. The browser retains the final URL, so relative links and resources use the correct base address. Document redirect chains permit the same hostname, its `www` counterpart, and HTTPS upgrades. Each chain has at most three redirects; every new document URL counts toward the five-URL limit.
 
@@ -128,7 +128,7 @@ The first causal rule checks missing-column errors against failed migration reco
 
 The interface at `/incidents` accepts files, shows progress, and opens source records. Saved incident links use `/incidents?job=<id>`. Website rerun, HTML repair export, and PNG routes do not apply to incident jobs. No browser request, model request, command execution, or URL fetch is permitted by log text.
 
-`GET /api/incidents/{job_id}/report` exports a completed incident as self-contained HTML. It verifies the accepted source hashes, report scope, and citation positions and timestamps. Cited event lines and deployment objects are embedded as escaped text with stable internal links. The document blocks scripts and external resources, including when opened offline. Bounded record and output sizes prevent unbounded exports; omitted record occurrences are stated explicitly.
+`GET /api/incidents/{job_id}/report` exports a completed incident as self-contained HTML. It verifies the accepted source hashes, then recomputes the findings and timeline from the accepted records with the scripted engine (`recompute` uses the same proposal, checker, and summary functions as the worker). The file renders only the recomputed values, and the export returns 409 if the saved report differs in any of them. Cited event lines and deployment objects are embedded as exact escaped text with stable internal links; the parser's `deployment_texts` provides the same exact deployment text to the export, the source viewer, and the engine excerpts. The document blocks scripts and external resources, including when opened offline. Record limits count escaped bytes, finding evidence is budgeted before timeline records, and engine limits bound the other parts. Omitted record occurrences are stated explicitly.
 
 The `/demo` page links the controlled website flow and the known-incident and unrelated-timeout inputs. It reuses the existing job APIs and workers, so demo reports come from actual checks.
 

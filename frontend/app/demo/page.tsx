@@ -1,18 +1,9 @@
+import SiteHeader from "../site-header";
+
 export default function Demo() {
   return (
     <>
-      <header className="site-header">
-        <a href="/" className="brand">
-          arsune<span className="brand-dot">.</span>
-        </a>
-        <nav className="task-nav" aria-label="Tasks">
-          <a href="/">Website checks</a>
-          <a href="/incidents">Incident investigation</a>
-          <a href="/demo" aria-current="page">
-            Local demo
-          </a>
-        </nav>
-      </header>
+      <SiteHeader current="/demo" />
       <main>
         <section className="intro">
           <div>

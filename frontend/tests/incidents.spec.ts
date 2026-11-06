@@ -120,6 +120,25 @@ test("an unrelated timeout does not become a supported deployment cause", async 
   await expect(supported).toContainText("No records in this group.");
 });
 
+test("editing an example input removes its expected-check notice", async ({
+  page,
+}) => {
+  const edits = [
+    ["Incident description", "Checkout requests fail for one customer."],
+    ["Service", "payments"],
+    ["Start time with timezone", "2026-11-05T09:56:00Z"],
+    ["End time with timezone", "2026-11-05T10:00:30Z"],
+  ];
+  const notice = page.getByText(/Expected check: the missing column/);
+  await page.goto("/incidents");
+  for (const [label, value] of edits) {
+    await page.getByRole("button", { name: "Load synthetic example" }).click();
+    await expect(notice).toBeVisible();
+    await page.getByLabel(label, { exact: true }).fill(value);
+    await expect(notice).toHaveCount(0);
+  }
+});
+
 test("malformed file shows a server error with its source line", async ({
   page,
 }) => {

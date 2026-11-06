@@ -1,7 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useRef, useState } from "react";
 import RecentChecks from "../recent-checks";
+import SiteHeader from "../site-header";
 
 type Ref = {
   filename: string;
@@ -77,18 +78,82 @@ const groups = [
   ["could_not_verify", "Could not verify"],
 ];
 
+// Safari can hold a download behind its "Allow downloads" prompt for a long
+// time. FileSaver.js keeps the blob URL for 40 s for the same reason.
+const blobUrlLifetime = 40_000;
+
+async function responseError(response: Response) {
+  const body = await response.json().catch(() => null);
+  return new Error(
+    typeof body?.detail === "string"
+      ? body.detail
+      : "The service could not complete this request. Try again.",
+  );
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, { ...init, cache: "no-store" });
-  const body = await response.json().catch(() => {
+  if (!response.ok) throw await responseError(response);
+  return response.json().catch(() => {
     throw new Error("The service returned an unreadable response. Try again.");
   });
-  if (!response.ok)
-    throw new Error(
-      typeof body.detail === "string"
-        ? body.detail
-        : "The service could not accept this request.",
-    );
-  return body as T;
+}
+
+function saveFile(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), blobUrlLifetime);
+}
+
+function DownloadReport({ jobId }: { jobId: string }) {
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const controller = useRef<AbortController | null>(null);
+
+  // A late response for a job the operator has left must not download a file
+  // or show an error under the next job.
+  useEffect(() => () => controller.current?.abort(), []);
+
+  async function download() {
+    controller.current = new AbortController();
+    setError("");
+    setBusy(true);
+    try {
+      const response = await fetch(
+        `/api/incidents/${encodeURIComponent(jobId)}/report`,
+        { cache: "no-store", signal: controller.current.signal },
+      );
+      if (!response.ok) throw await responseError(response);
+      saveFile(await response.blob(), `arsune-incident-${jobId}.html`);
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <p>
+        <button
+          type="button"
+          className="text-button"
+          disabled={busy}
+          onClick={() => void download()}
+        >
+          {busy ? "Downloading report…" : "Download incident report"}
+        </button>
+      </p>
+      {error && (
+        <p role="alert" className="error">
+          {error}
+        </p>
+      )}
+    </>
+  );
 }
 
 function Evidence({ jobId, source }: { jobId: string; source: Ref }) {
@@ -162,8 +227,6 @@ export default function Incidents() {
   const [busy, setBusy] = useState(false);
   const [retry, setRetry] = useState(0);
   const [exampleKind, setExampleKind] = useState("");
-  const [downloadError, setDownloadError] = useState("");
-  const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     if (job?.id) resultRef.current?.scrollIntoView({ block: "start" });
@@ -285,39 +348,16 @@ export default function Incidents() {
     }
   }
 
-  async function downloadReport() {
-    if (!job) return;
-    setDownloadError("");
-    setDownloading(true);
-    try {
-      const response = await fetch(
-        `/api/incidents/${encodeURIComponent(job.id)}/report`,
-        { cache: "no-store" },
-      );
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        throw new Error(
-          typeof body?.detail === "string"
-            ? body.detail
-            : "The report could not be downloaded. Try again.",
-        );
-      }
-      const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `arsune-incident-${job.id}.html`;
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (cause) {
-      setDownloadError((cause as Error).message);
-    } finally {
-      setDownloading(false);
-    }
+  function edit(set: (value: string) => void) {
+    return (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+      // The expected-check notice describes the example inputs only.
+      setExampleKind("");
+      set(event.currentTarget.value);
+    };
   }
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    setDownloadError("");
     setError("");
     try {
       if (!events.trim() || !deployments.trim())
@@ -368,18 +408,7 @@ export default function Incidents() {
 
   return (
     <>
-      <header className="site-header">
-        <a href="/" className="brand">
-          arsune<span className="brand-dot">.</span>
-        </a>
-        <nav className="task-nav" aria-label="Tasks">
-          <a href="/">Website checks</a>
-          <a href="/demo">Local demo</a>
-          <a href="/incidents" aria-current="page">
-            Incident investigation
-          </a>
-        </nav>
-      </header>
+      <SiteHeader current="/incidents" />
       <main>
         <section className="intro incident-intro">
           <div>
@@ -439,7 +468,7 @@ export default function Incidents() {
               required
               maxLength={2000}
               value={description}
-              onChange={(event) => setDescription(event.target.value)}
+              onChange={edit(setDescription)}
             />
             <label htmlFor="service">Service</label>
             <input
@@ -447,7 +476,7 @@ export default function Incidents() {
               required
               maxLength={200}
               value={service}
-              onChange={(event) => setService(event.target.value)}
+              onChange={edit(setService)}
             />
             <label htmlFor="start">Start time with timezone</label>
             <input
@@ -455,7 +484,7 @@ export default function Incidents() {
               required
               placeholder="2026-11-05T09:55:00Z"
               value={start}
-              onChange={(event) => setStart(event.target.value)}
+              onChange={edit(setStart)}
             />
             <label htmlFor="end">End time with timezone</label>
             <input
@@ -463,7 +492,7 @@ export default function Incidents() {
               required
               placeholder="2026-11-05T10:15:00+00:00"
               value={end}
-              onChange={(event) => setEnd(event.target.value)}
+              onChange={edit(setEnd)}
             />
             <p className="field-help">
               Use ISO 8601 with Z for UTC, or an offset such as -06:00.
@@ -581,23 +610,7 @@ export default function Incidents() {
                   <>
                     <h2>Incident report</h2>
                     {job.status === "completed" && (
-                      <p>
-                        <button
-                          type="button"
-                          className="text-button"
-                          disabled={downloading}
-                          onClick={() => void downloadReport()}
-                        >
-                          {downloading
-                            ? "Downloading report…"
-                            : "Download incident report"}
-                        </button>
-                      </p>
-                    )}
-                    {downloadError && (
-                      <p role="alert" className="error">
-                        {downloadError}
-                      </p>
+                      <DownloadReport key={job.id} jobId={job.id} />
                     )}
                     <p>{job.report.description}</p>
                     <p>
