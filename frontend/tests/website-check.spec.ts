@@ -66,7 +66,7 @@ test("a real job shows checked faults, rejected demo claim, evidence, and correc
   );
   await expect(page.getByRole("tabpanel")).not.toContainText("data-fact-key");
   await page.screenshot({
-    path: "/tmp/arsune-desktop-report.png",
+    path: test.info().outputPath("arsune-desktop-report.png"),
     fullPage: true,
   });
   await page.getByRole("button", { name: "Corrected site" }).click();
@@ -204,7 +204,7 @@ test("invalid target shows service error and mobile layout fits", async ({
     ),
   ).toBe(true);
   await page.screenshot({
-    path: "/tmp/arsune-mobile-error.png",
+    path: test.info().outputPath("arsune-mobile-error.png"),
     fullPage: true,
   });
 });

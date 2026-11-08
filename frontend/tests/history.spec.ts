@@ -78,7 +78,7 @@ test("a visible price report opens from saved history with readable evidence", a
   ).toBeVisible();
   expect(new URL(page.url()).searchParams.get("job")).toBe(id);
   await page.screenshot({
-    path: "/tmp/arsune-price-history.png",
+    path: test.info().outputPath("arsune-price-history.png"),
     fullPage: true,
   });
 });

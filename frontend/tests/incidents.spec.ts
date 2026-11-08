@@ -74,7 +74,7 @@ test("synthetic incident has checked evidence and opens from saved history", asy
     page.getByRole("heading", { name: "Incident investigation", exact: true }),
   ).toBeInViewport();
   await page.screenshot({
-    path: "/tmp/arsune-incident-report.png",
+    path: test.info().outputPath("arsune-incident-report.png"),
     fullPage: true,
   });
   expect(failures).toEqual([]);

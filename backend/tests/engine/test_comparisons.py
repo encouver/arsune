@@ -62,10 +62,14 @@ async def test_comparison_uses_fresh_evidence_and_preserves_baseline(comparison_
     baseline = await run_scan(url, tmp_path / "before", inject_demo_false_positive=True)
     preserved = copy.deepcopy(baseline)
     confirmed_ids = {finding["id"] for finding in baseline["confirmed"]}
-    rejected_ids = {finding["id"] for finding in baseline["findings"] if finding["status"] == "rejected"}
+    rejected_ids = {
+        finding["id"] for finding in baseline["findings"] if finding["status"] == "rejected"
+    }
     assert rejected_ids
     assert {finding["claim_type"] for finding in baseline["confirmed"]} == {
-        "broken_link", "horizontal_overflow", "price_mismatch"
+        "broken_link",
+        "horizontal_overflow",
+        "price_mismatch",
     }
     assert len(baseline["inspected_pages"]) == 5
 
@@ -98,7 +102,11 @@ async def test_comparison_uses_fresh_evidence_and_preserves_baseline(comparison_
     assert same["resolved"] == same["new"] == same["could_not_recheck"] == []
     assert_fresh_evidence(same["remaining"], path)
     resumed = await run_scan(
-        url, path, baseline_report=baseline, baseline_job_id="baseline-test", checkpoint=snapshots[-1]
+        url,
+        path,
+        baseline_report=baseline,
+        baseline_job_id="baseline-test",
+        checkpoint=snapshots[-1],
     )
     assert resumed["comparison"] == same
     assert [f["id"] for f in resumed["findings"]] == [f["id"] for f in unchanged["findings"]]
@@ -118,14 +126,18 @@ async def test_comparison_uses_fresh_evidence_and_preserves_baseline(comparison_
     assert changed["new"][0]["finding"]["urls"] == [url + "healthy"]
     assert changed["remaining"] == changed["could_not_recheck"] == []
 
-    overflow_id = next(f["id"] for f in baseline["confirmed"] if f["claim_type"] == "horizontal_overflow")
+    overflow_id = next(
+        f["id"] for f in baseline["confirmed"] if f["claim_type"] == "horizontal_overflow"
+    )
     for name in ("failed_page", "blocked_css"):
         _, unavailable, _ = await compare(name, name)
         assert overflow_id in {e["baseline_finding_id"] for e in unavailable["could_not_recheck"]}
         assert overflow_id not in {e["baseline_finding_id"] for e in unavailable["resolved"]}
 
     outside = copy.deepcopy(baseline)
-    outside_finding = copy.deepcopy(next(f for f in baseline["confirmed"] if f["id"] == overflow_id))
+    outside_finding = copy.deepcopy(
+        next(f for f in baseline["confirmed"] if f["id"] == overflow_id)
+    )
     outside_finding.update(id="outside-baseline", urls=["https://unrelated.example/not-selected"])
     outside_finding["details"] = {"url": outside_finding["urls"][0]}
     outside["confirmed"].append(outside_finding)

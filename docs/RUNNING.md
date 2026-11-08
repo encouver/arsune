@@ -124,6 +124,8 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
+Playwright test screenshots are saved under `frontend/test-results/`, in a per-test output folder.
+
 For worker recovery, first stop the normal Arsune worker. Keep the API, demo, coordinator, PostgreSQL, and Redis running. From the repository root:
 
 ```sh

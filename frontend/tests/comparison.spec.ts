@@ -185,7 +185,7 @@ test("real repeat keeps faults and marks an incomplete repeat as unknown", async
       new RegExp(`/api/jobs/${changed.id}/evidence/`),
     );
     await page.screenshot({
-      path: "/tmp/arsune-comparison-mobile.png",
+      path: test.info().outputPath("arsune-comparison-mobile.png"),
       fullPage: true,
     });
   } finally {

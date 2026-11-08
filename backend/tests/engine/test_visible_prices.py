@@ -76,7 +76,9 @@ async def read_pair(site, case, directory):
 async def test_visible_price_conflict_is_confirmed_and_repair_resolves(price_site, tmp_path):
     site = price_site
     async with httpx.AsyncClient() as client:
-        (await client.post(site + "/comparison-control", json={"state": "faulty"})).raise_for_status()
+        (
+            await client.post(site + "/comparison-control", json={"state": "faulty"})
+        ).raise_for_status()
     url = site + "/prices/different/first"
     async with httpx.AsyncClient() as client:
         assert "data-fact" not in (await client.get(url)).text
@@ -98,7 +100,9 @@ async def test_visible_price_conflict_is_confirmed_and_repair_resolves(price_sit
         assert initial["captured_at"] != evidence["captured_at"]
         assert initial["screenshot"] != evidence["screenshot"]
     async with httpx.AsyncClient() as client:
-        (await client.post(site + "/comparison-control", json={"state": "repaired"})).raise_for_status()
+        (
+            await client.post(site + "/comparison-control", json={"state": "repaired"})
+        ).raise_for_status()
     fixed = await run_scan(
         url, tmp_path / "after", baseline_report=baseline, baseline_job_id="price-before"
     )
@@ -112,12 +116,28 @@ async def test_visible_price_conflict_is_confirmed_and_repair_resolves(price_sit
         assert (tmp_path / "after" / evidence["screenshot"]).is_file()
 
 
-@pytest.mark.parametrize("case", [
-    "equal", "annual", "annual-equivalent", "currency", "variant", "unit", "quantity",
-    "product", "qualifier",
-    "missing-period", "missing-currency", "ambiguous-dollar", "from", "trial", "discount",
-    "strike", "hidden",
-])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "equal",
+        "annual",
+        "annual-equivalent",
+        "currency",
+        "variant",
+        "unit",
+        "quantity",
+        "product",
+        "qualifier",
+        "missing-period",
+        "missing-currency",
+        "ambiguous-dollar",
+        "from",
+        "trial",
+        "discount",
+        "strike",
+        "hidden",
+    ],
+)
 async def test_distinct_or_unsupported_offers_are_not_price_faults(price_site, tmp_path, case):
     observations = await read_pair(price_site, case, tmp_path / case)
     assert all(o["status"] == 200 and o["layout_complete"] for o in observations)
@@ -131,7 +151,14 @@ async def test_distinct_or_unsupported_offers_are_not_price_faults(price_site, t
     if case in {"annual", "currency", "variant", "unit", "product", "qualifier"}:
         assert len(facts) == 2
         assert facts[0]["key"] != facts[1]["key"]
-    if case in {"missing-period", "missing-currency", "ambiguous-dollar", "from", "trial", "discount"}:
+    if case in {
+        "missing-period",
+        "missing-currency",
+        "ambiguous-dollar",
+        "from",
+        "trial",
+        "discount",
+    }:
         assert facts == []
         assert any(o.get("price_exclusions") for o in observations)
 

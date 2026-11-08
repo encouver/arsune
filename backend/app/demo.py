@@ -137,7 +137,10 @@ PRICE_CASES = {
     ),
     "currency": ("USD 19 per month, per seat", "EUR 29 per month, per seat"),
     "unit": ("USD 19 per month, per seat", "USD 29 per month, per account"),
-    "qualifier": ("USD 19 per month, per seat for businesses", "USD 29 per month, per seat for students"),
+    "qualifier": (
+        "USD 19 per month, per seat for businesses",
+        "USD 29 per month, per seat for students",
+    ),
     "quantity": ("USD 19 per month for 1 seat", "USD 29 per month for 5 seats"),
     "missing-period": ("USD 19", "USD 29"),
     "missing-currency": ("19 per month, per seat", "29 per month, per seat"),
@@ -179,10 +182,11 @@ def price_fixture(case: str, page: str):
     else:
         return HTMLResponse("Unknown pricing case", status_code=404)
     hidden = (
-        '<section hidden><h2>Basic</h2><p>USD 99 per month, per seat</p></section>'
+        "<section hidden><h2>Basic</h2><p>USD 99 per month, per seat</p></section>"
         '<section style="display:none"><h2>Basic</h2><p>USD 89 per month, per seat</p></section>'
         '<section style="visibility:hidden"><h2>Basic</h2><p>USD 79 per month, per seat</p></section>'
-        if case == "hidden" and index else ""
+        if case == "hidden" and index
+        else ""
     )
     product = ("Analytics" if index else "Hosting") if case == "product" else "Plans"
     spacing = '<div style="height:1500px">Product information</div>' if case == "below-fold" else ""
