@@ -1,12 +1,12 @@
 """Owner-funded bounties: owner proof, funding, hunter claims, and read views."""
 
 import secrets
-from datetime import timedelta
 from uuid import uuid4
 
 from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 
 from app.bounty import settlement
 from app.bounty.claims import (
@@ -19,13 +19,17 @@ from app.bounty.claims import (
     scoped_claim,
 )
 from app.bounty.proof import ProofError, proof_matches, proof_url
+from app.bounty.recovery import queue_check
 from app.browser.policy import TargetPolicyError, origin
 from app.core.config import settings
 from app.core.db import Session
-from app.core.models import Bounty, Claim, Job, LedgerEntry, PendingAction, utcnow
+from app.core.models import Bounty, Claim, Job, LedgerEntry, utcnow
 from app.core.schemas.bounties import CreateBounty, CreateClaim, FundBounty
 from app.settlement.base import SettlementError
+from app.settlement.near_tx import OutcomeUnknown
 from app.v1.services.jobs import JOB_ID
+
+OUTCOME_COUNTS = ("proven", "rejected", "duplicate", "unverified")
 
 
 def find_bounty(session, bounty_id, lock=False):
@@ -48,13 +52,29 @@ def find_claim(session, bounty_id, claim_id):
     return claim
 
 
-def require_account(value):
+def require_account(value, role="account"):
     if not ACCOUNT.fullmatch(value):
-        raise HTTPException(422, "Use a valid NEAR account ID.")
+        raise HTTPException(422, f"Use a valid NEAR account ID for the {role}.")
+    if value == settlement.arsune_account():
+        raise HTTPException(422, f"The {role} cannot be Arsune's settlement account.")
+
+
+def check_intent(signed, *, sender, amount, memo):
+    try:
+        settlement.check_transfer(signed, sender=sender, amount=amount, memo=memo)
+    except SettlementError as exc:
+        raise HTTPException(422, f"The signed transfer is not valid: {exc}") from None
 
 
 def fee_amount(bounty):
     return fee_for(bounty.reward_amount, bounty.fee_bps)
+
+
+def settlement_view():
+    try:
+        return settlement.settlement_info()
+    except SettlementError:
+        raise HTTPException(503, "The settlement network is unavailable.") from None
 
 
 def bounty_summary(bounty, mode):
@@ -85,6 +105,7 @@ def ledger_view(entry):
         "account": entry.account,
         "memo": entry.memo,
         "tx_id": entry.tx_id,
+        "explorer_url": settlement.explorer_url(entry.settlement_mode, entry.tx_id),
         "settlement_mode": entry.settlement_mode,
         "status": entry.status,
         "created_at": entry.created_at,
@@ -94,8 +115,10 @@ def ledger_view(entry):
 def claim_summary(claim):
     return {
         "id": claim.id,
+        "claim_id": claim.id,
         "bounty_id": claim.bounty_id,
         "hunter_account": claim.hunter_account,
+        "scout": claim.scout,
         "claim_type": claim.claim_type,
         "urls": claim.urls,
         "details": claim.details,
@@ -111,6 +134,34 @@ def claim_summary(claim):
     }
 
 
+def hunter_summary(claims, ledger):
+    """One row for every hunter and scout account seen in the bounty."""
+    people = {}
+
+    def person(account):
+        return people.setdefault(
+            account,
+            {"account": account, "claims": 0, "pending": 0}
+            | dict.fromkeys(OUTCOME_COUNTS, 0)
+            | {"earned": 0, "bonds_lost": 0, "scout_earned": 0},
+        )
+
+    for claim in claims:
+        row = person(claim.hunter_account)
+        row["claims"] += 1
+        row[claim.outcome or "pending"] += 1
+        if claim.scout:
+            person(claim.scout["account"])
+    for entry in ledger:
+        if entry.kind == "reward_out" and entry.tx_id:
+            person(entry.account)["earned"] += entry.amount
+        elif entry.kind == "scout_share" and entry.tx_id:
+            person(entry.account)["scout_earned"] += entry.amount
+        elif entry.kind == "bond_forfeit":
+            person(entry.account)["bonds_lost"] += entry.amount
+    return sorted(people.values(), key=lambda p: (-p["earned"] - p["scout_earned"], p["account"]))
+
+
 def ledger_rows(session, bounty_id, claim_id=None):
     query = select(LedgerEntry).where(LedgerEntry.bounty_id == bounty_id)
     if claim_id:
@@ -119,16 +170,17 @@ def ledger_rows(session, bounty_id, claim_id=None):
 
 
 def bounty_detail(session, bounty):
-    mode = settlement.get_settlement().mode
     claims = session.scalars(
         select(Claim).where(Claim.bounty_id == bounty.id).order_by(Claim.created_at, Claim.id)
     ).all()
+    ledger = ledger_rows(session, bounty.id)
     return {
-        **bounty_summary(bounty, mode),
+        **bounty_summary(bounty, settlement.settlement_mode()),
         "proof_token": bounty.proof_token,
         "proof_url": proof_url(bounty.url),
         "claims": [claim_summary(c) for c in claims],
-        "ledger": [ledger_view(e) for e in ledger_rows(session, bounty.id)],
+        "ledger": [ledger_view(e) for e in ledger],
+        "hunters": hunter_summary(claims, ledger),
     }
 
 
@@ -150,18 +202,23 @@ def claim_detail(session, claim):
         "evidence": evidence,
         "job_status": job.status if job else None,
         "ledger": [ledger_view(e) for e in ledger_rows(session, claim.bounty_id, claim.id)],
-        "settlement_mode": settlement.get_settlement().mode,
+        "settlement_mode": settlement.settlement_mode(),
     }
 
 
 async def create_bounty(request: CreateBounty):
-    require_account(request.owner_account)
+    require_account(request.owner_account, "owner")
     try:
         url = await canonical_url(request.url)
     except (ClaimError, TargetPolicyError) as exc:
         raise HTTPException(422, str(exc)) from exc
     if request.budget < request.reward_amount + fee_for(request.reward_amount, request.fee_bps):
         raise HTTPException(422, "The budget must cover at least one reward and its fee.")
+    if (
+        settings.settlement_mode == "near_intents"
+        and request.reward_amount + request.bond_amount > settings.max_payment_amount
+    ):
+        raise HTTPException(422, "The reward and bond exceed the largest permitted payment.")
     with Session.begin() as session:
         bounty = Bounty(
             id=str(uuid4()),
@@ -182,7 +239,7 @@ async def create_bounty(request: CreateBounty):
 
 
 def list_bounties(limit=50):
-    mode = settlement.get_settlement().mode
+    mode = settlement.settlement_mode()
     with Session() as session:
         rows = session.scalars(
             select(Bounty).order_by(Bounty.created_at.desc(), Bounty.id.desc()).limit(limit)
@@ -222,11 +279,21 @@ async def verify_bounty(bounty_id):
         return bounty_detail(session, bounty)
 
 
+async def transfer_in(signed, *, sender, amount, memo):
+    """Collect a signed transfer. Return the transaction ID, or the unknown-result error."""
+    return await run_in_threadpool(
+        settlement.collect, signed, sender=sender, amount=amount, memo=memo
+    )
+
+
 async def fund_bounty(bounty_id, request: FundBounty):
-    require_account(request.sender)
-    port = settlement.get_settlement()
-    entry_id = str(uuid4())
-    memo = f"arsune:fund:{entry_id}"
+    require_account(request.sender, "sender")
+    entry_id, memo = request.fund_id, f"arsune:fund:{request.fund_id}"
+    with Session() as session:
+        find_bounty(session, bounty_id)
+        if session.get(LedgerEntry, entry_id):
+            raise HTTPException(409, "This fund_id is already used.")
+    check_intent(request.signed_intent, sender=request.sender, amount=request.amount, memo=memo)
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
         if bounty.status != "open":
@@ -240,21 +307,24 @@ async def fund_bounty(bounty_id, request: FundBounty):
                 amount=request.amount,
                 account=request.sender,
                 memo=memo,
-                settlement_mode=port.mode,
+                settlement_mode=settlement.settlement_mode(),
                 status="pending",
             )
         )
+        try:
+            session.flush()
+        except IntegrityError:
+            raise HTTPException(409, "This fund_id is already used.") from None
     try:
-        tx_id = await run_in_threadpool(
-            port.collect,
-            request.signed_intent,
-            sender=request.sender,
-            amount=request.amount,
-            memo=memo,
+        tx_id = await transfer_in(
+            request.signed_intent, sender=request.sender, amount=request.amount, memo=memo
         )
-    except SettlementError:
+    except SettlementError as exc:
+        unknown = isinstance(exc, OutcomeUnknown)
         with Session.begin() as session:
-            session.get(LedgerEntry, entry_id).status = "failed"
+            session.get(LedgerEntry, entry_id).status = "unknown" if unknown else "failed"
+        if unknown:
+            raise HTTPException(504, "The funding transfer result is unknown.") from None
         raise HTTPException(402, "The funding transfer failed.") from None
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
@@ -266,18 +336,23 @@ async def fund_bounty(bounty_id, request: FundBounty):
 
 
 async def create_claim(bounty_id, request: CreateClaim):
-    require_account(request.hunter_account)
-    port = settlement.get_settlement()
+    require_account(request.hunter_account, "hunter")
+    if request.scout:
+        require_account(request.scout.account, "scout")
+    claim_id, memo = request.claim_id, f"arsune:bond:{request.claim_id}"
     with Session() as session:
-        site_origin = find_bounty(session, bounty_id).origin
+        bounty = find_bounty(session, bounty_id)
+        if session.get(Claim, claim_id):
+            raise HTTPException(409, "This claim_id is already used.")
+        site_origin, bond = bounty.origin, bounty.bond_amount
     try:
         urls, details = await scoped_claim(
             site_origin, request.claim_type, request.urls, request.details
         )
     except (ClaimError, TargetPolicyError) as exc:
         raise HTTPException(422, str(exc)) from exc
-    claim_id, entry_id = str(uuid4()), str(uuid4())
-    memo = f"arsune:bond:{claim_id}"
+    check_intent(request.bond_intent, sender=request.hunter_account, amount=bond, memo=memo)
+    entry_id = str(uuid4())
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
         if bounty.status != "open":
@@ -300,6 +375,7 @@ async def create_claim(bounty_id, request: CreateClaim):
                 id=claim_id,
                 bounty_id=bounty.id,
                 hunter_account=request.hunter_account,
+                scout=request.scout.model_dump() if request.scout else None,
                 claim_type=request.claim_type,
                 urls=urls,
                 details=details,
@@ -310,46 +386,58 @@ async def create_claim(bounty_id, request: CreateClaim):
                 evidence=[],
             )
         )
-        session.flush()
+        try:
+            session.flush()
+        except IntegrityError:
+            raise HTTPException(409, "This claim_id is already used.") from None
         session.add(
             LedgerEntry(
                 id=entry_id,
                 bounty_id=bounty.id,
                 claim_id=claim_id,
                 kind="bond_in",
-                amount=bounty.bond_amount,
+                amount=bond,
                 account=request.hunter_account,
                 memo=memo,
-                settlement_mode=port.mode,
+                settlement_mode=settlement.settlement_mode(),
                 status="pending",
             )
         )
-        bond, site_url = bounty.bond_amount, bounty.url
+        site_url = bounty.url
     try:
-        tx_id = await run_in_threadpool(
-            port.collect, request.bond_intent, sender=request.hunter_account, amount=bond, memo=memo
+        tx_id = await transfer_in(
+            request.bond_intent, sender=request.hunter_account, amount=bond, memo=memo
         )
+    except OutcomeUnknown as exc:
+        with Session.begin() as session:
+            claim = session.scalar(select(Claim).where(Claim.id == claim_id).with_for_update())
+            session.get(LedgerEntry, entry_id).status = "unknown"
+            claim.status, claim.updated_at = "needs_review", utcnow()
+            claim.settlement_note = f"The bond transfer result is unknown (tx {exc.tx_hash})."
+        raise HTTPException(504, "The bond transfer result is unknown.") from None
     except SettlementError:
         # The transfer did not happen, so the claim and its pending row are withdrawn.
         with Session.begin() as session:
             session.execute(delete(LedgerEntry).where(LedgerEntry.id == entry_id))
             session.execute(delete(Claim).where(Claim.id == claim_id))
         raise HTTPException(402, "The bond transfer failed.") from None
-    job_id = str(uuid4())
+    record_bond(claim_id, entry_id, tx_id)
+    return start_claim(claim_id, site_url)
+
+
+def record_bond(claim_id, entry_id, tx_id):
+    # Saved alone first, so recovery can queue the check if the next step does not run.
     with Session.begin() as session:
-        entry = session.get(LedgerEntry, entry_id)
+        claim = session.scalar(select(Claim).where(Claim.id == claim_id).with_for_update())
+        entry = session.get(LedgerEntry, entry_id, with_for_update=True)
         entry.tx_id, entry.status, entry.updated_at = tx_id, "completed", utcnow()
-        session.add(
-            Job(
-                id=job_id,
-                kind="claim",
-                url=site_url,
-                mode="scripted",
-                deadline=utcnow() + timedelta(seconds=settings.job_deadline_seconds),
-            )
-        )
-        session.flush()
-        claim = session.get(Claim, claim_id)
-        claim.job_id, claim.updated_at = job_id, utcnow()
-        session.add(PendingAction(id=f"{job_id}:scan", job_id=job_id))
+        if claim.status == "needs_review" and not claim.job_id and not claim.settled_at:
+            # Intake recovery held this claim while the transfer was slow; the result is known now.
+            claim.status, claim.settlement_note, claim.updated_at = "received", None, utcnow()
+
+
+def start_claim(claim_id, site_url):
+    with Session.begin() as session:
+        claim = session.scalar(select(Claim).where(Claim.id == claim_id).with_for_update())
+        queue_check(session, claim, site_url)
         return claim_detail(session, claim)

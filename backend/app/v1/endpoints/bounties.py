@@ -6,6 +6,11 @@ from app.v1.services import bounties
 router = APIRouter()
 
 
+@router.get("/settlement")
+def settlement():
+    return bounties.settlement_view()
+
+
 @router.post("/bounties", status_code=201)
 async def create_bounty(request: CreateBounty):
     return await bounties.create_bounty(request)

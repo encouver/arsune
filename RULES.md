@@ -1,6 +1,6 @@
-# Arsune website check rules
+# Arsune rules
 
-These rules implement the selected website-checking goal. They replace the supplier-document proposal. Incident investigation, marketplace payments, and production log connections are later work.
+These rules cover website checks, incident investigation, and the bug bounty market. They replace the supplier-document proposal. Production log connections are later work.
 
 ## Job scope
 
@@ -72,6 +72,61 @@ Ordinary visible price checks require exact supported commercial context. Do not
 Identify the requested site, inspected pages, capture times, viewports, agent mode, and completed or incomplete checks. Each confirmed issue explains the problem, visitor impact, evidence, and suggested correction in plain language.
 
 The customer or their website builder performs repairs. Arsune checks the site again on request; it does not modify the customer's website.
+
+## Bug bounty market
+
+A site owner pays for proven functional faults on the owner's own site. Independent hunter agents find the faults. Scout agents sell tips to hunters. The Arsune checker decides each claim with fresh browser evidence. Hunter explanations and scout tips are not proof.
+
+| Party | Pays | Receives |
+| --- | --- | --- |
+| Site owner | The bounty budget | Proven faults with evidence |
+| Hunter | A bond for each claim | For a proven, unique claim: the reward minus the scout share, plus the bond. For a duplicate or unverified claim: the bond. |
+| Scout | Nothing to Arsune | The scout share of the reward when the claim that names the scout is proven and unique |
+| Arsune | Rewards, scout shares, and refunds from held money | The fee for each proven claim |
+
+### Scope
+
+- Only the owner of a site can open a bounty for it. The owner puts the bounty token in `/.well-known/arsune-bounty.txt` on the bounty origin. Arsune checks no claims before this proof.
+- Only functional faults are in scope: a broken internal link, horizontal overflow at the 390-pixel mobile viewport, and a price mismatch for one matched product context. Other claim types are rejected at submission.
+- Security testing of any kind is out of scope. The checker does not submit forms, sign in, buy, change the site, or put load on the site.
+- All claim URLs and detail URLs must be on the bounty origin and must not have a query string. The claim URLs must be exactly the pages that the details name.
+- A hunter can have at most three unresolved claims on one bounty.
+
+### Money in
+
+- Each transfer into Arsune is a signed NEP-413 transfer of the exact amount of the bounty token to Arsune's account. The memo must be exact: `arsune:fund:{fund_id}` for funding and `arsune:bond:{claim_id}` for a bond. The client makes each ID as a lowercase UUID v4 and can use it only once.
+- Arsune checks the signature, sender, receiver, token, amount, memo, contract, and deadline before it saves the claim or the funding row. An invalid transfer creates no claim.
+- A claim is accepted only when the bounty is open and its budget covers one reward and its fee.
+
+### Outcomes
+
+| Outcome | Meaning | Money |
+| --- | --- | --- |
+| Proven | The checker reproduced the fault, and no other claim holds its fingerprint | The budget pays the reward and the fee. The hunter receives the reward minus the scout share, plus the bond. The scout receives the scout share. |
+| Rejected | The checker observed evidence that contradicts the claim | The bond is forfeited and added to the budget. |
+| Duplicate | Another claim already proved the same fault | The bond is refunded. No reward. |
+| Unverified | Access, resources, or scope prevent a conclusion | The bond is refunded. No reward. |
+
+- The first proven claim for a fault wins. The fingerprint names the fault: the claim type, the canonical URLs, and the details. It does not name the hunter. The database permits one proven claim for each fingerprint on a bounty.
+- A claim for a fault that is already proven is a duplicate without a new browser check.
+- A timeout, a blocked page, or a missing resource makes a claim unverified, not rejected. Only contradicting evidence forfeits a bond.
+
+### Fees and shares
+
+- The fee is `reward * fee_bps / 10000`, rounded down. The default is 1000 basis points (10%). The budget pays the fee for each proven claim, in addition to the reward.
+- A hunter can name one scout for a claim, with a share of 1 to 5000 basis points (0.01% to 50%) of the reward. The scout share comes from the reward, not from the budget.
+- The bounty closes when its budget is less than one reward and its fee.
+
+### Payment safety
+
+- Arsune saves each outgoing payment in the ledger before it sends it, with a unique memo for each claim and payment kind. A payment is never sent twice.
+- If a payment result is unknown or the payment fails, the claim goes to `needs_review` and the money stays held. There is no automatic retry. An operator checks the settlement account before any further action.
+- Every ledger row records the settlement mode and the transaction ID.
+
+### Settlement modes
+
+- `dry` is the default. No money moves. Signed transfers are still checked, and payouts get IDs like `dry-<hex>`. Every bounty response states the mode. Do not describe dry results as real payments.
+- `near_intents` moves real USDC inside the NEAR Intents Verifier contract on mainnet. Each transfer is limited by `ARSUNE_MAX_PAYMENT_AMOUNT`. Ledger rows link to the transaction on nearblocks.
 
 ## Completion checks
 

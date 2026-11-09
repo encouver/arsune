@@ -1,9 +1,19 @@
 import asyncio
 import threading
 
+from celery.signals import worker_process_init
+
 from app.core.config import settings
 from app.workers import store
 from app.workers.queue import app
+
+
+@worker_process_init.connect
+def fresh_database_pool(**_):
+    # Each prefork child opens its own connections instead of sharing the parent's sockets.
+    from app.core.db import engine
+
+    engine.dispose(close=False)
 
 
 @app.task(name="arsune.scan")

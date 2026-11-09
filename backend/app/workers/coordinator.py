@@ -60,6 +60,9 @@ def tick():
             # the database claim makes that repeat safe.
             app.send_task("arsune.scan", args=[action.job_id])
             action.publish_after = now + timedelta(seconds=settings.lease_seconds)
+    from app.bounty.recovery import recover_stuck_claims
+
+    recover_stuck_claims(now)
 
 
 def main():

@@ -129,6 +129,8 @@ class Claim(Base):
     explanation: Mapped[str] = mapped_column(Text)
     reproduction_steps: Mapped[list] = mapped_column(JSON)
     fingerprint: Mapped[str] = mapped_column(String(64))
+    # Optional tip seller: {"account", "share_bps", "tip_id"}; paid from the reward when proven.
+    scout: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), default="received", index=True)
     outcome: Mapped[str | None] = mapped_column(String(20))
     checker_reason: Mapped[str | None] = mapped_column(Text)

@@ -7,6 +7,10 @@ from pydantic import BaseModel, Field, field_validator
 MAX_AMOUNT = 10**15
 Amount = Annotated[int, Field(strict=True, gt=0, le=MAX_AMOUNT)]
 Account = Annotated[str, Field(min_length=2, max_length=64)]
+# Clients make these IDs so they can sign the memo before the request.
+ClientId = Annotated[
+    str, Field(pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
+]
 
 
 def bounded_intent(value: dict[str, Any]) -> dict[str, Any]:
@@ -25,6 +29,7 @@ class CreateBounty(BaseModel):
 
 
 class FundBounty(BaseModel):
+    fund_id: ClientId
     sender: Account
     amount: Amount
     signed_intent: dict[str, Any]
@@ -32,8 +37,16 @@ class FundBounty(BaseModel):
     _intent = field_validator("signed_intent")(bounded_intent)
 
 
+class Scout(BaseModel):
+    account: Account
+    share_bps: int = Field(strict=True, ge=1, le=5000)
+    tip_id: str = Field(min_length=1, max_length=64, pattern=r"^[^\x00-\x1f\x7f]+$")
+
+
 class CreateClaim(BaseModel):
+    claim_id: ClientId
     hunter_account: Account
+    scout: Scout | None = None
     claim_type: str = Field(min_length=1, max_length=30)
     urls: list[str] = Field(min_length=1, max_length=5)
     details: dict[str, Any] = Field(max_length=5)

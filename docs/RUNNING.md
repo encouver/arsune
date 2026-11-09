@@ -95,36 +95,36 @@ This flow uses scripted checks only. No API key, production log connection, or p
 
 ## Bug bounty
 
-The bounty API uses the dry settlement. No money moves, and every response states `"settlement_mode": "dry"`. Amounts are integers in the smallest token unit; 1 USDC is `1000000`. See [Architecture](ARCHITECTURE.md#bug-bounty) for the money rules.
+The settlement mode is `dry` by default. No money moves, and every response states `"settlement_mode": "dry"`. Amounts are integers in the smallest token unit; 1 USDC is `1000000`. See [Architecture](ARCHITECTURE.md#bug-bounty) for the API and money rules, [Rules](../RULES.md#bug-bounty-market) for the market rules, and [Settlement](SETTLEMENT.md) for `near_intents` mode.
 
-To run a bounty on the controlled site with the host setup, create the bounty and keep the returned `id` and `proof_token`:
+Every transfer into Arsune is a signed NEP-413 intent, also in dry mode. Read `GET /api/settlement` first. It gives the receiver account, token, contract, and salt to sign with. In dry mode, the salt is `00000000`. Pass it to `sign_transfer(..., salt=bytes.fromhex(salt))`. Without an explicit salt, `sign_transfer` reads it from the mainnet RPC.
 
-```sh
-curl -s -X POST http://127.0.0.1:8540/api/bounties -H 'content-type: application/json' \
-  -d '{"url":"http://127.0.0.1:8541/faulty/","owner_account":"owner.testnet","reward_amount":1000000,"bond_amount":100000,"budget":5000000}'
+```python
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
+from app.settlement.near_intents import sign_transfer
+
+claim_id = str(uuid4())
+bond_intent = sign_transfer(
+    "hunter.testnet", "<hunter ed25519 private key>", info["arsune_account"], info["token"],
+    bounty["bond_amount"], f"arsune:bond:{claim_id}", datetime.now(UTC) + timedelta(minutes=5),
+    salt=bytes.fromhex(info["salt"]), contract=info["intents_contract"],
+)
 ```
 
-Publish the token on the controlled site, then verify and fund the bounty:
+Use the same pattern for funding with memo `arsune:fund:{fund_id}`. The steps on the controlled site with the host setup:
 
-```sh
-curl -s -X POST http://127.0.0.1:8541/bounty-proof-control -H 'content-type: application/json' -d '{"token":"<proof_token>"}'
-curl -s -X POST http://127.0.0.1:8540/api/bounties/<id>/verify
-curl -s -X POST http://127.0.0.1:8540/api/bounties/<id>/fund -H 'content-type: application/json' \
-  -d '{"sender":"owner.testnet","amount":5000000,"signed_intent":{"dry":true}}'
-```
+1. `POST /api/bounties` with `url` (for example `http://127.0.0.1:8541/faulty/`), `owner_account`, `reward_amount`, `bond_amount`, and `budget`. Keep the returned `id` and `proof_token`.
+2. Publish the token: `POST http://127.0.0.1:8541/bounty-proof-control` with `{"token": "<proof_token>"}`. You can also set `ARSUNE_DEMO_BOUNTY_TOKEN` before the demo starts. A real site owner puts the token in `/.well-known/arsune-bounty.txt`. In the Compose setup, the API reads the controlled site at `http://demo:8541`, so use that address in the bounty URL.
+3. `POST /api/bounties/<id>/verify`.
+4. `POST /api/bounties/<id>/fund` with `fund_id`, `sender`, `amount`, and `signed_intent`.
+5. `POST /api/bounties/<id>/claims` with `claim_id`, `hunter_account`, `claim_type`, `urls`, `details`, `explanation`, `reproduction_steps`, `bond_intent`, and an optional `scout` of `{"account", "share_bps", "tip_id"}`.
+6. Read `GET /api/bounties/<id>` and `GET /api/bounties/<id>/claims/<claim_id>`.
 
-The controlled site serves one token at `/.well-known/arsune-bounty.txt`. You can also set `ARSUNE_DEMO_BOUNTY_TOKEN` before it starts. A real site owner puts the token in that file on the site. In the Compose setup, the API reads the controlled site at `http://demo:8541`, so use that address in the bounty URL.
+The claim detail shows the status, the checker reason, screenshot links, and ledger rows with transaction IDs. For `near_intents` rows, `explorer_url` links to nearblocks. A claim in `needs_review` holds money until an operator checks the settlement account. There is no automatic retry. Error codes: 404 for unknown or malformed IDs; 409 for a bounty that is not ready or a reused `claim_id` or `fund_id`; 422 for an invalid request, an out-of-scope claim, or an invalid signed transfer; 429 for too many unresolved claims from one hunter; 402 when a transfer fails; 504 when a transfer result is unknown.
 
-Submit a claim. The coordinator and worker check it and settle it:
-
-```sh
-curl -s -X POST http://127.0.0.1:8540/api/bounties/<id>/claims -H 'content-type: application/json' \
-  -d '{"hunter_account":"hunter.testnet","claim_type":"broken_link","urls":["http://127.0.0.1:8541/faulty/","http://127.0.0.1:8541/faulty/missing"],"details":{"source":"http://127.0.0.1:8541/faulty/","target":"http://127.0.0.1:8541/faulty/missing"},"explanation":"The missing link returns HTTP 404.","reproduction_steps":["Open the home page.","Follow the missing link."],"bond_intent":{"dry":true}}'
-curl -s http://127.0.0.1:8540/api/bounties/<id>
-curl -s http://127.0.0.1:8540/api/bounties/<id>/claims/<claim_id>
-```
-
-The claim detail shows the status, the checker reason, screenshot links, and ledger rows with transaction IDs. A claim in `needs_review` holds money until an operator checks the settlement account. There is no automatic retry. Error codes: 404 for unknown or malformed IDs, 409 for a bounty that is not ready, 422 for an invalid or out-of-scope claim, 429 for too many unresolved claims from one hunter, and 402 when a transfer fails.
+For a race of up to 100 hunter agents, run the worker with `--concurrency=4` on a machine with 8 GB of memory, or `--concurrency=8` with 16 GB. Each browser check uses one Chromium process of about 300 MB for 5 to 15 seconds. Claims for a fault that is already proven finish without a browser, so most of a race settles fast. Use one worker host. Several prefork processes are safe: each has its own database connections, and each claim job has its own lease. Keep `ARSUNE_LEASE_SECONDS` at 30 or more. In `near_intents` mode, payments go through one relayer key and one advisory lock. Expect about 2 to 5 seconds for each transfer.
 
 ## Model settings
 
@@ -182,3 +182,11 @@ uv run python scripts/verify_incident_recovery.py
 The first test worker pauses after it commits specialist progress. The script kills that worker and starts a replacement. It checks retained source text and hashes, stable results and stage records, and repeat delivery. The parser, specialists, checker, database, and queue are real. The pause only makes the interruption point repeatable. Restart the normal worker after the check.
 
 If Chromium is installed in a custom folder, set `PLAYWRIGHT_BROWSERS_PATH` for Python browser tests and workers. Frontend tests can use an existing Chromium executable through `ARSUNE_CHROME_PATH`.
+
+## Swarm board
+
+Open `/swarm` (optionally `?bounty=<id>`) for the live swarm board. It polls the Arsune API and the swarm runner state every 1.8 seconds. The frontend proxies `/swarm-state` to `ARSUNE_SWARM_URL` (default `http://127.0.0.1:8590`, route `/state`). If the runner is down, the board still works from Arsune data. When the settlement mode is `dry`, every money view shows "Simulation — no real money".
+
+## Demo shop
+
+The demo site serves a larger shop, Northwind Supply, under `/shop/` (for example `http://127.0.0.1:8541/shop/`). It has 8 category pages, 25 plan pages and 6 information pages, with 50 seeded faults (20 broken links, 15 mobile overflow pages, 15 price mismatches) and 18 decoys that look like faults but must not be proven. The ground truth is in `backend/app/demo_shop.py` (`GROUND_TRUTH`, `build_ground_truth`); no route serves it. `backend/tests/engine/test_demo_shop.py` checks every fault and decoy with real Chromium.

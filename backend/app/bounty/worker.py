@@ -20,12 +20,21 @@ from app.browser.session import inspection_browser
 from app.core.db import Session
 from app.core.models import Bounty, Claim, LedgerEntry, utcnow
 from app.settlement.base import SettlementError
+from app.settlement.near_tx import OutcomeUnknown
 from app.workers import store
 
 logger = logging.getLogger(__name__)
 
 CHECK_SECONDS = 120
-OUTCOMES = {"confirmed": "proven", "rejected": "rejected", "unverified": "unverified"}
+OUTCOMES = {
+    "confirmed": "proven",
+    "rejected": "rejected",
+    "unverified": "unverified",
+    "duplicate": "duplicate",
+}
+UNKNOWN_PAYMENT = (
+    "A payment attempt has no recorded result. Check the settlement account before any retry."
+)
 
 
 def locked_claim(session, job_id):
@@ -47,7 +56,28 @@ def lock_bounty_then_claim(session, job_id):
     return bounty, locked_claim(session, job_id)
 
 
+def proven_holder(session, claim):
+    return session.scalar(
+        select(Claim.id).where(
+            Claim.bounty_id == claim.bounty_id,
+            Claim.fingerprint == claim.fingerprint,
+            Claim.outcome == "proven",
+            Claim.id != claim.id,
+        )
+    )
+
+
+def known_duplicate(holder_id):
+    return {
+        "status": "duplicate",
+        "checker_reason": f"Claim {holder_id} already proved this fault. "
+        "No browser check was needed.",
+        "evidence": [],
+    }
+
+
 def start_check(job_id, generation):
+    """Return the claim to check and, when the fault is already proven, its duplicate result."""
     with Session.begin() as session:
         store.require_claim(store.locked_job(session, job_id), generation)
         claim = locked_claim(session, job_id)
@@ -62,13 +92,27 @@ def start_check(job_id, generation):
             "explanation": claim.explanation,
             "reproduction_steps": claim.reproduction_steps,
         }
-        return item, session.get(Bounty, claim.bounty_id).url
+        known = None
+        if claim.outcome == "duplicate":
+            known = {"status": "duplicate", "checker_reason": claim.checker_reason, "evidence": []}
+        elif holder := proven_holder(session, claim):
+            known = known_duplicate(holder)
+        return item, session.get(Bounty, claim.bounty_id).url, known
 
 
 async def check_claim(job_id, generation, checkpoint, save_checkpoint, output_dir):
     if "result" in checkpoint:
         return checkpoint["result"]
-    item, site_url = start_check(job_id, generation)
+    item, site_url, known = start_check(job_id, generation)
+    if known:
+        result = {**item, **known}
+    else:
+        result = await browser_check(job_id, item, site_url, output_dir)
+    save_checkpoint({"result": result})
+    return result
+
+
+async def browser_check(job_id, item, site_url, output_dir):
     from app.core.config import settings
 
     state = {"selected": list(item["urls"])}
@@ -93,19 +137,18 @@ async def check_claim(job_id, generation, checkpoint, save_checkpoint, output_di
             "redirects": state.get("redirects", []),
             "resource_issues": state.get("resource_issues", []),
         }
+        return result
     except store.LeaseLost:
         raise
     except Exception:
         # A check that cannot finish proves nothing; the bond is refunded as unverified.
         logger.exception("Claim check for job %s did not complete", job_id)
-        result = {
+        return {
             **item,
             "status": "unverified",
             "checker_reason": "The fresh check could not complete.",
             "evidence": [],
         }
-    save_checkpoint({"result": result})
-    return result
 
 
 def evidence_summary(result):
@@ -116,14 +159,14 @@ def evidence_summary(result):
     ]
 
 
-def entry(bounty, claim, kind, amount, memo, mode, status, tx_id=None):
+def entry(bounty, claim, kind, amount, memo, mode, status, *, account, tx_id=None):
     return LedgerEntry(
         id=str(uuid4()),
         bounty_id=bounty.id,
         claim_id=claim.id,
         kind=kind,
         amount=amount,
-        account=claim.hunter_account if kind != "fee" else "arsune",
+        account=account,
         memo=memo,
         tx_id=tx_id,
         settlement_mode=mode,
@@ -160,6 +203,7 @@ def decide(job_id, generation, result, mode):
                     f"arsune:forfeit:{claim.id}",
                     mode,
                     "completed",
+                    account=claim.hunter_account,
                 )
             )
             bounty.budget_amount += bounty.bond_amount
@@ -168,55 +212,98 @@ def decide(job_id, generation, result, mode):
             claim.settled_at = now
 
 
+def scout_part(bounty, claim):
+    return bounty.reward_amount * claim.scout["share_bps"] // 10_000 if claim.scout else 0
+
+
+def payment_plan(bounty, claim):
+    """Transfers for a decided claim, in order: (kind, receiver, sent, recorded, memo)."""
+    bond = bounty.bond_amount
+    if claim.outcome == "rejected":
+        return []
+    if claim.outcome != "proven":
+        return [("bond_refund", claim.hunter_account, bond, bond, f"arsune:refund:{claim.id}")]
+    scout = scout_part(bounty, claim)
+    hunter = bounty.reward_amount - scout
+    # One transfer returns the hunter's reward part and the bond; the ledger records both.
+    plan = [
+        ("reward_out", claim.hunter_account, hunter + bond, hunter, f"arsune:reward:{claim.id}")
+    ]
+    if scout:
+        plan.append(
+            ("scout_share", claim.scout["account"], scout, scout, f"arsune:scout:{claim.id}")
+        )
+    return plan
+
+
 def review(claim, note):
     claim.status, claim.settlement_note, claim.updated_at = "needs_review", note, utcnow()
 
 
-def reserve_payment(job_id, generation, mode):
-    """Commit the payment row before the transfer; return the transfer to send, if any."""
+def finish_claim(claim):
+    if claim.outcome == "proven":
+        claim.status = "paid"
+        claim.settlement_note = "Reward and bond paid" + (
+            "; the scout share was paid separately." if claim.scout else "."
+        )
+    else:
+        claim.status, claim.settlement_note = claim.outcome, "Bond refunded."
+    claim.settled_at = claim.updated_at = utcnow()
+
+
+def claim_rows(session, claim):
+    rows = session.scalars(select(LedgerEntry).where(LedgerEntry.claim_id == claim.id))
+    return {row.kind: row for row in rows}
+
+
+def reserve_reward(session, bounty, claim, mode):
+    """Take the reward and fee from the budget once, before the first reward transfer."""
+    fee = fee_for(bounty.reward_amount, bounty.fee_bps)
+    if bounty.budget_amount < bounty.reward_amount + fee:
+        review(claim, "The bounty budget cannot pay this reward. The bond is held.")
+        return False
+    bounty.budget_amount -= bounty.reward_amount + fee
+    if bounty.budget_amount < bounty.reward_amount + fee:
+        bounty.status = "closed"
+    bounty.updated_at = utcnow()
+    if fee:
+        session.add(
+            entry(
+                bounty,
+                claim,
+                "fee",
+                fee,
+                f"arsune:fee:{claim.id}",
+                mode,
+                "completed",
+                account=settlement.arsune_account(),
+            )
+        )
+    return True
+
+
+def next_payment(job_id, generation, mode):
+    """Commit the next payment row before its transfer; return the transfer to send, if any."""
     with Session.begin() as session:
         store.require_claim(store.locked_job(session, job_id), generation)
         bounty, claim = lock_bounty_then_claim(session, job_id)
         if claim.settled_at or claim.status == "needs_review":
             return None
-        kind = "reward_out" if claim.outcome == "proven" else "bond_refund"
-        previous = session.scalar(
-            select(LedgerEntry).where(LedgerEntry.claim_id == claim.id, LedgerEntry.kind == kind)
-        )
-        if previous:
-            review(
-                claim,
-                "A payment attempt has no recorded result. "
-                "Check the settlement account before any retry.",
-            )
-            return None
-        if kind == "bond_refund":
-            memo = f"arsune:refund:{claim.id}"
-            amount = recorded = bounty.bond_amount
-        else:
-            fee = fee_for(bounty.reward_amount, bounty.fee_bps)
-            if bounty.budget_amount < bounty.reward_amount + fee:
-                review(claim, "The bounty budget cannot pay this reward. The bond is held.")
+        rows = claim_rows(session, claim)
+        for kind, receiver, amount, recorded, memo in payment_plan(bounty, claim):
+            row = rows.get(kind)
+            if row and row.tx_id:
+                continue
+            if row:
+                review(claim, UNKNOWN_PAYMENT)
                 return None
-            bounty.budget_amount -= bounty.reward_amount + fee
-            if bounty.budget_amount < bounty.reward_amount + fee:
-                bounty.status = "closed"
-            bounty.updated_at = utcnow()
-            if fee:
-                session.add(
-                    entry(bounty, claim, "fee", fee, f"arsune:fee:{claim.id}", mode, "completed")
-                )
-            # One transfer returns the reward and the bond; the ledger records both parts.
-            memo = f"arsune:reward:{claim.id}"
-            amount, recorded = bounty.reward_amount + bounty.bond_amount, bounty.reward_amount
-        payment = entry(bounty, claim, kind, recorded, memo, mode, "pending")
-        session.add(payment)
-        return {
-            "entry_id": payment.id,
-            "receiver": claim.hunter_account,
-            "amount": amount,
-            "memo": memo,
-        }
+            if kind == "reward_out" and not reserve_reward(session, bounty, claim, mode):
+                return None
+            payment = entry(bounty, claim, kind, recorded, memo, mode, "pending", account=receiver)
+            session.add(payment)
+            return {"entry_id": payment.id, "receiver": receiver, "amount": amount, "memo": memo}
+        finish_claim(claim)
+        return None
 
 
 def locked_payment(session, entry_id):
@@ -235,8 +322,7 @@ def record_payment(entry_id, tx_id):
     """Save a sent payment. No lease check: a sent transfer is a fact to record."""
     with Session.begin() as session:
         bounty, claim, payment = locked_payment(session, entry_id)
-        now = utcnow()
-        payment.tx_id, payment.status, payment.updated_at = tx_id, "completed", now
+        payment.tx_id, payment.status, payment.updated_at = tx_id, "completed", utcnow()
         if payment.kind == "reward_out":
             session.add(
                 entry(
@@ -247,34 +333,44 @@ def record_payment(entry_id, tx_id):
                     payment.memo,
                     payment.settlement_mode,
                     "completed",
-                    tx_id,
+                    account=claim.hunter_account,
+                    tx_id=tx_id,
                 )
             )
-            claim.status, claim.settlement_note = "paid", "Reward and bond paid in one transfer."
-        else:
-            claim.status, claim.settlement_note = claim.outcome, "Bond refunded."
-        claim.settled_at = claim.updated_at = now
+        rows = claim_rows(session, claim)
+        if all(rows.get(kind) and rows[kind].tx_id for kind, *_ in payment_plan(bounty, claim)):
+            finish_claim(claim)
 
 
-def record_failure(entry_id):
+def record_failure(entry_id, unknown_tx=None):
     with Session.begin() as session:
         _, claim, payment = locked_payment(session, entry_id)
-        payment.status, payment.updated_at = "failed", utcnow()
-        review(claim, "The settlement reported a payment failure. No automatic retry is made.")
+        payment.status, payment.updated_at = ("unknown" if unknown_tx else "failed"), utcnow()
+        if unknown_tx:
+            review(claim, f"The transfer result is unknown (tx {unknown_tx}). {UNKNOWN_PAYMENT}")
+        else:
+            review(claim, "The settlement reported a payment failure. No automatic retry is made.")
 
 
 def settle_claim(job_id, generation, result):
-    port = settlement.get_settlement()
-    decide(job_id, generation, result, port.mode)
-    payment = reserve_payment(job_id, generation, port.mode)
-    if payment:
+    mode = settlement.settlement_mode()
+    decide(job_id, generation, result, mode)
+    while payment := next_payment(job_id, generation, mode):
         try:
-            tx_id = port.pay(payment["receiver"], payment["amount"], payment["memo"])
+            tx_id = settlement.pay(payment["receiver"], payment["amount"], payment["memo"])
+        except OutcomeUnknown as exc:
+            logger.warning("Settlement outcome unknown for job %s", job_id)
+            record_failure(payment["entry_id"], exc.tx_hash)
+            break
         except SettlementError:
             logger.warning("Settlement payment failed for job %s", job_id)
             record_failure(payment["entry_id"])
-        else:
-            record_payment(payment["entry_id"], tx_id)
+            break
+        if not isinstance(tx_id, str) or not tx_id:
+            # A transfer without a transaction ID cannot be proven sent or unsent.
+            record_failure(payment["entry_id"], "not returned")
+            break
+        record_payment(payment["entry_id"], tx_id)
     with Session() as session:
         claim = session.scalar(select(Claim).where(Claim.job_id == job_id))
         return {
@@ -283,7 +379,7 @@ def settle_claim(job_id, generation, result):
             "status": claim.status,
             "outcome": claim.outcome,
             "checker_reason": claim.checker_reason,
-            "settlement_mode": port.mode,
+            "settlement_mode": mode,
             "findings": [result],
             "observations": result.get("evidence", []),
         }

@@ -98,6 +98,8 @@ def test_bounty_migration_enforces_first_proven_claim_and_downgrades():
             assert not bounty_tables & set(inspect(connection).get_table_names(schema=schema))
             command.upgrade(config, "0004")
             assert bounty_tables <= set(inspect(connection).get_table_names(schema=schema))
+            columns = {c["name"] for c in inspect(connection).get_columns("claims", schema=schema)}
+            assert "scout" not in columns
             connection.execute(
                 text("""INSERT INTO bounties (id, url, origin, owner_account, proof_token, status,
                     reward_amount, bond_amount, fee_bps, budget_amount, budget_target,
@@ -113,6 +115,11 @@ def test_bounty_migration_enforces_first_proven_claim_and_downgrades():
                 connection.execute(
                     insert_claim, {"id": "c3", "hunter": "c.near", "outcome": "proven"}
                 )
+            command.upgrade(config, "0005")
+            columns = {c["name"] for c in inspect(connection).get_columns("claims", schema=schema)}
+            assert "scout" in columns
+            scouts = connection.execute(text("SELECT scout FROM claims ORDER BY id")).scalars()
+            assert list(scouts) == [None, None]
             command.downgrade(config, "0003")
             assert not bounty_tables & set(inspect(connection).get_table_names(schema=schema))
             assert "jobs" in inspect(connection).get_table_names(schema=schema)
