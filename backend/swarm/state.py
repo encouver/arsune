@@ -94,6 +94,7 @@ def summarize(state: SwarmState, claims: list[dict], wall_seconds: float) -> dic
         "rejected": counts["rejected"],
         "duplicate": counts["duplicate"],
         "unverified": counts["unverified"],
+        "unfunded": counts["unfunded"],
         "needs_review": counts["needs_review"],
         "open": counts["open"],
         "hunter_rewards": sum(a.wallet.earned for a in hunters),
@@ -125,6 +126,7 @@ def summary_lines(summary: dict) -> list[str]:
         (
             f"Summary: {s['claims']} claims, {s['proven']} proven, {s['rejected']} rejected, "
             f"{s['duplicate']} duplicates, {s['unverified']} unverified, "
+            f"{s['unfunded']} proven but unfunded, "
             f"{s['needs_review']} in review, {s['open']} still open."
         ),
         (

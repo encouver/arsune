@@ -452,6 +452,8 @@ class Hunter(Agent):
             )
         elif result == "duplicate":
             text = f"{self.id} got its bond back: the {label} on {where} was already proven"
+        elif result == "unfunded":
+            text = f"{self.id} got its bond back: the {label} on {where} was proven, but the budget was spent"
         elif result == "unverified":
             text = f"{self.id} got its bond back: the checker could not decide ({reason})"
         else:

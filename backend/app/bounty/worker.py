@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.bounty import settlement
-from app.bounty.claims import fee_for
+from app.bounty.claims import fee_for, final_fingerprint
 from app.browser.checker import check_candidate
 from app.browser.observations import observe_page
 from app.browser.session import inspection_browser
@@ -56,11 +56,12 @@ def lock_bounty_then_claim(session, job_id):
     return bounty, locked_claim(session, job_id)
 
 
-def proven_holder(session, claim):
+def proven_holder(session, claim, fingerprint=None):
+    """The claim that holds this fault. The submitted fingerprint matches a final one exactly."""
     return session.scalar(
         select(Claim.id).where(
             Claim.bounty_id == claim.bounty_id,
-            Claim.fingerprint == claim.fingerprint,
+            Claim.final_fingerprint == (fingerprint or claim.fingerprint),
             Claim.outcome == "proven",
             Claim.id != claim.id,
         )
@@ -174,6 +175,34 @@ def entry(bounty, claim, kind, amount, memo, mode, status, *, account, tx_id=Non
     )
 
 
+def hold_fault(session, bounty, claim, result):
+    """Return (outcome, unfunded) for a claim the checker proved.
+
+    The fault is held by its final URLs, so an alias and its final page are one fault. A
+    duplicate is decided before funds are checked. A funded claim takes its reward and fee
+    from the budget here, in the same transaction that holds the fault. An unfunded claim
+    holds nothing, so a later funded bounty claim can prove the same fault.
+    """
+    final = final_fingerprint(
+        claim.claim_type, claim.urls, claim.details, result.get("evidence", [])
+    )
+    if holder := proven_holder(session, claim, final):
+        result["checker_reason"] = f"Claim {holder} already proved this fault" + (
+            " at the final page." if final != claim.fingerprint else "."
+        )
+        return "duplicate", False
+    fee = fee_for(bounty.reward_amount, bounty.fee_bps)
+    if bounty.budget_amount < bounty.reward_amount + fee:
+        return "proven", True
+    try:
+        with session.begin_nested():
+            claim.outcome, claim.final_fingerprint = "proven", final
+    except IntegrityError:
+        return "duplicate", False
+    reserve_reward(session, bounty, claim, settlement.settlement_mode(), fee)
+    return "proven", False
+
+
 def decide(job_id, generation, result, mode):
     """Save the outcome once. The partial unique index lets only one claim hold proven."""
     with Session.begin() as session:
@@ -182,14 +211,15 @@ def decide(job_id, generation, result, mode):
         if claim.outcome:
             return
         outcome = OUTCOMES.get(result.get("status"), "unverified")
+        unfunded = False
         if outcome == "proven":
-            try:
-                with session.begin_nested():
-                    claim.outcome = "proven"
-            except IntegrityError:
-                outcome = "duplicate"
+            outcome, unfunded = hold_fault(session, bounty, claim, result)
         now = utcnow()
         claim.outcome = claim.status = outcome
+        if unfunded:
+            claim.status = "unfunded"
+            claim.settlement_note = "The budget could not pay the reward. The bond is refunded."
+            bounty.status, bounty.updated_at = "closed", now
         claim.checker_reason = result.get("checker_reason")
         claim.evidence = evidence_summary(result)
         claim.updated_at = now
@@ -216,12 +246,17 @@ def scout_part(bounty, claim):
     return bounty.reward_amount * claim.scout["share_bps"] // 10_000 if claim.scout else 0
 
 
+def is_funded_win(claim):
+    # An unfunded claim is proven but holds no final fingerprint and gets no reward.
+    return claim.outcome == "proven" and claim.final_fingerprint is not None
+
+
 def payment_plan(bounty, claim):
     """Transfers for a decided claim, in order: (kind, receiver, sent, recorded, memo)."""
     bond = bounty.bond_amount
     if claim.outcome == "rejected":
         return []
-    if claim.outcome != "proven":
+    if not is_funded_win(claim):
         return [("bond_refund", claim.hunter_account, bond, bond, f"arsune:refund:{claim.id}")]
     scout = scout_part(bounty, claim)
     hunter = bounty.reward_amount - scout
@@ -241,7 +276,9 @@ def review(claim, note):
 
 
 def finish_claim(claim):
-    if claim.outcome == "proven":
+    if claim.outcome == "proven" and not is_funded_win(claim):
+        claim.status, claim.settlement_note = "unfunded", "Bond refunded; the budget was spent."
+    elif claim.outcome == "proven":
         claim.status = "paid"
         claim.settlement_note = "Reward and bond paid" + (
             "; the scout share was paid separately." if claim.scout else "."
@@ -256,12 +293,8 @@ def claim_rows(session, claim):
     return {row.kind: row for row in rows}
 
 
-def reserve_reward(session, bounty, claim, mode):
-    """Take the reward and fee from the budget once, before the first reward transfer."""
-    fee = fee_for(bounty.reward_amount, bounty.fee_bps)
-    if bounty.budget_amount < bounty.reward_amount + fee:
-        review(claim, "The bounty budget cannot pay this reward. The bond is held.")
-        return False
+def reserve_reward(session, bounty, claim, mode, fee):
+    """Take the reward and fee from the budget, once, when the claim becomes proven."""
     bounty.budget_amount -= bounty.reward_amount + fee
     if bounty.budget_amount < bounty.reward_amount + fee:
         bounty.status = "closed"
@@ -279,7 +312,6 @@ def reserve_reward(session, bounty, claim, mode):
                 account=settlement.arsune_account(),
             )
         )
-    return True
 
 
 def next_payment(job_id, generation, mode):
@@ -296,8 +328,6 @@ def next_payment(job_id, generation, mode):
                 continue
             if row:
                 review(claim, UNKNOWN_PAYMENT)
-                return None
-            if kind == "reward_out" and not reserve_reward(session, bounty, claim, mode):
                 return None
             payment = entry(bounty, claim, kind, recorded, memo, mode, "pending", account=receiver)
             session.add(payment)

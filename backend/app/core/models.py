@@ -109,12 +109,13 @@ class Bounty(Base):
 
 class Claim(Base):
     __tablename__ = "claims"
-    # The first proven claim holds its fingerprint for the bounty; later equal claims are duplicates.
+    # The first proven, funded claim holds its final fingerprint for the bounty; later equal
+    # claims are duplicates. An unfunded claim has no final fingerprint, so it holds nothing.
     __table_args__ = (
         Index(
-            "uq_claims_proven_fingerprint",
+            "uq_claims_proven_final_fingerprint",
             "bounty_id",
-            "fingerprint",
+            "final_fingerprint",
             unique=True,
             postgresql_where=text("outcome = 'proven'"),
         ),
@@ -129,6 +130,8 @@ class Claim(Base):
     explanation: Mapped[str] = mapped_column(Text)
     reproduction_steps: Mapped[list] = mapped_column(JSON)
     fingerprint: Mapped[str] = mapped_column(String(64))
+    # The fingerprint on the final URLs that the checker reached; set only for a funded proven claim.
+    final_fingerprint: Mapped[str | None] = mapped_column(String(64))
     # Optional tip seller: {"account", "share_bps", "tip_id"}; paid from the reward when proven.
     scout: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(20), default="received", index=True)

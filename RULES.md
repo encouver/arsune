@@ -96,7 +96,7 @@ A site owner pays for proven functional faults on the owner's own site. Independ
 
 - Each transfer into Arsune is a signed NEP-413 transfer of the exact amount of the bounty token to Arsune's account. The memo must be exact: `arsune:fund:{fund_id}` for funding and `arsune:bond:{claim_id}` for a bond. The client makes each ID as a lowercase UUID v4 and can use it only once.
 - Arsune checks the signature, sender, receiver, token, amount, memo, contract, and deadline before it saves the claim or the funding row. An invalid transfer creates no claim.
-- A claim is accepted only when the bounty is open and its budget covers one reward and its fee.
+- A claim is accepted only when the bounty is open and its budget covers one reward and its fee. A closed bounty rejects new claims with 409.
 
 ### Outcomes
 
@@ -104,18 +104,21 @@ A site owner pays for proven functional faults on the owner's own site. Independ
 | --- | --- | --- |
 | Proven | The checker reproduced the fault, and no other claim holds its fingerprint | The budget pays the reward and the fee. The hunter receives the reward minus the scout share, plus the bond. The scout receives the scout share. |
 | Rejected | The checker observed evidence that contradicts the claim | The bond is forfeited and added to the budget. |
+| Unfunded | The checker reproduced the fault, but the budget cannot pay one reward and its fee | The bond is refunded. No reward. The claim does not hold the fault, and the bounty closes. |
 | Duplicate | Another claim already proved the same fault | The bond is refunded. No reward. |
 | Unverified | Access, resources, or scope prevent a conclusion | The bond is refunded. No reward. |
 
 - The first proven claim for a fault wins. The fingerprint names the fault: the claim type, the canonical URLs, and the details. It does not name the hunter. The database permits one proven claim for each fingerprint on a bounty.
-- A claim for a fault that is already proven is a duplicate without a new browser check.
+- The fault is held by the final URLs that the checker reached after redirects, not by the submitted URLs. A claim on a redirecting alias (for example `/shop/old-pricing`, which redirects to `/shop/pricing`) and a claim on the final page are one fault. Whichever is proven first holds it, and the other is a duplicate. For a broken link, the fault is one final source page with one final target page: two links that redirect to the same missing page are one fault, and a source page that redirects counts as the page it reaches.
+- A claim for a fault that is already proven is a duplicate. If the submitted URLs match the held fault exactly, no browser check is needed. Otherwise the fresh check finds the duplicate.
+- A proven claim that finds the budget unable to pay one reward and its fee is `unfunded`: the bond is refunded and the bounty closes. The claim holds no fault, so a later funded bounty can pay it.
 - A timeout, a blocked page, or a missing resource makes a claim unverified, not rejected. Only contradicting evidence forfeits a bond.
 
 ### Fees and shares
 
 - The fee is `reward * fee_bps / 10000`, rounded down. The default is 1000 basis points (10%). The budget pays the fee for each proven claim, in addition to the reward.
 - A hunter can name one scout for a claim, with a share of 1 to 5000 basis points (0.01% to 50%) of the reward. The scout share comes from the reward, not from the budget.
-- The bounty closes when its budget is less than one reward and its fee.
+- The bounty closes when its budget is less than one reward and its fee. The budget is reserved for a proven claim when the checker decides it, so two claims cannot be paid from the same money.
 
 ### Payment safety
 

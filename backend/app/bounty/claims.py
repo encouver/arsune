@@ -32,6 +32,14 @@ def fingerprint(claim_type: str, urls: list[str], details: dict) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def spell_url(parts) -> str:
+    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    default_port = 443 if parts.scheme == "https" else 80
+    if parts.port not in (None, default_port):
+        host = f"{host}:{parts.port}"
+    return f"{parts.scheme}://{host}{urljoin('/', parts.path or '/')}"
+
+
 async def canonical_url(url) -> str:
     """Apply the URL policy, then remove spelling differences that name the same page."""
     if not isinstance(url, str) or not 8 <= len(url) <= 2048:
@@ -39,11 +47,30 @@ async def canonical_url(url) -> str:
     parts = urlsplit(await validate_target(url))
     if parts.query:
         raise ClaimError("Claim URLs must not contain query strings.")
-    host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
-    default_port = 443 if parts.scheme == "https" else 80
-    if parts.port not in (None, default_port):
-        host = f"{host}:{parts.port}"
-    return f"{parts.scheme}://{host}{urljoin('/', parts.path or '/')}"
+    return spell_url(parts)
+
+
+def final_fingerprint(claim_type: str, urls: list[str], details: dict, evidence: list[dict]):
+    """Fingerprint the fault on the pages the browser reached after redirects.
+
+    A claim on a redirecting alias then names the same fault as a claim on the final page.
+    The query string and fragment are dropped, as they are at intake. For a broken link the
+    source and the target are each replaced by their final page, so one fault is one final
+    source page with one final target page, however many aliases lead to either.
+    """
+    final = {}
+    for observation in evidence:
+        reached = observation.get("final_url")
+        if reached and urlsplit(reached).hostname:
+            final[observation["url"]] = spell_url(urlsplit(reached))
+
+    def land(url):
+        return final.get(url, url)
+
+    if claim_type == "price_mismatch":
+        return fingerprint(claim_type, [land(u) for u in urls], details)
+    final_details = {key: land(url) for key, url in details.items()}
+    return fingerprint(claim_type, list(final_details.values()), final_details)
 
 
 async def scoped_claim(site_origin: str, claim_type: str, urls: list, details: dict):

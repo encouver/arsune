@@ -69,9 +69,11 @@ def outcome(claim: dict) -> str:
 
 
 def claim_result(claim: dict) -> str:
-    """proven, rejected, duplicate, unverified, needs_review, or open."""
+    """proven, unfunded, rejected, duplicate, unverified, needs_review, or open."""
     if claim.get("status") == "needs_review":
         return "needs_review"
+    if claim.get("status") == "unfunded":
+        return "unfunded" if resolved(claim) else "open"
     return outcome(claim) if resolved(claim) else "open"
 
 
@@ -97,7 +99,7 @@ class BountyFeed:
         claims_by, rows_for, proven, claimed = {}, {}, {}, {}
         for claim in data.get("claims", []):
             claims_by.setdefault(claim["hunter_account"], []).append(claim)
-            if outcome(claim) in {"proven", "paid"}:
+            if outcome(claim) in {"proven", "paid"} and claim.get("status") != "unfunded":
                 proven[claim["fingerprint"]] = claim
             if claim_result(claim) in {"open", "proven"}:
                 claimed.setdefault(claim["fingerprint"], claim)

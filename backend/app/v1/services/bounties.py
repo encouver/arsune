@@ -29,7 +29,7 @@ from app.settlement.base import SettlementError
 from app.settlement.near_tx import OutcomeUnknown
 from app.v1.services.jobs import JOB_ID
 
-OUTCOME_COUNTS = ("proven", "rejected", "duplicate", "unverified")
+OUTCOME_COUNTS = ("proven", "unfunded", "rejected", "duplicate", "unverified")
 
 
 def find_bounty(session, bounty_id, lock=False):
@@ -149,7 +149,7 @@ def hunter_summary(claims, ledger):
     for claim in claims:
         row = person(claim.hunter_account)
         row["claims"] += 1
-        row[claim.outcome or "pending"] += 1
+        row[claim.status if claim.status == "unfunded" else claim.outcome or "pending"] += 1
         if claim.scout:
             person(claim.scout["account"])
     for entry in ledger:
@@ -344,6 +344,8 @@ async def create_claim(bounty_id, request: CreateClaim):
         bounty = find_bounty(session, bounty_id)
         if session.get(Claim, claim_id):
             raise HTTPException(409, "This claim_id is already used.")
+        if bounty.status == "closed":
+            raise HTTPException(409, "The bounty is closed.")
         site_origin, bond = bounty.origin, bounty.bond_amount
     try:
         urls, details = await scoped_claim(

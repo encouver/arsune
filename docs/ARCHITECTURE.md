@@ -151,12 +151,13 @@ Migrations `0004` and `0005` add `bounties`, `claims` (with an optional `scout`)
 
 Each signed transfer is checked before any row is written: valid ed25519 signature, exact sender, receiver, token, amount, memo, and contract, and a future deadline. The dry settlement makes the same check, so dry runs show real signing. An invalid intent returns 422. A reused `claim_id` or `fund_id` returns 409. A transfer that fails returns 402. A transfer with an unknown result returns 504, and its claim or fund row stays held for review.
 
-The fingerprint is the SHA-256 of the claim type, the sorted canonical URLs, and the canonical details. It does not include the hunter. A partial unique index on `(bounty_id, fingerprint)` where `outcome = 'proven'` is the final rule for "first proven wins". The `outcome` column keeps the check result after `status` changes to `paid` or `needs_review`.
+The fingerprint is the SHA-256 of the claim type, the sorted canonical URLs, and the canonical details. It does not include the hunter. After the fresh check, the worker computes the `final_fingerprint` from the `final_url` of each observation (query and fragment dropped, same spelling as intake). The claim `fingerprint` stays as submitted. A partial unique index on `(bounty_id, final_fingerprint)` where `outcome = 'proven'` (migration `0006`, which backfills earlier proven rows) is the final rule for "first proven wins". For a broken link, the source and target are each replaced by their final page, so aliases of one source or of one missing target are one fault. Intake and job start compare the submitted `fingerprint` with held `final_fingerprint` values, which finds exact matches without a browser; an alias is found after its fresh observation. The `outcome` column keeps the check result after `status` changes to `paid` or `needs_review`.
 
 | Outcome | Money |
 | --- | --- |
-| Proven and unique | The budget decreases by the reward and the fee, and a `fee` row is saved. `scout_part = reward * share_bps // 10000`. The hunter receives `reward - scout_part + bond` with memo `arsune:reward:{claim_id}`; the `reward_out` and `bond_refund` rows have its transaction ID. The scout receives `scout_part` with memo `arsune:scout:{claim_id}` in a `scout_share` row. The claim becomes `paid`. The bounty becomes `closed` when its budget is less than one reward and its fee. |
+| Proven and unique | The budget decreases by the reward and the fee when the outcome is decided, and a `fee` row is saved. `scout_part = reward * share_bps // 10000`. The hunter receives `reward - scout_part + bond` with memo `arsune:reward:{claim_id}`; the `reward_out` and `bond_refund` rows have its transaction ID. The scout receives `scout_part` with memo `arsune:scout:{claim_id}` in a `scout_share` row. The claim becomes `paid`. The bounty becomes `closed` when its budget is less than one reward and its fee. |
 | Rejected | A `bond_forfeit` row is saved, and the bond is added to the budget. |
+| Proven, but the budget cannot pay the reward and fee | Checked after the duplicate test, under the bounty lock. The claim has `outcome = 'proven'` and `status = 'unfunded'`, no `final_fingerprint` (so it holds no fault), and the bounty becomes `closed`. The hunter receives the bond with memo `arsune:refund:{claim_id}` in a `bond_refund` row. No reward, fee, or scout row is saved. |
 | Duplicate or unverified | The hunter receives the bond with memo `arsune:refund:{claim_id}` in a `bond_refund` row. |
 
 The worker saves each outgoing payment row without a transaction ID before it sends that payment. A unique constraint allows one row of each kind for a claim. A repeated attempt skips rows that have a transaction ID. A row without a transaction ID means the result is unknown: the claim goes to `needs_review`, and no payment is sent again. A `SettlementError` marks the row `failed`. An `OutcomeUnknown` marks it `unknown` and records the NEAR transaction hash in the claim note. Neither is retried. A returned transaction ID is saved even if the worker lease expired during the transfer.
@@ -167,7 +168,7 @@ The coordinator recovers claims that stay `received` without a job for 5 minutes
 
 Claim checks run in parallel. Each Celery prefork process opens its own database connections, and each claim job has its own lease. The bounty row lock is held only for short database steps, never during a browser check or a transfer.
 
-Limits: duplicates are found by exact canonical URLs. A site that serves the same page at many paths can accept equal faults with different fingerprints. In `near_intents` mode, the shared relayer lock sends one transaction at a time.
+Limits: duplicates are found by the final URLs after HTTP redirects. A site that serves the same page at many paths without redirects can accept equal faults with different fingerprints. In `near_intents` mode, the shared relayer lock sends one transaction at a time.
 
 ## Verification boundary
 

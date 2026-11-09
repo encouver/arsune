@@ -446,6 +446,7 @@ def test_real_browser_claims_are_paid_rejected_and_deduplicated(client, site):
         "rejected": 0,
         "duplicate": 0,
         "unverified": 0,
+        "unfunded": 0,
         "pending": 0,
         "earned": REWARD,
         "bonds_lost": 0,
@@ -851,3 +852,127 @@ def test_near_intents_mode_uses_the_real_settlement_with_a_fake_rpc(client, site
         session.get(Job, second["job_id"]).status = "running"
     scan.run(second["job_id"])
     assert len(FakeRpc.sent) == sent
+
+
+def page_overflow(site, hunter, path):
+    url = site + path
+    return claim_payload(hunter, "horizontal_overflow", [url], {"url": url})
+
+
+def run_claim(client, bounty, payload):
+    claim = submit(client, bounty, payload)
+    scan.run(claim["job_id"])
+    return claim, claim_view(client, bounty, claim)
+
+
+def paid_rewards(bounty_id):
+    return [row for row in ledger(bounty_id) if row.kind == "reward_out"]
+
+
+@pytest.mark.parametrize("alias_first", [True, False])
+def test_redirect_alias_and_final_page_are_one_overflow_fault(client, site, alias_first):
+    bounty = open_bounty(client, site)
+    alias, final = "/shop/old-pricing", "/shop/pricing"
+    first_path, second_path = (alias, final) if alias_first else (final, alias)
+    first, view = run_claim(client, bounty, page_overflow(site, "hunter-a.testnet", first_path))
+    assert view["status"] == "paid" and view["outcome"] == "proven", view
+    second = submit(client, bounty, page_overflow(site, "hunter-b.testnet", second_path))
+    # Only the exact spelling of an already-held final page is known at arrival.
+    assert second["status"] == ("duplicate" if alias_first else "received")
+    scan.run(second["job_id"])
+    duplicate = claim_view(client, bounty, second)
+    assert duplicate["status"] == "duplicate" and duplicate["outcome"] == "duplicate", duplicate
+    assert first["id"] in duplicate["checker_reason"]
+    assert [row["kind"] for row in duplicate["ledger"]] == ["bond_in", "bond_refund"]
+    assert len(paid_rewards(bounty["id"])) == 1
+    with Session() as session:
+        held = session.get(Claim, first["id"]).final_fingerprint
+        assert held == fingerprint("horizontal_overflow", [site + final], {"url": site + final})
+
+
+def test_redirecting_source_page_is_the_same_broken_link_fault(client, site):
+    from app.demo_shop import BROKEN_LINKS, info_path
+
+    source, target = next((s, t) for s, t, *_ in BROKEN_LINKS if s == info_path("shipping"))
+    bounty = open_bounty(client, site)
+
+    def link_claim(hunter, source_path):
+        urls = [site + source_path, site + target]
+        details = {"source": urls[0], "target": urls[1]}
+        return claim_payload(hunter, "broken_link", urls, details)
+
+    _, view = run_claim(client, bounty, link_claim("hunter-a.testnet", "/shop/old-shipping"))
+    assert view["status"] == "paid", view
+    _, duplicate = run_claim(client, bounty, link_claim("hunter-b.testnet", source))
+    assert duplicate["status"] == "duplicate", duplicate
+    assert len(paid_rewards(bounty["id"])) == 1
+
+
+def test_links_that_redirect_to_one_missing_page_are_one_fault(client, proof_site):
+    page = (
+        '<html><body><a href="/a">a</a> <a href="/b">b</a> <a href="/gone">gone</a></body></html>'
+    )
+    token_path = "/.well-known/arsune-bounty.txt"
+    ProofServer.responses = {
+        "/src": (200, {"Content-Type": "text/html"}, page.encode()),
+        "/a": (302, {"Location": "/gone"}, b""),
+        "/b": (301, {"Location": "/gone"}, b""),
+        "/gone": (404, {"Content-Type": "text/html"}, b"<html><body>Gone</body></html>"),
+    }
+    bounty = client.post(
+        "/api/bounties",
+        json={
+            "url": proof_site + "/src",
+            "owner_account": "owner.testnet",
+            "reward_amount": REWARD,
+            "bond_amount": BOND,
+            "budget": FUND,
+        },
+    ).json()
+    ProofServer.responses[token_path] = (200, {}, bounty["proof_token"].encode())
+    assert client.post(f"/api/bounties/{bounty['id']}/verify").status_code == 200
+    assert fund(client, bounty).status_code == 200
+
+    def link_claim(hunter, target):
+        urls = [proof_site + "/src", proof_site + target]
+        return claim_payload(hunter, "broken_link", urls, {"source": urls[0], "target": urls[1]})
+
+    _, first = run_claim(client, bounty, link_claim("hunter-a.testnet", "/a"))
+    assert first["status"] == "paid", first
+    for hunter, target in (("hunter-b.testnet", "/b"), ("hunter-c.testnet", "/gone")):
+        _, view = run_claim(client, bounty, link_claim(hunter, target))
+        assert view["status"] == "duplicate", (target, view)
+    assert len(paid_rewards(bounty["id"])) == 1
+
+
+def test_proven_claim_after_the_budget_is_spent_is_refunded_as_unfunded(client, site):
+    bounty = open_bounty(client, site, amount=REWARD + FEE)
+    paid = submit(client, bounty, broken_link(site, "hunter-a.testnet"))
+    late = submit(client, bounty, overflow(site, "hunter-b.testnet"))
+    seed_result(paid["job_id"])
+    scan.run(paid["job_id"])
+    assert claim_view(client, bounty, paid)["status"] == "paid"
+    assert client.get(f"/api/bounties/{bounty['id']}").json()["status"] == "closed"
+
+    seed_result(late["job_id"])
+    scan.run(late["job_id"])
+    view = claim_view(client, bounty, late)
+    assert view["status"] == "unfunded" and view["outcome"] == "proven", view
+    assert view["settled_at"]
+    assert [row["kind"] for row in view["ledger"]] == ["bond_in", "bond_refund"]
+    [refund] = [row for row in view["ledger"] if row["kind"] == "bond_refund"]
+    assert refund["amount"] == BOND and refund["tx_id"].startswith("dry-")
+    assert refund["memo"] == f"arsune:refund:{late['id']}"
+    detail = client.get(f"/api/bounties/{bounty['id']}").json()
+    assert detail["status"] == "closed" and detail["budget_amount"] == 0
+    assert len(paid_rewards(bounty["id"])) == 1
+    assert {h["account"]: h for h in detail["hunters"]}["hunter-b.testnet"]["unfunded"] == 1
+    with Session() as session:
+        assert session.get(Claim, late["id"]).final_fingerprint is None
+
+    scan.run(late["job_id"])  # a repeated message neither pays nor refunds again
+    assert len([r for r in ledger(bounty["id"], late["id"]) if r.kind == "bond_refund"]) == 1
+    rejected = client.post(
+        f"/api/bounties/{bounty['id']}/claims", json=broken_link(site, "hunter-c.testnet")
+    )
+    assert rejected.status_code == 409 and "closed" in rejected.json()["detail"]
