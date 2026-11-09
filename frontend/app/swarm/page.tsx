@@ -23,6 +23,10 @@ const LEDGER_LABELS: Record<string, string> = {
   fee: "Arsune fee",
   scout_share: "Scout share",
 };
+const STATUS_LABELS: Record<string, string> = {
+  unfunded: "proven, unfunded",
+  needs_review: "needs review",
+};
 const GLYPHS: Record<string, string> = {
   searching: "◌",
   negotiating: "⇄",
@@ -35,6 +39,23 @@ const GLYPHS: Record<string, string> = {
 };
 
 type Flash = Record<string, { kind: "paid" | "lost"; until: number }>;
+type Names = Map<string, string>;
+
+// Agent name first (hunter-057), then the account, so 64-hex accounts stay readable.
+function Who({ account, names }: { account: string; names: Names }) {
+  const name = names.get(account);
+  return (
+    <span className="sw-acct" title={account}>
+      {name ? (
+        <>
+          <b>{name}</b> {account}
+        </>
+      ) : (
+        account
+      )}
+    </span>
+  );
+}
 
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
@@ -204,6 +225,10 @@ export default function SwarmPage() {
     [swarm, hunters],
   );
   const flash = useFlashes(agents);
+  const names: Names = useMemo(
+    () => new Map((swarm?.agents ?? []).map((a) => [a.account, a.id])),
+    [swarm],
+  );
   const claims = useMemo(
     () =>
       [...(bounty?.claims ?? [])].sort((a, b) =>
@@ -401,7 +426,7 @@ export default function SwarmPage() {
                 <li className="sw-empty">No claims yet.</li>
               )}
               {claims.slice(0, 60).map((c) => (
-                <ClaimRow key={c.id} claim={c} />
+                <ClaimRow key={c.id} claim={c} names={names} />
               ))}
             </ol>
           </section>
@@ -424,7 +449,7 @@ export default function SwarmPage() {
                     <span className="sw-kind">
                       {LEDGER_LABELS[r.kind] ?? r.kind}
                     </span>
-                    <span className="sw-acct">{r.account}</span>
+                    <Who account={r.account} names={names} />
                     <strong>{usdc(r.amount)} USDC</strong>
                     {rowDry ? (
                       <span className="sw-sim sw-sim-small">Simulated</span>
@@ -486,7 +511,7 @@ export default function SwarmPage() {
               {leaderboard.map((h, i) => (
                 <li key={h.account}>
                   <span className="sw-rank">{i + 1}</span>
-                  <span className="sw-acct">{h.account}</span>
+                  <Who account={h.account} names={names} />
                   <span className="sw-muted">{h.proven} proven</span>
                   <strong>{usdc(h.earned + h.scout_earned)} USDC</strong>
                 </li>
@@ -518,7 +543,7 @@ export default function SwarmPage() {
   );
 }
 
-function ClaimRow({ claim: c }: { claim: Claim }) {
+function ClaimRow({ claim: c, names }: { claim: Claim; names: Names }) {
   const good = c.status === "proven" || c.status === "paid";
   return (
     <li
@@ -526,15 +551,15 @@ function ClaimRow({ claim: c }: { claim: Claim }) {
       data-status={c.status}
     >
       <div className="sw-claim-top">
-        <strong>{c.hunter_account}</strong>
+        <Who account={c.hunter_account} names={names} />
         <span className={`sw-chip sw-s-${c.status}`}>
-          {c.status.replace("_", " ")}
+          {STATUS_LABELS[c.status] ?? c.status.replace("_", " ")}
         </span>
       </div>
       <div className="sw-muted">
         {c.claim_type} · {pagePath(c.urls)}
         {c.scout &&
-          ` · tip from ${c.scout.account} (${share(c.scout.share_bps)})`}
+          ` · tip from ${names.get(c.scout.account) ?? c.scout.account} (${share(c.scout.share_bps)})`}
       </div>
       {c.checker_reason && <p className="sw-reason">{c.checker_reason}</p>}
     </li>

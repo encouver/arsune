@@ -8,12 +8,20 @@ For the website demo, select **Site with faults**, read the confirmed findings a
 
 ## Docker setup
 
-Use Docker with Compose. From the repository root:
+Use Docker with Compose v2. From the repository root:
 
 ```sh
-docker compose -p arsune up --build -d
-docker compose -p arsune ps
+docker compose up --build --wait
+docker compose ps
 ```
+
+This starts PostgreSQL, Redis, the migrations, the API, the worker (four claim checks at a time), the coordinator, the demo site, the interface, and the swarm. The command returns when every service is healthy. The swarm then runs 100 hunters and 10 scouts on a 60 USDC bounty on `http://demo:8541/shop/`; watch it at http://127.0.0.1:3540/swarm. Start a fresh race with `docker compose restart swarm`, and read it as text with `docker compose logs -f swarm`.
+
+The containers never read `.env`. Compose always uses dry settlement and scripted checks, so it needs no keys and moves no money. For model mode or `near_intents` settlement, use the host processes in [Development setup](#development-setup).
+
+All ports bind to 127.0.0.1. Override a taken port with `ARSUNE_UI_PORT` (3540), `ARSUNE_API_PORT` (8540), `ARSUNE_DEMO_PORT` (8541), `ARSUNE_SWARM_PORT` (8590), `ARSUNE_POSTGRES_PORT` (55432), or `ARSUNE_REDIS_PORT` (56379). Use a different project name (`-p`) to run a second copy next to the first one.
+
+`scripts/record_demo.sh` records the swarm board at 1440x900 during a fresh race and writes `.data/demo/arsune-swarm.mp4` and a full-page screenshot. It restarts the Compose `swarm` service and needs uv with Playwright Chromium and an ffmpeg with libx264. For another project or port, run for example `COMPOSE_PROJECT_NAME=arsune-judge ARSUNE_UI_PORT=3640 scripts/record_demo.sh`.
 
 Select **Site with faults** in the interface. This scans the controlled site and adds a labeled false claim. Select **Corrected site** to create a new report after all fixture faults are removed. Both buttons use scripted mode and do not make paid model calls.
 
@@ -27,13 +35,9 @@ The interface lists recent checks and opens saved reports with `/?job=<id>`. The
 
 Scripted price checks need no model key. They support named visible price cards with explicit ISO currency and monthly or yearly terms. Check the report's price coverage before using the result: excluded offers are not passing checks. The isolated `/prices/{case}/{page}` demo routes support repeatable price tests.
 
-Compose binds the interface and service ports to the local machine. It uses separate Arsune database, queue, and evidence volumes. In container reports, the demo address is `http://demo:8541`; the browser on your machine can open the same fixture at http://127.0.0.1:8541/faulty/.
+Compose uses separate Arsune database, queue, and evidence volumes. In container reports, the demo address is `http://demo:8541`; the browser on your machine can open the same fixture at http://127.0.0.1:8541/faulty/.
 
-To stop the stack and retain data:
-
-```sh
-docker compose -p arsune stop
-```
+To stop the stack and retain data, run `docker compose stop`. To delete the containers and volumes, run `docker compose down -v`.
 
 ## Development setup
 

@@ -1,14 +1,18 @@
 name: arsune
+# Full demo: `docker compose up --build --wait`, then open http://127.0.0.1:3540/swarm.
+# The containers never read .env and always use dry settlement: no keys, no money.
+# Host ports bind to 127.0.0.1 only. Override them with ARSUNE_UI_PORT, ARSUNE_API_PORT,
+# ARSUNE_DEMO_PORT, ARSUNE_SWARM_PORT, ARSUNE_POSTGRES_PORT and ARSUNE_REDIS_PORT.
 x-backend: &backend
   build: .
-  env_file:
-    - path: .env
-      required: false
+  init: true
   environment: &environment
     ARSUNE_DATABASE_URL: postgresql+psycopg://arsune:arsune@postgres:5432/arsune
     ARSUNE_REDIS_URL: redis://redis:6379/0
     ARSUNE_DEMO_URL: http://demo:8541
     ARSUNE_EVIDENCE_DIR: /data/evidence
+    ARSUNE_SETTLEMENT_MODE: dry
+    PYTHONUNBUFFERED: "1"
   volumes:
     - evidence:/data/evidence
   depends_on:
@@ -23,7 +27,7 @@ services:
       POSTGRES_USER: arsune
       POSTGRES_PASSWORD: arsune
       POSTGRES_DB: arsune
-    ports: ["127.0.0.1:55432:5432"]
+    ports: ["127.0.0.1:${ARSUNE_POSTGRES_PORT:-55432}:5432"]
     volumes: ["postgres:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U arsune"]
@@ -32,7 +36,7 @@ services:
   redis:
     image: redis:7-alpine
     command: ["redis-server", "--appendonly", "yes"]
-    ports: ["127.0.0.1:56379:6379"]
+    ports: ["127.0.0.1:${ARSUNE_REDIS_PORT:-56379}:6379"]
     volumes: ["redis:/data"]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
@@ -43,13 +47,19 @@ services:
     command: ["alembic", "upgrade", "head"]
   api:
     <<: *backend
-    ports: ["127.0.0.1:8540:8540"]
+    ports: ["127.0.0.1:${ARSUNE_API_PORT:-8540}:8540"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8540/api/health', timeout=3)"]
+      interval: 3s
+      retries: 40
     depends_on:
       migrate:
         condition: service_completed_successfully
   worker:
     <<: *backend
-    command: ["celery", "-A", "app.workers.queue:app", "worker", "--concurrency=1", "--loglevel=INFO"]
+    # Four claim checks at a time; each runs its own Chromium.
+    command: ["celery", "-A", "app.workers.queue:app", "worker", "--concurrency=4", "--loglevel=INFO"]
+    shm_size: 1gb
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -62,16 +72,66 @@ services:
   demo:
     <<: *backend
     command: ["uvicorn", "app.demo:app", "--host", "0.0.0.0", "--port", "8541"]
-    ports: ["127.0.0.1:8541:8541"]
+    ports: ["127.0.0.1:${ARSUNE_DEMO_PORT:-8541}:8541"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8541/shop/', timeout=3)"]
+      interval: 3s
+      retries: 40
   ui:
     build:
       context: ./frontend
       args:
         ARSUNE_API_URL: http://api:8540
+        ARSUNE_SWARM_URL: http://swarm:8590
+    init: true
     environment:
       ARSUNE_API_URL: http://api:8540
-    ports: ["127.0.0.1:3540:3540"]
-    depends_on: [api]
+      ARSUNE_SWARM_URL: http://swarm:8590
+    ports: ["127.0.0.1:${ARSUNE_UI_PORT:-3540}:3540"]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:3540/swarm"]
+      interval: 3s
+      retries: 40
+    depends_on:
+      api:
+        condition: service_healthy
+  # 100 hunters and 10 scouts race on the demo shop. They are separate clients: they reach
+  # Arsune only through its HTTP API. `docker compose restart swarm` starts a fresh race.
+  swarm:
+    build: .
+    init: true
+    environment:
+      PYTHONUNBUFFERED: "1"
+    command:
+      - python
+      - -m
+      - swarm
+      - simulate
+      - --setup
+      - --api=http://api:8540
+      - --site=http://demo:8541/shop/
+      - --hunters=100
+      - --scouts=10
+      - --budget=60000000
+      - --state-host=0.0.0.0
+      - --hold
+    shm_size: 1gb
+    ports: ["127.0.0.1:${ARSUNE_SWARM_PORT:-8590}:8590"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8590/state', timeout=3)"]
+      interval: 3s
+      retries: 40
+    depends_on:
+      api:
+        condition: service_healthy
+      demo:
+        condition: service_healthy
+      worker:
+        condition: service_started
+      coordinator:
+        condition: service_started
+      ui:
+        condition: service_healthy
 volumes:
   postgres:
   redis:

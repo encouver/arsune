@@ -1262,7 +1262,9 @@ footer > span {
 .sw-chip { border-radius: 99px; padding: 0 9px; font-size: 11px; font-weight: 700; background: #e8ebe4; text-transform: capitalize; white-space: nowrap; }
 .sw-s-proven, .sw-s-paid, .sw-tip-sold { background: var(--lime); color: #25400f; }
 .sw-s-rejected, .sw-tip-declined { background: #f7d4cc; color: #7a1f17; }
-.sw-s-checking, .sw-s-received, .sw-tip-countered { background: #fbe8b0; color: #5c4400; }
+.sw-s-checking, .sw-s-unfunded, .sw-s-needs_review, .sw-s-received, .sw-tip-countered { background: #fbe8b0; color: #5c4400; }
+.sw-claim-top .sw-acct { min-width: 0; }
+.sw-acct b { color: var(--ink); margin-right: 4px; }
 .sw-ledger li { display: grid; grid-template-columns: 1fr auto; gap: 0 10px; }
 .sw-ledger .sw-acct { grid-column: 1; font-size: 11px; color: var(--muted); }
 .sw-ledger strong { grid-column: 2; grid-row: 1; }
