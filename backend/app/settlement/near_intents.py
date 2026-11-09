@@ -1,0 +1,414 @@
+"""USDC settlement inside the NEAR Intents Verifier contract (intents.near, mainnet only).
+
+Every money movement is a NEP-413 signed `transfer` intent passed to
+`execute_intents`. Hunter agents can use `sign_transfer` to build the bond they
+send to Arsune; Arsune uses `verify_signed_transfer`, `simulate` and `execute`.
+See docs/SETTLEMENT.md for the payload format and sources.
+"""
+
+import base64
+import binascii
+import hashlib
+import json
+import secrets
+import struct
+from datetime import UTC, datetime, timedelta
+
+from nacl.exceptions import BadSignatureError
+from nacl.signing import VerifyKey
+from pydantic import SecretStr
+
+from app.core.config import Settings, settings
+from app.settlement.base import SettlementError
+from app.settlement.near_tx import (
+    TGAS,
+    NearRpc,
+    decode_ed25519,
+    encode_ed25519,
+    load_signing_key,
+    outcome_logs,
+    public_key_text,
+)
+
+NEP413_TAG = 2**31 + 413
+VERSIONED_NONCE_MAGIC = bytes.fromhex("5628f6c6")
+EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
+EXECUTE_GAS = 100 * TGAS
+EXECUTE_DEPOSIT = 0  # execute_intents is not payable; only gas is spent
+ADD_KEY_GAS = 100 * TGAS
+PAY_DEADLINE = timedelta(minutes=5)
+SIGNED_KEYS = {"standard", "payload", "public_key", "signature"}
+PAYLOAD_KEYS = {"recipient", "nonce", "message"}
+MESSAGE_KEYS = {"signer_id", "deadline", "intents"}
+TRANSFER_KEYS = {"intent", "receiver_id", "tokens", "memo"}
+
+
+def _rpc(rpc: NearRpc | None) -> NearRpc:
+    return rpc or NearRpc(settings.near_rpc_url)
+
+
+def _contract(contract: str | None) -> str:
+    return contract or settings.intents_contract
+
+
+def nep413_hash(message: str, nonce: bytes, recipient: str) -> bytes:
+    """sha256(borsh(tag, payload)) with no callbackUrl, as in defuse-nep413."""
+
+    def string(value: str) -> bytes:
+        data = value.encode()
+        return struct.pack("<I", len(data)) + data
+
+    data = struct.pack("<I", NEP413_TAG) + string(message) + nonce + string(recipient) + b"\x00"
+    return hashlib.sha256(data).digest()
+
+
+def format_deadline(deadline: datetime) -> str:
+    return deadline.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def versioned_nonce(salt: bytes, deadline: datetime) -> bytes:
+    """V1 nonce: magic | version 0 | salt | deadline ns (i64 LE) | 15 random bytes."""
+    if len(salt) != 4:
+        raise SettlementError("salt must be 4 bytes")
+    nanos = (deadline - EPOCH) // timedelta(microseconds=1) * 1000
+    return (
+        VERSIONED_NONCE_MAGIC + b"\x00" + salt + struct.pack("<q", nanos) + secrets.token_bytes(15)
+    )
+
+
+def check_amount(amount: int) -> None:
+    if type(amount) is not int or amount <= 0:
+        raise SettlementError("amount must be a positive integer of the token's smallest unit")
+
+
+def current_salt(*, rpc: NearRpc | None = None, contract: str | None = None) -> bytes:
+    return bytes.fromhex(_rpc(rpc).view(_contract(contract), "current_salt", {}))
+
+
+def sign_intents(
+    account_id: str,
+    private_key: str | SecretStr,
+    intents: list[dict],
+    deadline: datetime,
+    *,
+    salt: bytes | None = None,
+    contract: str | None = None,
+    rpc: NearRpc | None = None,
+) -> dict:
+    """Return a NEP-413 signed payload for execute_intents / simulate_intents.
+
+    `salt` is the Verifier's current 4-byte salt; it is fetched over RPC when omitted.
+    """
+    if deadline.tzinfo is None:
+        raise SettlementError("deadline must be timezone-aware")
+    contract = _contract(contract)
+    key = load_signing_key(private_key)
+    if salt is None:
+        salt = current_salt(rpc=rpc, contract=contract)
+    deadline = deadline.astimezone(UTC)
+    message = json.dumps(
+        {"deadline": format_deadline(deadline), "intents": intents, "signer_id": account_id},
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    nonce = versioned_nonce(salt, deadline)
+    signature = key.sign(nep413_hash(message, nonce, contract)).signature
+    return {
+        "standard": "nep413",
+        "payload": {
+            "recipient": contract,
+            "nonce": base64.b64encode(nonce).decode(),
+            "message": message,
+        },
+        "public_key": public_key_text(key),
+        "signature": encode_ed25519(signature),
+    }
+
+
+def sign_transfer(
+    account_id: str,
+    private_key: str | SecretStr,
+    receiver_id: str,
+    token_id: str,
+    amount: int,
+    memo: str,
+    deadline: datetime,
+    *,
+    salt: bytes | None = None,
+    contract: str | None = None,
+    rpc: NearRpc | None = None,
+) -> dict:
+    """Return a signed `transfer` of `amount` (smallest unit) of `token_id` to `receiver_id`."""
+    check_amount(amount)
+    intent = {
+        "intent": "transfer",
+        "receiver_id": receiver_id,
+        "tokens": {token_id: str(amount)},
+        "memo": memo,
+    }
+    return sign_intents(
+        account_id, private_key, [intent], deadline, salt=salt, contract=contract, rpc=rpc
+    )
+
+
+def _no_duplicate_keys(pairs: list) -> dict:
+    keys = [key for key, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise SettlementError("signed message has duplicate JSON keys")
+    return dict(pairs)
+
+
+def _exact_keys(value: object, keys: set[str], what: str) -> dict:
+    if not isinstance(value, dict) or set(value) != keys:
+        raise SettlementError(f"{what} must have exactly the keys {sorted(keys)}")
+    return value
+
+
+def _parse_deadline(text: object) -> datetime:
+    if not isinstance(text, str):
+        raise SettlementError("deadline must be a string")
+    try:
+        deadline = datetime.fromisoformat(text)
+    except ValueError as error:
+        raise SettlementError("deadline is not an ISO 8601 timestamp") from error
+    if deadline.tzinfo is None:
+        raise SettlementError("deadline has no timezone")
+    return deadline
+
+
+def signed_nonce(signed: dict) -> str:
+    return signed["payload"]["nonce"]
+
+
+def verify_signed_transfer(
+    signed: dict,
+    *,
+    sender: str,
+    receiver: str,
+    token_id: str,
+    amount: int,
+    memo: str,
+    contract: str | None = None,
+    now: datetime | None = None,
+) -> None:
+    """Raise SettlementError unless `signed` is a valid, unexpired NEP-413 transfer of
+    exactly `amount` of `token_id` from `sender` to `receiver` with exactly `memo`.
+
+    Key ownership, balance, salt and nonce reuse are checked by simulate().
+    """
+    check_amount(amount)
+    signed = _exact_keys(signed, SIGNED_KEYS, "signed intent")
+    if signed["standard"] != "nep413":
+        raise SettlementError("signed intent must use the nep413 standard")
+    payload = _exact_keys(signed["payload"], PAYLOAD_KEYS, "payload")
+    if payload["recipient"] != _contract(contract):
+        raise SettlementError("signed intent is for another verifying contract")
+    try:
+        nonce = base64.b64decode(payload["nonce"], validate=True)
+    except (TypeError, binascii.Error) as error:
+        raise SettlementError("nonce is not base64") from error
+    if len(nonce) != 32 or base64.b64encode(nonce).decode() != payload["nonce"]:
+        raise SettlementError("nonce must be 32 bytes in canonical base64")
+    public_key = decode_ed25519(signed["public_key"], 32, "public_key")
+    signature = decode_ed25519(signed["signature"], 64, "signature")
+    if not isinstance(payload["message"], str):
+        raise SettlementError("message must be a JSON string")
+    digest = nep413_hash(payload["message"], nonce, payload["recipient"])
+    try:
+        VerifyKey(public_key).verify(digest, signature)
+    except BadSignatureError as error:
+        raise SettlementError("signature does not match the signed message") from error
+
+    try:
+        message = json.loads(payload["message"], object_pairs_hook=_no_duplicate_keys)
+    except ValueError as error:
+        raise SettlementError("message is not valid JSON") from error
+    message = _exact_keys(message, MESSAGE_KEYS, "message")
+    if message["signer_id"] != sender:
+        raise SettlementError("signer_id is not the expected sender")
+    if _parse_deadline(message["deadline"]) <= (now or datetime.now(UTC)):
+        raise SettlementError("signed intent deadline has passed")
+    intents = message["intents"]
+    if not isinstance(intents, list) or len(intents) != 1:
+        raise SettlementError("signed message must hold exactly one intent")
+    intent = _exact_keys(intents[0], TRANSFER_KEYS, "transfer intent")
+    if intent["intent"] != "transfer":
+        raise SettlementError("intent must be a transfer")
+    if intent["receiver_id"] != receiver:
+        raise SettlementError("transfer receiver is not the expected account")
+    if intent["tokens"] != {token_id: str(amount)}:
+        raise SettlementError("transfer token or amount does not match")
+    if intent["memo"] != memo:
+        raise SettlementError("transfer memo does not match")
+
+
+def _executed_nonces(entries: list[dict]) -> set[tuple[str, str]]:
+    return {(entry["account_id"], entry["nonce"]) for entry in entries}
+
+
+def _expected_nonces(signed_list: list[dict]) -> set[tuple[str, str]]:
+    try:
+        return {
+            (json.loads(signed["payload"]["message"])["signer_id"], signed_nonce(signed))
+            for signed in signed_list
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        raise SettlementError("signed intent is not a nep413 payload") from error
+
+
+def simulate(
+    signed_list: list[dict], *, rpc: NearRpc | None = None, contract: str | None = None
+) -> dict:
+    """Run simulate_intents (read-only). Raise SettlementError with the Verifier's reason."""
+    result = _rpc(rpc).view(_contract(contract), "simulate_intents", {"signed": signed_list})
+    if result.get("invariant_violated"):
+        raise SettlementError(f"simulation is unbalanced: {result['invariant_violated']}")
+    if not _expected_nonces(signed_list) <= _executed_nonces(result.get("intents_executed", [])):
+        raise SettlementError("simulation did not execute every signed intent")
+    return result
+
+
+def executed_intents(outcome: dict) -> set[tuple[str, str]]:
+    """(account_id, nonce) pairs from the dip4 `intents_executed` events of an outcome."""
+    executed: set[tuple[str, str]] = set()
+    for log in outcome_logs(outcome):
+        if not log.startswith("EVENT_JSON:"):
+            continue
+        event = json.loads(log.removeprefix("EVENT_JSON:"))
+        if event.get("standard") == "dip4" and event.get("event") == "intents_executed":
+            executed |= _executed_nonces(event["data"])
+    return executed
+
+
+def execute(
+    signed_list: list[dict],
+    *,
+    account_id: str | None = None,
+    private_key: str | SecretStr | None = None,
+    rpc: NearRpc | None = None,
+    contract: str | None = None,
+) -> str:
+    """Send execute_intents from the relayer account and return the tx hash once the final
+    outcome shows success and every signed intent in the executed events."""
+    key = load_signing_key(private_key or settings.near_private_key)
+    tx_hash, outcome = _rpc(rpc).call_function(
+        account_id or settings.near_account_id,
+        key,
+        _contract(contract),
+        "execute_intents",
+        {"signed": signed_list},
+        gas=EXECUTE_GAS,
+        deposit=EXECUTE_DEPOSIT,
+    )
+    if not _expected_nonces(signed_list) <= executed_intents(outcome):
+        raise SettlementError(f"transaction {tx_hash} succeeded without executing every intent")
+    return tx_hash
+
+
+def balance(
+    account_id: str,
+    token_id: str | None = None,
+    *,
+    rpc: NearRpc | None = None,
+    contract: str | None = None,
+) -> int:
+    args = {"account_id": account_id, "token_id": token_id or settings.bounty_token}
+    return int(_rpc(rpc).view(_contract(contract), "mt_balance_of", args))
+
+
+def has_public_key(
+    account_id: str, public_key: str, *, rpc: NearRpc | None = None, contract: str | None = None
+) -> bool:
+    args = {"account_id": account_id, "public_key": public_key}
+    return bool(_rpc(rpc).view(_contract(contract), "has_public_key", args))
+
+
+def register_public_key(
+    account_id: str,
+    private_key: str | SecretStr,
+    public_key: str | None = None,
+    *,
+    rpc: NearRpc | None = None,
+    contract: str | None = None,
+) -> str:
+    """Call add_public_key (1 yoctoNEAR) so a named account's key can sign intents.
+
+    Implicit (64-hex) accounts do not need this. Sends a real mainnet transaction.
+    """
+    key = load_signing_key(private_key)
+    tx_hash, _ = _rpc(rpc).call_function(
+        account_id,
+        key,
+        _contract(contract),
+        "add_public_key",
+        {"public_key": public_key or public_key_text(key)},
+        gas=ADD_KEY_GAS,
+        deposit=1,
+    )
+    return tx_hash
+
+
+class NearIntentsSettlement:
+    """Settlement over NEAR Intents. The memo is the bounty layer's idempotency key and is
+    passed through verbatim. An OutcomeUnknown error means the transfer may have happened."""
+
+    mode = "near_intents"
+
+    def __init__(self, config: Settings | None = None, rpc: NearRpc | None = None):
+        config = config or settings
+        if not config.near_account_id or not config.near_private_key.get_secret_value():
+            raise SettlementError(
+                "near_intents settlement needs ARSUNE_NEAR_ACCOUNT_ID and ARSUNE_NEAR_PRIVATE_KEY"
+            )
+        load_signing_key(config.near_private_key)
+        self.account_id = config.near_account_id
+        self._private_key = config.near_private_key
+        self.contract = config.intents_contract
+        self.token = config.bounty_token
+        self.max_amount = config.max_payment_amount
+        self.rpc = rpc or NearRpc(config.near_rpc_url)
+
+    def _guard(self, amount: int) -> None:
+        check_amount(amount)
+        if amount > self.max_amount:
+            raise SettlementError(f"amount {amount} is above max_payment_amount {self.max_amount}")
+
+    def _settle(self, signed: dict) -> str:
+        simulate([signed], rpc=self.rpc, contract=self.contract)
+        return execute(
+            [signed],
+            account_id=self.account_id,
+            private_key=self._private_key,
+            rpc=self.rpc,
+            contract=self.contract,
+        )
+
+    def collect(self, signed_intent: dict, *, sender: str, amount: int, memo: str) -> str:
+        self._guard(amount)
+        verify_signed_transfer(
+            signed_intent,
+            sender=sender,
+            receiver=self.account_id,
+            token_id=self.token,
+            amount=amount,
+            memo=memo,
+            contract=self.contract,
+        )
+        return self._settle(signed_intent)
+
+    def pay(self, receiver: str, amount: int, memo: str) -> str:
+        self._guard(amount)
+        if receiver == self.account_id:
+            raise SettlementError("cannot pay Arsune's own account")
+        signed = sign_transfer(
+            self.account_id,
+            self._private_key,
+            receiver,
+            self.token,
+            amount,
+            memo,
+            datetime.now(UTC) + PAY_DEADLINE,
+            contract=self.contract,
+            rpc=self.rpc,
+        )
+        return self._settle(signed)

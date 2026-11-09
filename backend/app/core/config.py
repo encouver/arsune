@@ -1,6 +1,7 @@
 from pathlib import Path
+from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +26,13 @@ class Settings(BaseSettings):
     model_input_usd_per_million: float | None = None
     model_output_usd_per_million: float | None = None
     model_cost_ceiling_usd: float = Field(default=0.25, gt=0, le=10)
+    settlement_mode: Literal["dry", "near_intents"] = "dry"
+    near_account_id: str = ""
+    near_private_key: SecretStr = SecretStr("")
+    near_rpc_url: str = "https://free.rpc.fastnear.com"
+    intents_contract: str = "intents.near"
+    bounty_token: str = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1"
+    max_payment_amount: int = Field(default=1_000_000, gt=0)
 
     @property
     def model_enabled(self) -> bool:
