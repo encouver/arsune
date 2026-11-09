@@ -7,6 +7,8 @@ import re
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
+from app.demo_shop import shop_response
+
 app = FastAPI()
 comparison_state = "faulty"
 bounty_token = os.getenv("ARSUNE_DEMO_BOUNTY_TOKEN", "")
@@ -217,6 +219,16 @@ def price_fixture(case: str, page: str):
     <style>body{{font:18px sans-serif;margin:16px}}.plan{{max-width:300px}}</style>
     </head><body><h1>{product}</h1><a href="/prices/{case}/{other}">Other offer page</a>
     {spacing}{price_card(text, name)}{hidden}</body></html>"""
+
+
+@app.get("/shop")
+def shop_redirect():
+    return RedirectResponse("/shop/")
+
+
+@app.get("/shop/{path:path}")
+def shop(path: str):
+    return shop_response(path)
 
 
 @app.get("/{variant}/{page:path}", response_class=HTMLResponse)
