@@ -162,6 +162,19 @@ def check_outcome(outcome: dict, tx_hash: str) -> None:
             raise SettlementError(f"transaction {tx_hash} has a failed step: {_short(step_status)}")
 
 
+def near_balance(rpc: "NearRpc", account_id: str) -> int:
+    """Liquid NEAR of an account in yoctoNEAR; 0 if the account does not exist yet."""
+    try:
+        account = rpc.call(
+            "query", {"request_type": "view_account", "finality": "final", "account_id": account_id}
+        )
+    except NearRpcError as error:
+        if error.cause == "UNKNOWN_ACCOUNT":
+            return 0
+        raise
+    return int(account["amount"])
+
+
 def outcome_logs(outcome: dict) -> list[str]:
     return [log for step in outcome.get("receipts_outcome", []) for log in step["outcome"]["logs"]]
 

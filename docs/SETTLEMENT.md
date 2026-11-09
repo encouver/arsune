@@ -159,8 +159,17 @@ Steps for an implicit Arsune account (64 hex characters):
    - Arsune's account needs no registration on the USDC contract, because the USDC never lands
      on its NEAR-side balance.
    - If the USDC goes to the Arsune account on NEAR first, that account needs a
-     `storage_deposit` on the USDC contract (0.00125 NEAR). Then the Arsune key signs
-     `ft_transfer_call` with `msg: ""`.
+     `storage_deposit` on the USDC contract (0.00125 NEAR). Wallets usually pay this for the
+     receiver. Then run `scripts/near_deposit_usdc.py --amount <units>`. The Arsune key signs
+     `ft_transfer_call` to `intents.near` with `msg: ""`, 1 yoctoNEAR and 100 Tgas.
+     - Without `--i-approve-mainnet`, the script only prints the plan and the balances: USDC on
+       the FT contract, NEAR, and USDC in `intents.near`.
+     - It refuses when one of these is true: the amount is more than 1 USDC or the account's
+       USDC balance, the storage registration is missing (it then prints the exact
+       `storage_deposit` fix), or gas could cost more than 0.02 NEAR.
+     - With the flag, it sends the call and waits for the final outcome. It checks that
+       `ft_transfer_call` kept the full amount and that the `intents.near` balance went up by
+       that amount. Then it prints the transaction hash and a nearblocks link.
 3. Run the script without the flag. Make sure that it shows the USDC and NEAR.
 4. Run it again with `--i-approve-mainnet`. Use a small amount, for example 10000 (0.01 USDC),
    to a receiver that you control.

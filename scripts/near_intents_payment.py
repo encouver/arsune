@@ -17,23 +17,11 @@ from datetime import UTC, datetime
 from app.core.config import settings
 from app.settlement import near_intents as ni
 from app.settlement.base import SettlementError
-from app.settlement.near_tx import NearRpcError
+from app.settlement.near_tx import near_balance
 
 HARD_CAP = 1_000_000  # 1 USDC: the approved budget for the first live test
 MAX_GAS_COST = 2 * 10**22  # 0.02 NEAR of prepaid gas; unused gas is refunded
 YOCTO = 10**24
-
-
-def near_balance(rpc, account_id: str) -> int:
-    try:
-        account = rpc.call(
-            "query", {"request_type": "view_account", "finality": "final", "account_id": account_id}
-        )
-    except NearRpcError as error:
-        if error.cause == "UNKNOWN_ACCOUNT":
-            return 0
-        raise
-    return int(account["amount"])
 
 
 def refuse(reason: str) -> int:
