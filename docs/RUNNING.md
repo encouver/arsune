@@ -21,7 +21,7 @@ On a completed report, select **Check again and compare** for a linked scan of t
 
 Select **Download repair report** to save a readable HTML report with available embedded screenshots. Missing or oversized evidence is identified in the file. Downloading does not publish the report or send it to anyone. JSON remains available for technical use.
 
-Existing installations must run `uv run alembic upgrade head` before starting the new API and worker. Migration `0002` adds the baseline link and comparison mapping. Migration `0003` adds incident jobs and immutable source records. Existing website jobs and history remain in place.
+Existing installations must run `uv run alembic upgrade head` before starting the new API and worker. Migration `0002` adds the baseline link and comparison mapping. Migration `0003` adds incident jobs and immutable source records. Migration `0004` adds bounties, claims, and the settlement ledger. Existing website jobs and history remain in place.
 
 The interface lists recent checks and opens saved reports with `/?job=<id>`. The metadata endpoint is `GET /api/jobs?limit=10`; pass its `next_cursor` as `cursor` to fetch older records. Limits are 1 through 50. This history belongs to the local operator; the application has no customer account separation.
 
@@ -92,6 +92,39 @@ On a completed incident, **Download incident report** saves a self-contained HTM
 The export endpoint is `GET /api/incidents/{id}/report`. Unknown jobs and malformed job IDs return 404, website jobs return 422, and unfinished jobs, invalid source evidence, or a saved report that does not match the fresh check return 409. The export limits count escaped HTML bytes. A cited record above 64,000 bytes, or a record beyond the 512,000-byte combined evidence limit, is omitted, and the file states the number of omitted citations. Evidence for supported explanations receives this budget first, then observed facts, rejected explanations, could-not-verify results, and the timeline. The engine limits bound the rest of the file, so a valid completed job exports at less than 2.6 MB. The 4,000,000-byte output limit is only a safeguard.
 
 This flow uses scripted checks only. No API key, production log connection, or paid model call is needed. The fixture bundles in `backend/tests/fixtures/incidents/` cover known, corrected, unrelated, incomplete, invalid, and instruction-like inputs.
+
+## Bug bounty
+
+The bounty API uses the dry settlement. No money moves, and every response states `"settlement_mode": "dry"`. Amounts are integers in the smallest token unit; 1 USDC is `1000000`. See [Architecture](ARCHITECTURE.md#bug-bounty) for the money rules.
+
+To run a bounty on the controlled site with the host setup, create the bounty and keep the returned `id` and `proof_token`:
+
+```sh
+curl -s -X POST http://127.0.0.1:8540/api/bounties -H 'content-type: application/json' \
+  -d '{"url":"http://127.0.0.1:8541/faulty/","owner_account":"owner.testnet","reward_amount":1000000,"bond_amount":100000,"budget":5000000}'
+```
+
+Publish the token on the controlled site, then verify and fund the bounty:
+
+```sh
+curl -s -X POST http://127.0.0.1:8541/bounty-proof-control -H 'content-type: application/json' -d '{"token":"<proof_token>"}'
+curl -s -X POST http://127.0.0.1:8540/api/bounties/<id>/verify
+curl -s -X POST http://127.0.0.1:8540/api/bounties/<id>/fund -H 'content-type: application/json' \
+  -d '{"sender":"owner.testnet","amount":5000000,"signed_intent":{"dry":true}}'
+```
+
+The controlled site serves one token at `/.well-known/arsune-bounty.txt`. You can also set `ARSUNE_DEMO_BOUNTY_TOKEN` before it starts. A real site owner puts the token in that file on the site. In the Compose setup, the API reads the controlled site at `http://demo:8541`, so use that address in the bounty URL.
+
+Submit a claim. The coordinator and worker check it and settle it:
+
+```sh
+curl -s -X POST http://127.0.0.1:8540/api/bounties/<id>/claims -H 'content-type: application/json' \
+  -d '{"hunter_account":"hunter.testnet","claim_type":"broken_link","urls":["http://127.0.0.1:8541/faulty/","http://127.0.0.1:8541/faulty/missing"],"details":{"source":"http://127.0.0.1:8541/faulty/","target":"http://127.0.0.1:8541/faulty/missing"},"explanation":"The missing link returns HTTP 404.","reproduction_steps":["Open the home page.","Follow the missing link."],"bond_intent":{"dry":true}}'
+curl -s http://127.0.0.1:8540/api/bounties/<id>
+curl -s http://127.0.0.1:8540/api/bounties/<id>/claims/<claim_id>
+```
+
+The claim detail shows the status, the checker reason, screenshot links, and ledger rows with transaction IDs. A claim in `needs_review` holds money until an operator checks the settlement account. There is no automatic retry. Error codes: 404 for unknown or malformed IDs, 409 for a bounty that is not ready, 422 for an invalid or out-of-scope claim, 429 for too many unresolved claims from one hunter, and 402 when a transfer fails.
 
 ## Model settings
 

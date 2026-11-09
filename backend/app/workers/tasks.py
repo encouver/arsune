@@ -42,6 +42,12 @@ def scan(job_id):
         async def run():
             remaining = (claim["deadline"] - store.utcnow()).total_seconds()
             async with asyncio.timeout(max(0.01, remaining)):
+                if claim["kind"] == "claim":
+                    from app.bounty.worker import check_claim
+
+                    return await check_claim(
+                        job_id, generation, claim["checkpoint"], checkpoint, output
+                    )
                 if claim["kind"] == "incident":
                     from app.incidents import run_incident, validate_bundle
                     from app.v1.services.incidents import load_sources
@@ -73,6 +79,11 @@ def scan(job_id):
                 )
 
         report = asyncio.run(run())
+        if claim["kind"] == "claim":
+            from app.bounty.worker import settle_claim
+
+            # Payments are synchronous and run outside the browser event loop.
+            report = settle_claim(job_id, generation, report)
         store.finish(job_id, generation, report=report)
     except store.LeaseLost:
         return

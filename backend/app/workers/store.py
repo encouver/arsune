@@ -2,11 +2,11 @@ import hashlib
 import json
 from datetime import timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app.core.config import settings
 from app.core.db import Session
-from app.core.models import Attempt, Event, Job, PendingAction, Record, utcnow
+from app.core.models import Attempt, Claim, Event, Job, PendingAction, Record, utcnow
 
 
 class LeaseLost(Exception):
@@ -15,6 +15,25 @@ class LeaseLost(Exception):
 
 def locked_job(session, job_id):
     return session.scalar(select(Job).where(Job.id == job_id).with_for_update())
+
+
+def hold_unsettled_claim(session, job):
+    """A failed claim job leaves money unsettled; hold it for review instead of guessing."""
+    if job.kind != "claim":
+        return
+    session.execute(
+        update(Claim)
+        .where(
+            Claim.job_id == job.id,
+            Claim.settled_at.is_(None),
+            Claim.status != "needs_review",
+        )
+        .values(
+            status="needs_review",
+            settlement_note="The check job stopped before settlement. The bond is held.",
+            updated_at=utcnow(),
+        )
+    )
 
 
 def require_claim(job, generation):
@@ -45,6 +64,7 @@ def claim(job_id):
                 previous = session.get(Attempt, f"{job.id}:{job.generation}")
                 if previous:
                     previous.status, previous.finished_at = "failed", now
+            hold_unsettled_claim(session, job)
             return None
         if job.generation:
             previous = session.get(Attempt, f"{job.id}:{job.generation}")
@@ -139,4 +159,6 @@ def finish(job_id, generation, report=None, error=None):
         attempt.status, attempt.finished_at = job.status, utcnow()
         if report:
             persist_records(session, job_id, report)
+        if error:
+            hold_unsettled_claim(session, job)
         session.query(PendingAction).filter_by(job_id=job_id).delete()

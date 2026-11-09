@@ -13,7 +13,7 @@ def evidence_path(job_id: str, name: str) -> Path:
         raise HTTPException(404, "Evidence not found")
     # find_job accepts only canonical UUIDs, so job_id is also a safe directory name.
     with Session() as session:
-        if find_job(session, job_id).kind != "website":
+        if find_job(session, job_id).kind not in ("website", "claim"):
             raise HTTPException(422, "Use incident source evidence for this job.")
     root = (settings.evidence_dir / job_id).resolve()
     path = (root / name).resolve()

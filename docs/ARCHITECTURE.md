@@ -35,6 +35,7 @@ The backend follows the application layout used in Aldea and AprobaDoc. It remai
 | `backend/app/agents/` | Generate and validate specialist candidates and call the model service |
 | `backend/app/browser/` | Control browser requests, capture observations, and repeat checks |
 | `backend/app/incidents/` | Parse incident sources, run scripted specialists, and check claims against original records |
+| `backend/app/bounty/` | Check bounty claim scope, read owner proof, run claim checks, and settle claim money |
 | `backend/app/workers/` | Run queued jobs, save progress, recover expired claims, and coordinate scan stages |
 | `backend/app/demo.py` | Serve the controlled test website |
 | `backend/migrations/` | Versioned database changes |
@@ -131,6 +132,37 @@ The interface at `/incidents` accepts files, shows progress, and opens source re
 `GET /api/incidents/{job_id}/report` exports a completed incident as self-contained HTML. It verifies the accepted source hashes, then recomputes the findings and timeline from the accepted records with the scripted engine (`recompute` uses the same proposal, checker, and summary functions as the worker). The file renders only the recomputed values, and the export returns 409 if the saved report differs in any of them. Cited event lines and deployment objects are embedded as exact escaped text with stable internal links; the parser's `deployment_texts` provides the same exact deployment text to the export, the source viewer, and the engine excerpts. The document blocks scripts and external resources, including when opened offline. Record limits count escaped bytes, finding evidence is budgeted before timeline records, and engine limits bound the other parts. Omitted record occurrences are stated explicitly.
 
 The `/demo` page links the controlled website flow and the known-incident and unrelated-timeout inputs. It reuses the existing job APIs and workers, so demo reports come from actual checks.
+
+## Bug bounty
+
+A site owner opens a bounty for a site that the owner controls, then funds it. Independent hunter agents submit claims of functional faults on that site. Each claim has a bond. The existing checker tests each claim again in a fresh browser. Arsune pays only for proven, unique claims. Security testing of any kind is out of scope.
+
+Migration `0004` adds `bounties`, `claims`, and `ledger_entries`. All amounts are integers in the smallest token unit. USDC has 6 decimals.
+
+| Step | Rule |
+| --- | --- |
+| Create | `POST /api/bounties` with `url`, `owner_account`, `reward_amount`, `bond_amount`, `fee_bps` (default 1000), and `budget`. The bounty starts as `pending_proof` with a random proof token. `budget` is a target and must cover one reward and its fee. The funded `budget_amount` starts at 0. |
+| Owner proof | `POST /api/bounties/{id}/verify` reads `{origin}/.well-known/arsune-bounty.txt` under the URL policy: validated and pinned address, 5-second request timeout, 4,096-byte limit, and at most three redirects on the bounty origin. The bounty becomes `open` only when the stripped body equals the token. |
+| Fund | `POST /api/bounties/{id}/fund` with `sender`, `amount`, and `signed_intent`, for an open bounty. A pending `fund` row is saved, `collect` runs, then the row gets the transaction ID and the budget increases. |
+| Claim | `POST /api/bounties/{id}/claims` accepts `broken_link`, `horizontal_overflow`, or `price_mismatch`. The details keys are exactly `source` and `target`, `url`, or `key`. All URLs must be on the bounty origin and must not have a query string. The claim URLs must be exactly the pages named in the details. The bounty must be open, and its budget must cover one reward and its fee. A hunter can have at most three unresolved claims on one bounty. The bond is collected with memo `arsune:bond:{claim_id}`. Then a `claim` job and its pending action are saved in one transaction. |
+| Check | Claim jobs use the existing queue task, lease, generation, and coordinator recovery. The worker calls `check_candidate` with fresh browser observations. Screenshots are kept in the job evidence folder. `confirmed` becomes `proven` or `duplicate`, `rejected` becomes `rejected`, and `unverified` stays `unverified`. A check that cannot finish is `unverified`. |
+| Read | `GET /api/bounties`, `GET /api/bounties/{id}` (bounty, budget, claims, ledger), and `GET /api/bounties/{id}/claims/{claim_id}` (evidence links and ledger rows). Malformed and unknown IDs return 404. Claim jobs are not in the job history. |
+
+The fingerprint is the SHA-256 of the claim type, the sorted canonical URLs, and the canonical details. It does not include the hunter. Canonical URLs have a lowercase host, no default port, resolved dot segments, and no fragment. A partial unique index on `(bounty_id, fingerprint)` where `outcome = 'proven'` lets only one claim hold a fingerprint. A later confirmed claim with the same fingerprint becomes `duplicate`. The `outcome` column keeps the check result after `status` changes to `paid` or `needs_review`.
+
+Claim statuses are `received`, `checking`, `proven`, `rejected`, `duplicate`, `unverified`, `paid`, and `needs_review`. A claim goes to `needs_review` when a payment result is unknown, a payment fails, the budget cannot pay a proven claim, or the claim job fails before settlement. Money for a claim in review stays held until an operator decides.
+
+| Outcome | Money |
+| --- | --- |
+| Proven and unique | The budget decreases by the reward and the fee, and a `fee` row is saved. One `pay(hunter, reward + bond, memo "arsune:reward:{claim_id}")` returns the reward and the bond. The `reward_out` and `bond_refund` rows have the same transaction ID. The claim becomes `paid`. The bounty becomes `closed` when its budget is less than one reward and its fee. |
+| Rejected | A `bond_forfeit` row is saved, and the bond is added to the budget. |
+| Duplicate or unverified | `pay(hunter, bond, memo "arsune:refund:{claim_id}")` and a `bond_refund` row. |
+
+The worker saves the outgoing payment row without a transaction ID before it calls `pay`. A unique constraint allows one row of each kind for a claim. A repeated attempt that finds a settled claim does nothing. If it finds the payment row without a transaction ID, the payment result is unknown. The claim goes to `needs_review`, and no payment is sent. A `SettlementError` marks the row `failed` and sends the claim to review. There is no automatic retry. A returned transaction ID is saved even if the worker lease expired during the transfer.
+
+`backend/app/settlement/base.py` defines the `Settlement` port with `collect` and `pay`. `app.bounty.settlement.get_settlement()` returns `DrySettlement` (mode `dry`). The dry settlement uses no network and returns IDs like `dry-<hex>`. Each bounty and claim response and each ledger row states the settlement mode. Dry results are not real payments.
+
+Limits: duplicates are found by exact canonical URLs. A site that serves the same page at many paths can accept equal faults with different fingerprints. If the API stops after a bond transfer and before the claim job is saved, the claim stays `received` with a pending `bond_in` row for operator review.
 
 ## Verification boundary
 

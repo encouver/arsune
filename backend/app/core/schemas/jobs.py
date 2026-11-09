@@ -27,7 +27,7 @@ class JobEvent(BaseModel):
 
 class JobDetail(BaseModel):
     id: str
-    kind: Literal["website", "incident"] = "website"
+    kind: Literal["website", "incident", "claim"] = "website"
     title: str = ""
     url: str
     baseline_job_id: str | None = None
@@ -50,7 +50,7 @@ class JobDetail(BaseModel):
 
 class JobSummary(BaseModel):
     id: str
-    kind: Literal["website", "incident"] = "website"
+    kind: Literal["website", "incident", "claim"] = "website"
     title: str = ""
     url: str
     mode: Literal["scripted", "model"]

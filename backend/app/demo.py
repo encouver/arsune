@@ -1,12 +1,33 @@
 """Controlled faulty and corrected websites: python -m app.demo."""
 
 import asyncio
+import os
+import re
 
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
 app = FastAPI()
 comparison_state = "faulty"
+bounty_token = os.getenv("ARSUNE_DEMO_BOUNTY_TOKEN", "")
+
+
+@app.post("/bounty-proof-control")
+async def bounty_proof_control(request: Request):
+    """Publish a bounty proof token for this controlled site only."""
+    global bounty_token
+    token = (await request.json()).get("token")
+    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", token):
+        return Response("Invalid token", status_code=422)
+    bounty_token = token
+    return {"token": token}
+
+
+@app.get("/.well-known/arsune-bounty.txt", response_class=PlainTextResponse)
+def bounty_proof():
+    if not bounty_token:
+        return PlainTextResponse("No bounty token", status_code=404)
+    return bounty_token + "\n"
 
 
 @app.post("/comparison-control")
@@ -223,8 +244,6 @@ def demo(variant: str, page: str):
 
 
 if __name__ == "__main__":
-    import os
-
     import uvicorn
 
     uvicorn.run(app, host="127.0.0.1", port=int(os.getenv("ARSUNE_DEMO_PORT", "8541")))

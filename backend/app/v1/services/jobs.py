@@ -90,7 +90,10 @@ def list_jobs(limit: int = 10, cursor: str | None = None):
         Job.created_at,
         Job.updated_at,
     )
-    query = select(*columns).order_by(Job.created_at.desc(), Job.id.desc())
+    # Claim checks belong to bounties and are listed there, not in the operator history.
+    query = (
+        select(*columns).where(Job.kind != "claim").order_by(Job.created_at.desc(), Job.id.desc())
+    )
     if cursor is not None:
         try:
             timestamp, job_id = urlsafe_b64decode(cursor.encode()).decode().split("|", 1)

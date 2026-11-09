@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.core.config import settings
 from app.core.db import Session
 from app.core.models import Attempt, Job, PendingAction, utcnow
+from app.workers import store
 from app.workers.queue import app
 
 logger = logging.getLogger(__name__)
@@ -37,6 +38,7 @@ def tick():
                     attempt = session.get(Attempt, f"{job.id}:{job.generation}")
                     if attempt:
                         attempt.status, attempt.finished_at = "failed", now
+                store.hold_unsettled_claim(session, job)
                 continue
             if job.status == "queued" or not job.lease_until or job.lease_until <= now:
                 action_id = f"{job.id}:scan"
