@@ -25,10 +25,11 @@ from app.settlement.near_tx import (
     OutcomeUnknown,
     load_signing_key,
     near_balance,
+    upfront_gas_cost,
 )
 
 HARD_CAP = 1_000_000  # 1 USDC: the approved budget for the first live test
-DEPOSIT_GAS = 100 * TGAS  # enough for ft_on_transfer + ft_resolve_transfer
+DEPOSIT_GAS = 50 * TGAS  # ft_transfer_call needs >30 Tgas; deposits burn about 9 Tgas
 ONE_YOCTO = 1  # NEP-141 requires exactly 1 yoctoNEAR on ft_transfer_call
 MAX_GAS_COST = 2 * 10**22  # 0.02 NEAR of prepaid gas; unused gas is refunded
 YOCTO = 10**24
@@ -85,7 +86,9 @@ def main(argv: list[str] | None = None) -> int:
     token = settings.bounty_token.removeprefix("nep141:")
     contract = settings.intents_contract
     rpc = NearRpc(settings.near_rpc_url)
-    gas_cost = DEPOSIT_GAS * int(rpc.call("gas_price", [None])["gas_price"])
+    gas_price = int(rpc.call("gas_price", [None])["gas_price"])
+    gas_cost = DEPOSIT_GAS * gas_price
+    upfront = upfront_gas_cost(DEPOSIT_GAS, gas_price) + ONE_YOCTO
     registered = rpc.view(token, "storage_balance_of", {"account_id": account_id}) is not None
     wallet = int(rpc.view(token, "ft_balance_of", {"account_id": account_id}))
     near = near_balance(rpc, account_id)
@@ -96,7 +99,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  signer         {account_id}")
     print(f"  call           {token} ft_transfer_call {json.dumps(call_args)}")
     print(f"  attached       {ONE_YOCTO} yoctoNEAR")
-    print(f"  prepaid gas    {DEPOSIT_GAS // TGAS} Tgas, at most {gas_cost / YOCTO:.6f} NEAR")
+    print(f"  prepaid gas    {DEPOSIT_GAS // TGAS} Tgas, burns at most {gas_cost / YOCTO:.6f} NEAR")
+    print(f"  held up front  {upfront / YOCTO:.6f} NEAR (refunded down to the gas burnt)")
     print(f"  amount         {usdc(args.amount)}")
     print(f"  USDC on account (FT contract)   {usdc(wallet)}")
     print(f"  USDC in {contract}       {usdc(intents_before)}")
@@ -108,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
         return refuse("amount is above the account's USDC balance on the FT contract")
     if gas_cost > MAX_GAS_COST:
         return refuse(f"gas could cost more than {MAX_GAS_COST / YOCTO} NEAR")
-    if near < gas_cost + ONE_YOCTO:
+    if near < upfront:
         return refuse("not enough NEAR on the account for gas")
     if not args.i_approve_mainnet:
         print("Not sent. Re-run with --i-approve-mainnet to make this real deposit.")

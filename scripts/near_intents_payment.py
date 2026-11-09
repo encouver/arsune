@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from app.core.config import settings
 from app.settlement import near_intents as ni
 from app.settlement.base import SettlementError
-from app.settlement.near_tx import near_balance
+from app.settlement.near_tx import near_balance, upfront_gas_cost
 
 HARD_CAP = 1_000_000  # 1 USDC: the approved budget for the first live test
 MAX_GAS_COST = 2 * 10**22  # 0.02 NEAR of prepaid gas; unused gas is refunded
@@ -47,7 +47,9 @@ def main(argv: list[str] | None = None) -> int:
         return refuse("receiver is Arsune's own account")
 
     rpc = settlement.rpc
-    gas_cost = ni.EXECUTE_GAS * int(rpc.call("gas_price", [None])["gas_price"])
+    gas_price = int(rpc.call("gas_price", [None])["gas_price"])
+    gas_cost = ni.EXECUTE_GAS * gas_price
+    upfront = upfront_gas_cost(ni.EXECUTE_GAS, gas_price)
     usdc = ni.balance(settlement.account_id, settlement.token, rpc=rpc)
     near = near_balance(rpc, settlement.account_id)
     print("Planned NEAR Intents transfer (mainnet)")
@@ -59,7 +61,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  amount         {args.amount} ({args.amount / 10**6:.6f} USDC)")
     print(f"  memo           {args.memo}")
     print(f"  attached       {ni.EXECUTE_DEPOSIT} yoctoNEAR")
-    print(f"  prepaid gas    {ni.EXECUTE_GAS // 10**12} Tgas, at most {gas_cost / YOCTO:.6f} NEAR")
+    print(
+        f"  prepaid gas    {ni.EXECUTE_GAS // 10**12} Tgas, burns at most {gas_cost / YOCTO:.6f} NEAR"
+    )
+    print(f"  held up front  {upfront / YOCTO:.6f} NEAR (refunded down to the gas burnt)")
     print(f"  USDC in intents.near   {usdc} ({usdc / 10**6:.6f} USDC)")
     print(f"  NEAR for gas           {near / YOCTO:.6f} NEAR")
 
@@ -69,7 +74,7 @@ def main(argv: list[str] | None = None) -> int:
         return refuse(f"gas could cost more than {MAX_GAS_COST / YOCTO} NEAR")
     if usdc < args.amount:
         return refuse("not enough USDC in intents.near for this account")
-    if near < gas_cost:
+    if near < upfront:
         return refuse("not enough NEAR on the relayer account for gas")
     if not args.i_approve_mainnet:
         print("Not sent. Re-run with --i-approve-mainnet to make this real payment.")

@@ -24,6 +24,11 @@ ED25519 = "ed25519:"
 TGAS = 10**12
 FINAL = "FINAL"
 WAIT_SECONDS = 90
+NEP366_TAG = 2**30 + 366
+# Gas is bought at max(gas price, this) per gas unit and the difference is refunded later,
+# so an account must hold prepaid gas at this price when it sends (nearcore parameters.yaml).
+MIN_GAS_PURCHASE_PRICE = 10**9
+DELEGATE_BLOCKS = 100
 # One relayer key cannot send two transactions with the same access-key nonce.
 _SEND_LOCK = threading.Lock()
 
@@ -109,6 +114,51 @@ def _string(value: str) -> bytes:
     return struct.pack("<I", len(data)) + data
 
 
+def function_call_action(method: str, args: bytes, gas: int, deposit: int) -> bytes:
+    return (
+        b"\x02"
+        + _string(method)
+        + struct.pack("<I", len(args))
+        + args
+        + struct.pack("<Q", gas)
+        + deposit.to_bytes(16, "little")
+    )
+
+
+def create_account_action() -> bytes:
+    return b"\x00"
+
+
+def transfer_action(amount: int) -> bytes:
+    return b"\x03" + amount.to_bytes(16, "little")
+
+
+def add_full_access_key_action(public_key: bytes) -> bytes:
+    """AddKey with AccessKey { nonce: 0, permission: FullAccess (variant 1) }."""
+    return b"\x05\x00" + public_key + struct.pack("<Q", 0) + b"\x01"
+
+
+def transaction(
+    signer_id: str,
+    public_key: bytes,
+    nonce: int,
+    receiver_id: str,
+    block_hash: bytes,
+    actions: list[bytes],
+) -> bytes:
+    """Borsh-encode a v0 Transaction from already encoded actions."""
+    return (
+        _string(signer_id)
+        + b"\x00"
+        + public_key
+        + struct.pack("<Q", nonce)
+        + _string(receiver_id)
+        + block_hash
+        + struct.pack("<I", len(actions))
+        + b"".join(actions)
+    )
+
+
 def function_call_tx(
     signer_id: str,
     public_key: bytes,
@@ -121,24 +171,35 @@ def function_call_tx(
     deposit: int,
 ) -> bytes:
     """Borsh-encode a v0 Transaction with a single FunctionCall action."""
-    action = (
-        b"\x02"
-        + _string(method)
-        + struct.pack("<I", len(args))
-        + args
-        + struct.pack("<Q", gas)
-        + deposit.to_bytes(16, "little")
-    )
+    action = function_call_action(method, args, gas, deposit)
+    return transaction(signer_id, public_key, nonce, receiver_id, block_hash, [action])
+
+
+def delegate_action(
+    sender_id: str,
+    receiver_id: str,
+    actions: list[bytes],
+    nonce: int,
+    max_block_height: int,
+    public_key: bytes,
+) -> bytes:
+    """Borsh-encode a NEP-366 DelegateAction (meta transaction body)."""
     return (
-        _string(signer_id)
+        _string(sender_id)
+        + _string(receiver_id)
+        + struct.pack("<I", len(actions))
+        + b"".join(actions)
+        + struct.pack("<Q", nonce)
+        + struct.pack("<Q", max_block_height)
         + b"\x00"
         + public_key
-        + struct.pack("<Q", nonce)
-        + _string(receiver_id)
-        + block_hash
-        + struct.pack("<I", 1)
-        + action
     )
+
+
+def signed_delegate_action(delegate: bytes, key: SigningKey) -> bytes:
+    """Action::Delegate: the sender signs sha256(u32 2^30+366 | DelegateAction)."""
+    digest = hashlib.sha256(struct.pack("<I", NEP366_TAG) + delegate).digest()
+    return b"\x08" + delegate + b"\x00" + key.sign(digest).signature
 
 
 def sign_tx(tx: bytes, key: SigningKey) -> tuple[str, bytes]:
@@ -162,17 +223,46 @@ def check_outcome(outcome: dict, tx_hash: str) -> None:
             raise SettlementError(f"transaction {tx_hash} has a failed step: {_short(step_status)}")
 
 
-def near_balance(rpc: "NearRpc", account_id: str) -> int:
-    """Liquid NEAR of an account in yoctoNEAR; 0 if the account does not exist yet."""
+def upfront_gas_cost(gas: int, gas_price: int) -> int:
+    """yoctoNEAR an account must hold to attach `gas` (refunded down to what is burnt)."""
+    return gas * max(gas_price, MIN_GAS_PURCHASE_PRICE)
+
+
+def access_key(rpc: "NearRpc", account_id: str, public_key: str) -> dict | None:
+    """The access key view, or None when the account or the key does not exist."""
     try:
-        account = rpc.call(
+        result = rpc.call(
+            "query",
+            {
+                "request_type": "view_access_key",
+                "finality": "final",
+                "account_id": account_id,
+                "public_key": public_key,
+            },
+        )
+    except NearRpcError as error:
+        if error.cause in {"UNKNOWN_ACCOUNT", "UNKNOWN_ACCESS_KEY"}:
+            return None
+        raise
+    return None if "error" in result else result
+
+
+def view_account(rpc: "NearRpc", account_id: str) -> dict | None:
+    """The account view, or None when the account does not exist (yet)."""
+    try:
+        return rpc.call(
             "query", {"request_type": "view_account", "finality": "final", "account_id": account_id}
         )
     except NearRpcError as error:
         if error.cause == "UNKNOWN_ACCOUNT":
-            return 0
+            return None
         raise
-    return int(account["amount"])
+
+
+def near_balance(rpc: "NearRpc", account_id: str) -> int:
+    """Liquid NEAR of an account in yoctoNEAR; 0 if the account does not exist yet."""
+    account = view_account(rpc, account_id)
+    return 0 if account is None else int(account["amount"])
 
 
 def outcome_logs(outcome: dict) -> list[str]:
@@ -224,31 +314,55 @@ class NearRpc:
         deposit: int = 0,
     ) -> tuple[str, dict]:
         """Sign, send and wait for FINAL. Return (tx hash, outcome) only on full success."""
+        args_bytes = json.dumps(args, separators=(",", ":")).encode()
+        action = function_call_action(method, args_bytes, gas, deposit)
+        return self.send_actions(signer_id, key, receiver_id, [action])
+
+    def send_actions(
+        self, signer_id: str, key: SigningKey, receiver_id: str, actions: list[bytes]
+    ) -> tuple[str, dict]:
+        """Sign a transaction of encoded actions, send it, wait for FINAL, check every step."""
         with _SEND_LOCK:
-            access = self.call(
-                "query",
-                {
-                    "request_type": "view_access_key",
-                    "finality": "final",
-                    "account_id": signer_id,
-                    "public_key": public_key_text(key),
-                },
-            )
-            tx = function_call_tx(
+            access = access_key(self, signer_id, public_key_text(key))
+            if access is None:
+                raise SettlementError(f"{signer_id} has no access key {public_key_text(key)}")
+            tx = transaction(
                 signer_id,
                 bytes(key.verify_key),
                 access["nonce"] + 1,
                 receiver_id,
                 base58.b58decode(access["block_hash"]),
-                method,
-                json.dumps(args, separators=(",", ":")).encode(),
-                gas,
-                deposit,
+                actions,
             )
             tx_hash, signed = sign_tx(tx, key)
             outcome = self._submit(base64.b64encode(signed).decode(), tx_hash, signer_id)
         check_outcome(outcome, tx_hash)
         return tx_hash, outcome
+
+    def relay(
+        self,
+        relayer_id: str,
+        relayer_key: SigningKey,
+        sender_id: str,
+        sender_key: SigningKey,
+        receiver_id: str,
+        actions: list[bytes],
+    ) -> tuple[str, dict]:
+        """NEP-366 meta transaction: `sender_id` signs `actions` for `receiver_id` and the
+        relayer pays gas and deposits. On chain the actions come from `sender_id`."""
+        access = access_key(self, sender_id, public_key_text(sender_key))
+        if access is None:
+            raise SettlementError(f"{sender_id} has no access key {public_key_text(sender_key)}")
+        delegate = delegate_action(
+            sender_id,
+            receiver_id,
+            actions,
+            access["nonce"] + 1,
+            access["block_height"] + DELEGATE_BLOCKS,
+            bytes(sender_key.verify_key),
+        )
+        signed = signed_delegate_action(delegate, sender_key)
+        return self.send_actions(relayer_id, relayer_key, sender_id, [signed])
 
     def _submit(self, signed_b64: str, tx_hash: str, signer_id: str) -> dict:
         try:

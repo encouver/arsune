@@ -25,6 +25,7 @@ from app.settlement.near_tx import (
     NearRpc,
     decode_ed25519,
     encode_ed25519,
+    function_call_action,
     load_signing_key,
     outcome_logs,
     public_key_text,
@@ -33,9 +34,12 @@ from app.settlement.near_tx import (
 NEP413_TAG = 2**31 + 413
 VERSIONED_NONCE_MAGIC = bytes.fromhex("5628f6c6")
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
-EXECUTE_GAS = 100 * TGAS
+# Mainnet transfer-only execute_intents burn about 4-8 Tgas and add_public_key about 3.3 Tgas
+# (nearblocks samples, docs/SETTLEMENT.md). Attached gas must be held up front at the minimum
+# gas purchase price (0.001 NEAR/Tgas), so keep it a few times the real need, not 100+ Tgas.
+EXECUTE_GAS = 30 * TGAS
 EXECUTE_DEPOSIT = 0  # execute_intents is not payable; only gas is spent
-ADD_KEY_GAS = 100 * TGAS
+ADD_KEY_GAS = 10 * TGAS
 PAY_DEADLINE = timedelta(minutes=5)
 SIGNED_KEYS = {"standard", "payload", "public_key", "signature"}
 PAYLOAD_KEYS = {"recipient", "nonce", "message"}
@@ -287,6 +291,7 @@ def execute(
     private_key: str | SecretStr | None = None,
     rpc: NearRpc | None = None,
     contract: str | None = None,
+    gas: int = EXECUTE_GAS,
 ) -> str:
     """Send execute_intents from the relayer account and return the tx hash once the final
     outcome shows success and every signed intent in the executed events."""
@@ -297,7 +302,7 @@ def execute(
         _contract(contract),
         "execute_intents",
         {"signed": signed_list},
-        gas=EXECUTE_GAS,
+        gas=gas,
         deposit=EXECUTE_DEPOSIT,
     )
     if not _expected_nonces(signed_list) <= executed_intents(outcome):
@@ -321,6 +326,12 @@ def has_public_key(
 ) -> bool:
     args = {"account_id": account_id, "public_key": public_key}
     return bool(_rpc(rpc).view(_contract(contract), "has_public_key", args))
+
+
+def add_public_key_action(public_key: str) -> bytes:
+    """FunctionCall action for intents.near add_public_key (1 yoctoNEAR), e.g. for relay()."""
+    args = json.dumps({"public_key": public_key}, separators=(",", ":")).encode()
+    return function_call_action("add_public_key", args, ADD_KEY_GAS, 1)
 
 
 def register_public_key(

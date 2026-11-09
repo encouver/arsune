@@ -94,7 +94,7 @@ def run(monkeypatch, capsys):
 def test_without_approval_only_the_plan_is_printed(run):
     code, output, rpc = run("--amount", "1000000")
     assert code == 1 and "Not sent" in output
-    assert '"msg": ""' in output and "1 yoctoNEAR" in output and "100 Tgas" in output
+    assert '"msg": ""' in output and "1 yoctoNEAR" in output and "50 Tgas" in output
     assert "2000000 (2.000000 USDC)" in output
     assert rpc.sent == []
 
@@ -122,7 +122,7 @@ def test_missing_storage_registration_prints_the_fix(run):
 
 
 def test_gas_limits_are_enforced(run):
-    code, output, rpc = run("--amount", "1000", "--i-approve-mainnet", gas_price=300_000_000)
+    code, output, rpc = run("--amount", "1000", "--i-approve-mainnet", gas_price=500_000_000)
     assert code == 2 and "gas could cost" in output
     code, output, rpc = run("--amount", "1000", "--i-approve-mainnet", gas_price=10**8, near=0)
     assert code == 2 and "not enough NEAR" in output
@@ -142,7 +142,7 @@ def test_approved_deposit_sends_one_bounded_call_and_checks_the_credit(run):
     assert "https://nearblocks.io/txns/TxHash111" in output
     assert "1000000 (1.000000 USDC)" in output
     call_args = {"receiver_id": "intents.near", "amount": "1000000", "msg": ""}
-    assert rpc.sent == [(ACCOUNT, TOKEN, "ft_transfer_call", call_args, 100 * TGAS, 1)]
+    assert rpc.sent == [(ACCOUNT, TOKEN, "ft_transfer_call", call_args, 50 * TGAS, 1)]
 
 
 def test_partial_refund_or_failed_step_is_reported(run):

@@ -71,7 +71,8 @@ These references were checked by unit tests:
 balance, salt, nonce reuse and deadline. It also requires that every signed nonce is in
 `intents_executed`.
 
-`execute` signs a v0 transaction with one FunctionCall: `execute_intents`, 100 Tgas, 0 deposit.
+`execute` signs a v0 transaction with one FunctionCall: `execute_intents`, 30 Tgas (callers can
+pass `gas=`), 0 deposit.
 It sends the transaction with `send_tx` and `wait_until: FINAL`. It returns the transaction hash
 only when all of these are true:
 
@@ -148,20 +149,20 @@ account and `simulate_intents` only. It sends no transaction. The Verifier gave 
 
 Steps for an implicit Arsune account (64 hex characters):
 
-1. Send about 0.05 NEAR to the account ID. This creates the account. 100 Tgas prepaid is
-   at most 0.01 NEAR at the current gas price (1e8 yocto/gas). Unused gas is refunded.
+1. Send NEAR to the account ID. This creates the account. See "Gas: what must be held up
+   front" below: 0.2 NEAR covers the payment, the deposit, the swarm setup and the live race.
 2. Put USDC into `intents.near` for the account. The cheapest way is from any wallet that
    holds native NEAR USDC: call `ft_transfer_call` on
    `17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1` with
    `{"receiver_id":"intents.near","amount":"1000000","msg":"<ARSUNE_NEAR_ACCOUNT_ID>"}`,
-   1 yoctoNEAR and 100 Tgas. Because `msg` contains the account ID, the deposit goes to Arsune.
+   1 yoctoNEAR and 50 Tgas. Because `msg` contains the account ID, the deposit goes to Arsune.
    - `intents.near` already has its USDC storage registration.
    - Arsune's account needs no registration on the USDC contract, because the USDC never lands
      on its NEAR-side balance.
    - If the USDC goes to the Arsune account on NEAR first, that account needs a
      `storage_deposit` on the USDC contract (0.00125 NEAR). Wallets usually pay this for the
      receiver. Then run `scripts/near_deposit_usdc.py --amount <units>`. The Arsune key signs
-     `ft_transfer_call` to `intents.near` with `msg: ""`, 1 yoctoNEAR and 100 Tgas.
+     `ft_transfer_call` to `intents.near` with `msg: ""`, 1 yoctoNEAR and 50 Tgas.
      - Without `--i-approve-mainnet`, the script only prints the plan and the balances: USDC on
        the FT contract, NEAR, and USDC in `intents.near`.
      - It refuses when one of these is true: the amount is more than 1 USDC or the account's
@@ -173,6 +174,87 @@ Steps for an implicit Arsune account (64 hex characters):
 3. Run the script without the flag. Make sure that it shows the USDC and NEAR.
 4. Run it again with `--i-approve-mainnet`. Use a small amount, for example 10000 (0.01 USDC),
    to a receiver that you control.
+
+## Gas: what must be held up front
+
+nearcore buys attached gas at `max(gas price, min_gas_purchase_price)`. That minimum is
+1e9 yocto/gas (0.001 NEAR per Tgas, `parameters.yaml`), ten times the gas price of 1e8. The
+difference is refunded one block later, so the real cost stays at the gas price.
+
+- An account must hold 0.001 NEAR for each Tgas that it attaches. For 100 Tgas, that is 0.1 NEAR.
+- Each new account also costs a fixed 0.007 NEAR (`account_creation_charge`). The protocol keeps
+  this back from the gas refund.
+- Accounts of 770 bytes or less need no storage balance (zero-balance accounts).
+
+Attached gas is therefore kept near the real need, from nearblocks samples:
+
+| Call | Real use | Attached | Held up front |
+| - | - | - | - |
+| `execute_intents` with only `transfer` intents | 3.6 to 8.2 Tgas | 30 Tgas (`EXECUTE_GAS`) | 0.03 NEAR |
+| `add_public_key` | 3.3 Tgas | 10 Tgas (`ADD_KEY_GAS`) | 0.01 NEAR |
+| `ft_transfer_call` deposit | about 9 Tgas (more than 30 Tgas must be attached) | 50 Tgas | 0.05 NEAR |
+
+The payment and deposit scripts check the held amount against the NEAR balance. They check
+the gas-price cost (at most 0.02 NEAR) against the budget.
+
+## Swarm accounts
+
+`scripts/near_swarm_accounts.py` gives each agent its own named account under one parent,
+so every on-chain action traces back to one agent. Steps, each skipped when the chain shows it
+is already done (the script resumes after a failure):
+
+1. **Parent.** Arsune calls `create_account` on `near`, with
+   `{"new_account_id": "<parent>.near", "new_public_key": "ed25519:..."}`, 0 deposit and 50 Tgas.
+   - The `near` account runs near-linkdrop, which provides
+     `create_account(new_account_id, new_public_key)` (payable).
+   - The call returns `true` when the account is created. If creation fails, the contract
+     refunds the deposit and returns `false`.
+   - Before this step, the script checks the name with `view_account`. If the name exists and
+     the key from the file is not on it, the script refuses.
+2. **Sub-accounts.** The script creates `owner`, `hunter-1..N` and `scout-1..M` under the
+   parent. Each is a `CreateAccount` + `AddKey(full access)` from the parent, with a fresh key.
+   - The parent signs a NEP-366 `DelegateAction`. Arsune relays it and pays the gas.
+   - On chain, the parent creates each sub-account.
+3. **Key registration.** Each sub-account calls `add_public_key` on `intents.near` with
+   1 yoctoNEAR, through the same relay. The predecessor is the sub-account itself.
+4. **USDC.** One `execute_intents` (50 Tgas) carries one message that Arsune signs. The message
+   has a `transfer` to `owner` (default 0.5 USDC) and to each hunter (default 0.02 USDC).
+   The amounts are top-ups to those targets.
+
+Arsune pays all gas and deposits. So the new accounts hold no NEAR and stay zero-balance
+accounts. Funded sub-accounts would have tied up about 0.1 NEAR. That is more than the budget.
+
+Keys:
+
+- The script writes the keys to `ARSUNE_SWARM_ACCOUNTS_FILE` (default `.data/swarm-accounts.json`,
+  mode 600) before it sends any transaction.
+- An existing file keeps its keys. Roles that are not requested now also stay in the file.
+- The swarm runner loads the accounts with
+  `app.settlement.swarm_accounts.load_swarm_accounts()`. It returns `role -> SwarmAccount(role,
+  account_id, public_key, private_key: SecretStr)`.
+
+Without `--i-approve-mainnet`, the script makes only read-only calls and prints a cost table.
+It refuses when one of these is true:
+
+- Total NEAR is more than 0.12.
+- Total USDC is more than 0.9.
+- A target is more than `ARSUNE_MAX_PAYMENT_AMOUNT`.
+- Arsune holds less than total NEAR plus the largest up-front hold, or less USDC than the total.
+- A name is taken.
+
+Default cost table at a gas price of 1e8. These are upper bounds: they assume that all attached
+gas burns.
+
+| Step | Tx | NEAR each | NEAR | Held up front |
+| - | - | - | - | - |
+| create `arsune-swarm.near` with `near.create_account` | 1 | 0.012220 | 0.012220 | 0.059196 |
+| create sub-account (relayed) | 10 | 0.007974 | 0.079736 | 0.016736 |
+| `add_public_key` on `intents.near` (relayed) | 10 | 0.001281 | 0.012812 | 0.012812 |
+| `execute_intents`, 7 USDC transfers | 1 | 0.005220 | 0.005220 | 0.052196 |
+| **Total** | 22 | | **0.109987 NEAR** | Arsune must hold 0.169 NEAR |
+
+Total USDC is 0.62 (0.5 to the owner and 6 × 0.02 to the hunters). The expected real cost is
+about 0.09 NEAR, mostly 11 × 0.007 NEAR for account creation.
 
 ## Known limits
 
@@ -206,5 +288,14 @@ Steps for an implicit Arsune account (64 hex characters):
 - [near-api-js](https://github.com/near/near-api-js) `test/unit/transactions/serialize.test.ts` and `data/*.json`
 - [NEAR RPC transactions](https://docs.near.org/api/rpc/transactions.md): `send_tx`, `tx`, `wait_until`, `TIMEOUT_ERROR`
 - [NEP-413](https://github.com/near/NEPs/blob/master/neps/nep-0413.md)
+- [near-linkdrop](https://github.com/near/near-linkdrop) `src/lib.rs` (`create_account`, refund callback)
+- [Creating named accounts](https://docs.near.org/protocol/tutorials/creating-implicit-and-named-accounts.md),
+  [Gas](https://docs.near.org/protocol/transactions/gas.md) (buy and burn price, account creation charge),
+  [Accounts for integrators](https://docs.near.org/integrations/accounts.md) (zero-balance accounts)
+- nearcore `core/parameters/res/runtime_configs/parameters.yaml` (fees, `min_gas_purchase_price`)
+  and `core/primitives/src/fees.rs` (the relayer pays delegate deposits)
+- near-api-js `serialize.test.ts` vectors (multi-action transaction, signed delegate)
+- nearblocks API samples: `add_public_key` tx FBTRk6jR… (3.3 Tgas), deposits DWv4AkrL… and
+  Bn3iC9B1…, and 25 recent `execute_intents` on `intents.near`
 - [Deprecation of near.org RPC endpoints](https://near.org/blog/deprecation-of-near-org-and-pagoda-co-rpc-endpoints)
 - [NEAR RPC providers](https://docs.near.org/api/rpc/providers)
