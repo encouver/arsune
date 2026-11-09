@@ -1,6 +1,7 @@
 const tasks = [
   ["/", "Website checks"],
   ["/incidents", "Incident investigation"],
+  ["/swarm", "Swarm"],
   ["/demo", "Local demo"],
 ] as const;
 
