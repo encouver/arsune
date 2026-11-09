@@ -304,3 +304,127 @@ test("renders 100 agents at desktop size", async ({ page }, testInfo) => {
   });
   console.log("SCREENSHOT", testInfo.outputPath("swarm-100-agents-1440.png"));
 });
+
+function raceAgents(finished: boolean) {
+  const mk = (i: number, over: Record<string, unknown>) => ({
+    id: `hunter-${String(i).padStart(2, "0")}`,
+    account: `hunter${i}.testnet`,
+    role: "hunter",
+    strategy: "s",
+    state: finished ? "done" : "searching",
+    balance: 4_000_000,
+    claims: 0,
+    proven: 0,
+    earned: 0,
+    bonds_lost: 0,
+    ...over,
+  });
+  return [
+    mk(1, { claims: 2, proven: 2, earned: 5_000_000 }),
+    mk(2, { claims: 1, bonds_lost: 300_000 }),
+    mk(3, { claims: 3, bonds_lost: 900_000, state: "broke", balance: 0 }),
+    mk(4, {}),
+    mk(5, { claims: 2, proven: 1, earned: 2_000_000, bonds_lost: 300_000 }),
+    mk(6, { claims: 1, bonds_lost: 100_000, earned: 0 }),
+    mk(7, {
+      role: "scout",
+      claims: 0,
+      proven: 3,
+      earned: 1_500_000,
+    }),
+  ];
+}
+
+test("mid-race tiles keep persistent red marks for lost bonds and broke", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await mock(page, { swarm: { ...swarm(), agents: raceAgents(false) } });
+  await page.goto("/swarm");
+  const tiles = page.getByTestId("agent-tile");
+  await expect(tiles).toHaveCount(7);
+  const lost = tiles.nth(1);
+  await expect(lost).toHaveAttribute("data-lost", "true");
+  await expect(lost.getByTestId("tile-mark")).toHaveText("−0.30");
+  await expect(lost.getByTestId("tile-mark")).toHaveAttribute(
+    "data-kind",
+    "lost",
+  );
+  await expect(lost).toHaveCSS("box-shadow", /rgb\(229, 67, 43\)/);
+  const broke = tiles.nth(2);
+  await expect(broke).toHaveAttribute("data-state", "broke");
+  await expect(broke).toHaveCSS("box-shadow", /rgb\(255, 77, 51\)/);
+  await expect(tiles.nth(0).getByTestId("tile-mark")).toHaveAttribute(
+    "data-kind",
+    "earned",
+  );
+  await expect(page.getByTestId("race-results")).toHaveCount(0);
+  await expect(page.getByTestId("biggest-losers")).toContainText("0.9");
+  await page.screenshot({
+    path: testInfo.outputPath("swarm-midrace-1440.png"),
+    fullPage: true,
+  });
+  console.log("SCREENSHOT", testInfo.outputPath("swarm-midrace-1440.png"));
+});
+
+test("finished race colors tiles by result and counts them", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await mock(page, {
+    swarm: { ...swarm(), finished: true, agents: raceAgents(true) },
+  });
+  await page.goto("/swarm");
+  const tiles = page.getByTestId("agent-tile");
+  await expect(tiles).toHaveCount(7);
+  await expect(tiles.nth(0)).toHaveAttribute("data-result", "earned");
+  await expect(tiles.nth(1)).toHaveAttribute("data-result", "lost");
+  await expect(tiles.nth(2)).toHaveAttribute("data-result", "broke");
+  await expect(tiles.nth(3)).toHaveAttribute("data-result", "none");
+  await expect(tiles.nth(0)).toHaveCSS("background-color", "rgb(79, 155, 58)");
+  await expect(tiles.nth(1)).toHaveCSS("background-color", "rgb(208, 51, 42)");
+  await expect(tiles.nth(1).getByTestId("tile-mark")).toBeVisible();
+  await expect(page.getByTestId("result-counts")).toHaveText(
+    "3 agents earned · 2 lost money · 1 went broke · 1 found nothing",
+  );
+  await page.screenshot({
+    path: testInfo.outputPath("swarm-finished-1440.png"),
+    fullPage: true,
+  });
+  console.log("SCREENSHOT", testInfo.outputPath("swarm-finished-1440.png"));
+});
+
+test("claim stream filter shows only the chosen status", async ({ page }) => {
+  await mock(page);
+  await page.goto("/swarm");
+  const rows = page.getByTestId("claim-row");
+  await expect(rows).toHaveCount(2);
+  await page.getByTestId("filter-rejected").click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toHaveAttribute("data-status", "rejected");
+  await expect(rows.first()).toHaveCSS("border-left-color", "rgb(208, 51, 42)");
+  await page.getByTestId("filter-paid").click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toHaveAttribute("data-status", "paid");
+  await page.getByTestId("filter-duplicate").click();
+  await expect(rows).toHaveCount(0);
+  await expect(page.getByTestId("claim-stream")).toContainText(
+    "No claims match",
+  );
+  await page.getByTestId("filter-all").click();
+  await expect(rows).toHaveCount(2);
+});
+
+test("scouts show proven count from swarm state", async ({ page }) => {
+  const sw = swarm();
+  sw.agents = raceAgents(false).map((a) =>
+    a.role === "scout" ? { ...a, account: "scout-a.testnet" } : a,
+  ) as typeof sw.agents;
+  await mock(page, { swarm: sw });
+  await page.goto("/swarm");
+  const row = page
+    .getByTestId("leaderboard")
+    .locator("li", { hasText: "scout-a.testnet" });
+  await expect(row).toContainText("3 proven");
+  await expect(row).toContainText("1.5");
+});

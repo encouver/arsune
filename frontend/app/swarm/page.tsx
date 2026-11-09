@@ -38,6 +38,39 @@ const GLYPHS: Record<string, string> = {
   lost: "✕",
 };
 
+const RESULT_GLYPHS: Record<string, string> = {
+  earned: "$",
+  lost: "✕",
+  broke: "✕",
+  none: "·",
+};
+const RESULT_LABELS: Record<string, string> = {
+  earned: "Earned",
+  lost: "Lost money",
+  broke: "Went broke",
+  none: "Found nothing",
+};
+const CLAIM_FILTERS: [string, string][] = [
+  ["all", "All"],
+  ["paid", "Paid"],
+  ["rejected", "Rejected"],
+  ["duplicate", "Duplicate"],
+];
+
+type Result = "earned" | "lost" | "broke" | "none";
+
+function resultOf(a: Agent): Result {
+  if (a.state === "broke") return "broke";
+  if (a.bonds_lost > a.earned) return "lost";
+  if (a.earned > 0) return "earned";
+  return "none";
+}
+
+function matchesFilter(c: Claim, f: string) {
+  if (f === "paid") return c.status === "proven" || c.status === "paid";
+  return f === "all" || c.status === f;
+}
+
 type Flash = Record<string, { kind: "paid" | "lost"; until: number }>;
 type Names = Map<string, string>;
 
@@ -163,6 +196,7 @@ export default function SwarmPage() {
   const [errors, setErrors] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [picked, setPicked] = useState<string | null>(null);
+  const [filter, setFilter] = useState("all");
   const swarmRef = useRef<SwarmState | null>(null);
 
   useEffect(() => {
@@ -251,9 +285,64 @@ export default function SwarmPage() {
     rejected: (bounty?.claims ?? []).filter((c) => c.status === "rejected")
       .length,
   };
-  const leaderboard = [...hunters]
-    .sort((a, b) => b.earned + b.scout_earned - (a.earned + a.scout_earned))
-    .slice(0, 10);
+  const byAccount = useMemo(
+    () => new Map((swarm?.agents ?? []).map((a) => [a.account, a])),
+    [swarm],
+  );
+  // The API has no proven count for scouts, so the swarm state fills it in.
+  const board = useMemo(() => {
+    const rows = hunters.map((h) => {
+      const a = byAccount.get(h.account);
+      if (a?.role !== "scout") return h;
+      return {
+        ...h,
+        proven: a.proven,
+        earned: Math.max(h.earned + h.scout_earned, a.earned),
+        scout_earned: 0,
+      };
+    });
+    const seen = new Set(rows.map((h) => h.account));
+    for (const a of swarm?.agents ?? []) {
+      if (a.role === "scout" && !seen.has(a.account) && a.earned > 0)
+        rows.push({
+          account: a.account,
+          claims: a.claims,
+          proven: a.proven,
+          rejected: 0,
+          duplicate: 0,
+          unverified: 0,
+          pending: 0,
+          earned: a.earned,
+          bonds_lost: a.bonds_lost,
+          scout_earned: 0,
+        });
+    }
+    return rows;
+  }, [hunters, byAccount, swarm]);
+  const leaderboard = useMemo(
+    () =>
+      [...board]
+        .sort((a, b) => b.earned + b.scout_earned - (a.earned + a.scout_earned))
+        .slice(0, 10),
+    [board],
+  );
+  const losers = useMemo(() => {
+    const lost = new Map<string, number>();
+    for (const h of hunters) lost.set(h.account, h.bonds_lost);
+    for (const a of agents)
+      lost.set(a.account, Math.max(lost.get(a.account) ?? 0, a.bonds_lost));
+    return [...lost.entries()]
+      .filter(([, n]) => n > 0)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5);
+  }, [hunters, agents]);
+  const finished =
+    !!swarm?.finished ||
+    (agents.length > 0 &&
+      agents.every((a) => a.state === "done" || a.state === "broke"));
+  const counts = { earned: 0, lost: 0, broke: 0, none: 0 };
+  for (const a of agents) counts[resultOf(a)]++;
+  const shownClaims = claims.filter((c) => matchesFilter(c, filter));
   const selected = agents.find((a) => a.id === picked) ?? null;
 
   return (
@@ -339,6 +428,24 @@ export default function SwarmPage() {
               <h2>Agents</h2>
               <Legend />
             </div>
+            {finished && agents.length > 0 && (
+              <div className="sw-results" data-testid="race-results">
+                <ul className="sw-legend" aria-label="Result colors">
+                  {(["earned", "lost", "broke", "none"] as Result[]).map(
+                    (r) => (
+                      <li key={r}>
+                        <i data-result={r} />
+                        {RESULT_LABELS[r]}
+                      </li>
+                    ),
+                  )}
+                </ul>
+                <p data-testid="result-counts">
+                  {counts.earned} agents earned · {counts.lost} lost money ·{" "}
+                  {counts.broke} went broke · {counts.none} found nothing
+                </p>
+              </div>
+            )}
             {swarm == null && agents.length > 0 && (
               <p className="sw-hint">
                 Swarm runner not connected. Tiles come from Arsune hunter
@@ -348,7 +455,14 @@ export default function SwarmPage() {
             <div className="sw-tiles" data-testid="agent-grid">
               {agents.map((a) => {
                 const f = flash[a.account];
-                const st = f?.kind ?? (a.state === "broke" ? "broke" : a.state);
+                const st = f?.kind ?? a.state;
+                const res = resultOf(a);
+                const mark =
+                  a.bonds_lost > 0
+                    ? `−${usdc(a.bonds_lost)}`
+                    : a.earned > 0
+                      ? `+${usdc(a.earned)}`
+                      : null;
                 return (
                   <button
                     key={a.id}
@@ -356,13 +470,28 @@ export default function SwarmPage() {
                     className="sw-tile"
                     data-testid="agent-tile"
                     data-state={st}
+                    data-outcome={res}
+                    data-result={finished ? res : undefined}
+                    data-lost={a.bonds_lost > 0 ? "true" : undefined}
                     data-role={a.role}
                     aria-pressed={picked === a.id}
-                    aria-label={`${a.id}, ${a.role}, ${st}`}
+                    aria-label={`${a.id}, ${a.role}, ${st}${finished ? `, ${RESULT_LABELS[res]}` : ""}${a.bonds_lost > 0 ? `, lost ${usdc(a.bonds_lost)} in bonds` : ""}`}
                     title={`${a.id} (${a.role}) · ${st}\n${a.strategy}\nbalance ${usdc(a.balance)} · proven ${a.proven} · earned ${usdc(a.earned)} · bonds lost ${usdc(a.bonds_lost)}`}
                     onClick={() => setPicked(picked === a.id ? null : a.id)}
                   >
-                    <span aria-hidden="true">{GLYPHS[st]}</span>
+                    <span aria-hidden="true">
+                      {finished ? RESULT_GLYPHS[res] : GLYPHS[st]}
+                    </span>
+                    {mark && (
+                      <small
+                        className="sw-mark"
+                        data-testid="tile-mark"
+                        data-kind={a.bonds_lost > 0 ? "lost" : "earned"}
+                        aria-hidden="true"
+                      >
+                        {mark}
+                      </small>
+                    )}
                     <em aria-hidden="true">{a.id.replace(/^\D+/, "")}</em>
                     {a.role === "scout" && <b aria-hidden="true">S</b>}
                   </button>
@@ -421,11 +550,28 @@ export default function SwarmPage() {
               <h2>Claim stream</h2>
               <span>{claims.length} claims</span>
             </div>
+            <div className="sw-filters" role="group" aria-label="Claim filter">
+              {CLAIM_FILTERS.map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className="sw-filter"
+                  data-testid={`filter-${key}`}
+                  data-filter={key}
+                  aria-pressed={filter === key}
+                  onClick={() => setFilter(key)}
+                >
+                  {label} ({claims.filter((c) => matchesFilter(c, key)).length})
+                </button>
+              ))}
+            </div>
             <ol className="sw-stream" data-testid="claim-stream">
-              {claims.length === 0 && (
-                <li className="sw-empty">No claims yet.</li>
+              {shownClaims.length === 0 && (
+                <li className="sw-empty">
+                  {claims.length === 0 ? "No claims yet." : "No claims match."}
+                </li>
               )}
-              {claims.slice(0, 60).map((c) => (
+              {shownClaims.slice(0, 60).map((c) => (
                 <ClaimRow key={c.id} claim={c} names={names} />
               ))}
             </ol>
@@ -517,6 +663,20 @@ export default function SwarmPage() {
                 </li>
               ))}
             </ol>
+            <h3 className="sw-sub-h">Biggest losers</h3>
+            <ol className="sw-board sw-losers" data-testid="biggest-losers">
+              {losers.length === 0 && (
+                <li className="sw-empty">No bonds lost yet.</li>
+              )}
+              {losers.map(([account, n], i) => (
+                <li key={account}>
+                  <span className="sw-rank sw-rank-bad">{i + 1}</span>
+                  <Who account={account} names={names} />
+                  <span className="sw-muted">bonds lost</span>
+                  <strong className="sw-loss-amt">−{usdc(n)} USDC</strong>
+                </li>
+              ))}
+            </ol>
           </section>
         </div>
 
@@ -548,6 +708,7 @@ function ClaimRow({ claim: c, names }: { claim: Claim; names: Names }) {
   return (
     <li
       className={`sw-claim${good ? " sw-claim-good" : ""}${c.status === "rejected" ? " sw-claim-bad" : ""}`}
+      data-testid="claim-row"
       data-status={c.status}
     >
       <div className="sw-claim-top">
