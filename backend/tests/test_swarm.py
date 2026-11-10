@@ -40,6 +40,7 @@ from swarm.llm import (
     ModelFailure,
     ModelSettings,
     model_settings,
+    parse_answer,
 )
 from swarm.market import (
     TipBoard,
@@ -982,6 +983,40 @@ async def test_invalid_json_is_no_action():
     assert hunter.queue == [] and not hunter.scripted
     assert log[-1] == "hunter-ai-01 takes no action on 2 pages: the answer is not valid JSON."
     await swarm.ai.close()
+
+
+def test_prose_around_the_json_answer_is_tolerated():
+    answer = {"claims": [], "tips": [], "note": ""}
+    text = json.dumps(answer)
+    assert parse_answer(f"I claim only the broken image on /shop/.\n{text}") == answer
+    assert parse_answer(f"Pages {{p1}} and {{p2}} fit. {text} That is all.") == answer
+    assert parse_answer(f"Here is my answer:\n```json\n{text}\n```") == answer
+    # The first complete object is the answer, not a later one.
+    assert parse_answer('Note {"note": "first"} then {"note": "second"}') == {"note": "first"}
+    for bad, problem in [
+        ("I would claim the broken link on p2.", "not valid JSON"),
+        ('My claims: {"claims": [', "not valid JSON"),
+        ("[1, 2]", "not a JSON object"),
+        (None, "has no text"),
+    ]:
+        with pytest.raises(ModelFailure, match=problem):
+            parse_answer(bad)
+
+
+async def test_an_answer_after_a_sentence_is_read_and_its_items_are_still_checked():
+    claims = [
+        {"type": "horizontal_overflow", "page": "p2", "why": "/site/p/hosting is 640 px wide"},
+        {"type": "horizontal_overflow", "page": "p9", "why": "a page it never read"},
+    ]
+    text = "I claim the overflow on /site/p/hosting. " + json.dumps({"claims": claims})
+    model = FakeModel(lambda system, user: text)
+    swarm, hunter, log = ai_hunter(model)
+    await hunter.consult([])
+    assert [(f.claim_type, f.urls) for f, _ in hunter.queue] == [("horizontal_overflow", [PLAN])]
+    assert "hunter-ai-01 ignored 1 items in its model's answer: invalid, or more than 10." in log
+    await swarm.ai.close()
+    claude = claude_client(FakeClaude(claude_reply(text="Done.\n" + json.dumps({"claims": []}))))
+    assert await claude.ask("s", "u", 10) == {"claims": []}
 
 
 async def test_ids_the_agent_never_observed_are_dropped():

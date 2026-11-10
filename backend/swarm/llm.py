@@ -1,4 +1,4 @@
-"""The swarm's own model client: settings, a per-run USD budget, and strict JSON answers.
+"""The swarm's own model client: settings, a per-run USD budget, and JSON object answers.
 
 AI agents call an OpenAI-compatible chat API (NEAR AI Cloud by default) or, with the provider
 "anthropic", Claude through the official Anthropic SDK. This client is
@@ -177,7 +177,9 @@ class AiBudget:
 
 
 def parse_answer(content) -> dict:
-    """The model's reply as a JSON object. A Markdown code fence around it is tolerated."""
+    """The model's reply as a JSON object. A Markdown code fence around it is tolerated, and so
+    is prose around it: then the first complete JSON object in the text is the answer. The
+    agent still validates every field of it."""
     if not isinstance(content, str):
         raise ModelFailure("the answer has no text")
     text = content.strip()
@@ -185,10 +187,24 @@ def parse_answer(content) -> dict:
     try:
         value = json.loads(fenced.group(1) if fenced else text)
     except ValueError:
-        raise ModelFailure("the answer is not valid JSON") from None
+        value = first_object(text)
+        if value is None:
+            raise ModelFailure("the answer is not valid JSON") from None
     if not isinstance(value, dict):
         raise ModelFailure("the answer is not a JSON object")
     return value
+
+
+def first_object(text: str) -> dict | None:
+    """The first complete JSON object in the text, or None."""
+    decoder = json.JSONDecoder()
+    start = text.find("{")
+    while start != -1:
+        try:
+            return decoder.raw_decode(text, start)[0]
+        except ValueError:
+            start = text.find("{", start + 1)
+    return None
 
 
 def _status_failure(exc: anthropic.APIStatusError) -> ModelFailure:
