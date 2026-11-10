@@ -15,7 +15,7 @@ docker compose up --build --wait
 docker compose ps
 ```
 
-This starts PostgreSQL, Redis, the migrations, the API, the worker (four claim checks at a time), the coordinator, the demo site, the interface, and the swarm. The command returns when every service is healthy. The swarm then runs 100 hunters and 10 scouts on a 60 USDC bounty on `http://demo:8541/shop/`; watch it at http://127.0.0.1:3540/swarm. Start a fresh race with `docker compose restart swarm`, and read it as text with `docker compose logs -f swarm`.
+This starts PostgreSQL, Redis, the migrations, the API, the worker (four claim checks at a time), the coordinator, the demo site, the interface, and the swarm. The command returns when every service is healthy. The swarm then runs 100 hunters and 10 scouts on an 80 USDC bounty on `http://demo:8541/shop/`; watch it at http://127.0.0.1:3540/swarm. Start a fresh race with `docker compose restart swarm`, and read it as text with `docker compose logs -f swarm`.
 
 The containers never read `.env`. Compose always uses dry settlement and scripted checks, so it needs no keys and moves no money. For model mode or `near_intents` settlement, use the host processes in [Development setup](#development-setup).
 
@@ -29,7 +29,7 @@ On a completed report, select **Check again and compare** for a linked scan of t
 
 Select **Download repair report** to save a readable HTML report with available embedded screenshots. Missing or oversized evidence is identified in the file. Downloading does not publish the report or send it to anyone. JSON remains available for technical use.
 
-Existing installations must run `uv run alembic upgrade head` before starting the new API and worker. Migration `0002` adds the baseline link and comparison mapping. Migration `0003` adds incident jobs and immutable source records. Migration `0004` adds bounties, claims, and the settlement ledger. Existing website jobs and history remain in place.
+Existing installations must run `uv run alembic upgrade head` before starting the new API and worker. Migration `0002` adds the baseline link and comparison mapping. Migration `0003` adds incident jobs and immutable source records. Migration `0004` adds bounties, claims, and the settlement ledger. Migration `0007` adds 1Click funding requests. Migration `0008` adds `bounties.closed_reason` and marks existing closed bounties `budget_spent`. Existing website jobs and history remain in place.
 
 The interface lists recent checks and opens saved reports with `/?job=<id>`. The metadata endpoint is `GET /api/jobs?limit=10`; pass its `next_cursor` as `cursor` to fetch older records. Limits are 1 through 50. This history belongs to the local operator; the application has no customer account separation.
 
@@ -101,18 +101,23 @@ This flow uses scripted checks only. No API key, production log connection, or p
 
 The settlement mode is `dry` by default. No money moves, and every response states `"settlement_mode": "dry"`. Amounts are integers in the smallest token unit; 1 USDC is `1000000`. See [Architecture](ARCHITECTURE.md#bug-bounty) for the API and money rules, [Rules](../RULES.md#bug-bounty-market) for the market rules, and [Settlement](SETTLEMENT.md) for `near_intents` mode.
 
-Every transfer into Arsune is a signed NEP-413 intent, also in dry mode. Read `GET /api/settlement` first. It gives the receiver account, token, contract, and salt to sign with. In dry mode, the salt is `00000000`. Pass it to `sign_transfer(..., salt=bytes.fromhex(salt))`. Without an explicit salt, `sign_transfer` reads it from the mainnet RPC.
+Every transfer into Arsune is a signed intent, also in dry mode: NEP-413 with a NEAR key, or ERC-191 with an Ethereum key (`sign_transfer_erc191`, signer = the lowercase `0x` address; see [Settlement](SETTLEMENT.md#ethereum-wallets)). Read `GET /api/settlement` first. It gives the receiver account, token, contract, and salt to sign with. In dry mode, the salt is `00000000`. Pass it to `sign_transfer(..., salt=bytes.fromhex(salt))`. Without an explicit salt, `sign_transfer` reads it from the mainnet RPC.
 
 ```python
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import httpx
 from app.settlement.near_intents import sign_transfer
 
 claim_id = str(uuid4())
+# The bond depends on the hunter's reputation; read it just before signing.
+quote = httpx.get(
+    f"http://127.0.0.1:8540/api/bounties/{bounty['id']}/bond", params={"hunter": "hunter.testnet"}
+).json()
 bond_intent = sign_transfer(
     "hunter.testnet", "<hunter ed25519 private key>", info["arsune_account"], info["token"],
-    bounty["bond_amount"], f"arsune:bond:{claim_id}", datetime.now(UTC) + timedelta(minutes=5),
+    quote["required_bond"], f"arsune:bond:{claim_id}", datetime.now(UTC) + timedelta(minutes=5),
     salt=bytes.fromhex(info["salt"]), contract=info["intents_contract"],
 )
 ```
@@ -123,12 +128,59 @@ Use the same pattern for funding with memo `arsune:fund:{fund_id}`. The steps on
 2. Publish the token: `POST http://127.0.0.1:8541/bounty-proof-control` with `{"token": "<proof_token>"}`. You can also set `ARSUNE_DEMO_BOUNTY_TOKEN` before the demo starts. A real site owner puts the token in `/.well-known/arsune-bounty.txt`. In the Compose setup, the API reads the controlled site at `http://demo:8541`, so use that address in the bounty URL.
 3. `POST /api/bounties/<id>/verify`.
 4. `POST /api/bounties/<id>/fund` with `fund_id`, `sender`, `amount`, and `signed_intent`.
-5. `POST /api/bounties/<id>/claims` with `claim_id`, `hunter_account`, `claim_type`, `urls`, `details`, `explanation`, `reproduction_steps`, `bond_intent`, and an optional `scout` of `{"account", "share_bps", "tip_id"}`.
-6. Read `GET /api/bounties/<id>` and `GET /api/bounties/<id>/claims/<claim_id>`.
+5. Read the hunter's bond with `GET /api/bounties/<id>/bond?hunter=<account>`. A new hunter pays the bounty's `bond_amount`. A trusted hunter pays less, and a hunter with many rejected claims pays more. `GET /api/hunters/<account>` shows the reputation.
+6. `POST /api/bounties/<id>/claims` with `claim_id`, `hunter_account`, `claim_type`, `urls`, `details`, `explanation`, `reproduction_steps`, `bond_intent`, and an optional `scout` of `{"account", "share_bps", "tip_id"}`.
+7. Read `GET /api/bounties/<id>` and `GET /api/bounties/<id>/claims/<claim_id>`.
 
-The claim detail shows the status, the checker reason, screenshot links, and ledger rows with transaction IDs. For `near_intents` rows, `explorer_url` links to nearblocks. A claim in `unfunded` was proven after the budget was spent: its bond is refunded, it gets no reward, and the bounty is closed. A claim on a redirecting URL is a duplicate of a proven claim on the page it reaches. A claim in `needs_review` holds money until an operator checks the settlement account. There is no automatic retry. Error codes: 404 for unknown or malformed IDs; 409 for a bounty that is not ready, is closed, or a reused `claim_id` or `fund_id`; 422 for an invalid request, an out-of-scope claim, or an invalid signed transfer; 429 for too many unresolved claims from one hunter; 402 when a transfer fails; 504 when a transfer result is unknown.
+The claim detail shows the status, the checker reason, screenshot links, and ledger rows with transaction IDs. For `near_intents` rows, `explorer_url` links to nearblocks. A claim in `unfunded` was proven after the budget was spent: its bond is refunded, it gets no reward, and the bounty is closed with `closed_reason` `budget_spent`. A top-up through `POST /api/bounties/<id>/fund` (or a 1Click deposit) opens it again when the budget pays one reward and its fee. A claim on a redirecting URL is a duplicate of a proven claim on the page it reaches. A claim in `needs_review` holds money until an operator checks the settlement account. There is no automatic retry. Error codes: 404 for unknown or malformed IDs; 409 for a bounty that is not ready, is closed, or a reused `claim_id` or `fund_id`; 422 for an invalid request, a checksummed `0x` address (use the lowercase `0x` address), an out-of-scope claim, an invalid signed transfer, or a bond that is not the hunter's required bond (the message gives the required amount); 429 for too many unresolved claims from one hunter; 402 when a transfer fails; 504 when a transfer result is unknown.
 
 For a race of up to 100 hunter agents, run the worker with `--concurrency=4` on a machine with 8 GB of memory, or `--concurrency=8` with 16 GB. Each browser check uses one Chromium process of about 300 MB for 5 to 15 seconds. Claims for a fault that is already proven finish without a browser, so most of a race settles fast. Use one worker host. Several prefork processes are safe: each has its own database connections, and each claim job has its own lease. Keep `ARSUNE_LEASE_SECONDS` at 30 or more. In `near_intents` mode, payments go through one relayer key and one advisory lock. Expect about 2 to 5 seconds for each transfer.
+
+## Funding a bounty
+
+Open `http://127.0.0.1:3540/bounties/new` (header link "Start a bounty"). The page has four steps. Each step shows its status and the API error text when a step fails.
+
+1. **Create.** Enter the site URL, the owner account, the reward per proven bug, the base bond per claim, and the budget. "Use the local demo shop" fills in the demo shop URL that the API uses (`ARSUNE_DEMO_URL` + `/shop/`).
+2. **Prove.** The page shows the token, the exact address `<origin>/.well-known/arsune-bounty.txt`, and a shell command that writes the file. "Check ownership" calls `POST /api/bounties/<id>/verify`. For the demo site only, "Demo site: set proof automatically" calls `POST /api/bounties/<id>/demo-proof`. That endpoint posts the token to the demo site's `/bounty-proof-control`. It refuses every other origin with 409.
+3. **Fund.** Funding opens after the proof. There are two options:
+   - **NEAR wallet.** The page shows a new `fund_id`, the exact memo `arsune:fund:<fund_id>`, and the message to sign. You can paste the signed transfer into the page, or send it to `POST /api/bounties/<id>/fund`. In dry mode, "Fund with simulated money" calls `POST /api/bounties/<id>/fund-simulated` with `{"amount": <units>}`. Arsune signs a dry transfer with a throwaway key and sends it through the normal `fund` path. The ledger row is labeled simulated. In `near_intents` mode, this endpoint returns 409.
+   - **From another chain (NEAR Intents 1Click).** Only in `near_intents` mode. See below.
+4. **Watch.** The link opens the live board at `/swarm?bounty=<id>`.
+
+`GET /api/funding/options` gives the settlement mode, Arsune's account, the token, the demo site, and `crosschain`: `{available, reason, tokens}`. In dry mode, or when 1Click cannot be reached, `available` is false and `reason` says why. The page then shows the 1Click option as unavailable. The Compose stack is dry, so it never calls 1Click.
+
+### 1Click deposit addresses
+
+`POST /api/bounties/<id>/funding-address` with `amount` (the USDC units that Arsune must receive), `origin_asset` (an `asset_id` from the token list), and `refund_to` (your address on the origin chain):
+
+- Arsune asks `POST https://1click.chaindefuser.com/v0/quote` for a quote with `dry: false`, `swapType: EXACT_OUTPUT`, `depositType: ORIGIN_CHAIN`, `recipientType: INTENTS`, `recipient` = Arsune's account, `destinationAsset` = the bounty token, `refundType: ORIGIN_CHAIN`, 1% slippage, and a refund deadline 60 minutes ahead.
+- Arsune keeps the complete signed quote in `funding_requests` (migration `0007`). It returns the deposit address, the amount to send, the minimum amount, the asset and chain, and the send-before time. No money moves until someone sends to the address.
+- Errors: 409 in dry mode, for a bounty that waits for proof, or for a closed bounty that a top-up cannot open again; 422 for an unknown asset or a quote that 1Click refuses (the message is 1Click's); 429 when 5 addresses of the bounty wait for a deposit; 503 when 1Click cannot be reached.
+
+`GET /api/bounties/<id>/funding` lists the requests, newest first. It refreshes unfinished requests from `GET /v0/status` at most every 10 seconds. The coordinator also polls every 15 seconds, so a deposit is credited when no page is open. If 1Click cannot be reached, the list shows the last known status and `status_error`.
+
+| 1Click status | Arsune status | Meaning |
+| --- | --- | --- |
+| `PENDING_DEPOSIT` | `pending_deposit` | No deposit yet |
+| `KNOWN_DEPOSIT_TX` | `deposit_seen` | 1Click saw the deposit transaction |
+| `PROCESSING` | `processing` | The swap runs |
+| `INCOMPLETE_DEPOSIT` | `incomplete_deposit` | The deposit is below the minimum. 1Click refunds it. |
+| `SUCCESS` | `credited` | The budget was credited |
+| `REFUNDED`, `FAILED` | `refunded`, `failed` | Nothing is credited |
+| (no deposit after the address closes) | `expired` | Nothing is credited |
+
+When 1Click reports `SUCCESS`, Arsune adds the amount that 1Click reports as delivered (`swapDetails.amountOut`) to the budget once. It saves a `fund` ledger row with memo `arsune:fund:1click:<deposit address>` and the last NEAR transaction hash of the swap. A row lock on the request and the unique `(memo, kind)` ledger constraint stop a second credit. If 1Click reports success without a delivered amount, or for another recipient or token, the request goes to `needs_review` and nothing is credited. Money for a bounty that closed because its budget was spent is added to the budget. The bounty opens again when the new budget pays one reward and its fee. Money that arrives after a close for another reason is added to the budget, and the bounty stays closed.
+
+A quote has two times. The refund deadline that Arsune asks for (60 minutes) is the send-before time on the page. 1Click can keep the address open longer: on 2026-11-09 the quote `deadline` was 3 days later. Arsune watches the address until it closes. From 15 minutes after the send-before time, it checks every 5 minutes. It marks a request `expired` when no deposit arrived 15 minutes after the address closed.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ARSUNE_ONECLICK_URL` | `https://1click.chaindefuser.com` | 1Click API |
+| `ARSUNE_ONECLICK_JWT` | empty | Optional partner JWT. Without it, 1Click adds 0.25% to each quote. |
+| `ARSUNE_ONECLICK_DEADLINE_MINUTES` | `60` | Refund deadline that Arsune asks for |
+| `ARSUNE_ONECLICK_SLIPPAGE_BPS` | `100` | Slippage tolerance in basis points |
+
+A real quote on 2026-11-09 (wNEAR on NEAR to 1 USDC for Arsune's account, refunds to Arsune's account) returned a deposit address, an input of 0.2779 wNEAR (minimum 0.2751), a time estimate of 22 seconds, and the status `PENDING_DEPOSIT`. No funds were sent.
 
 ## Model settings
 
@@ -150,6 +202,8 @@ uv run ruff check backend scripts
 npm --prefix frontend run build
 npm --prefix frontend run typecheck
 ```
+
+The tests never read `.env`: `backend/tests/conftest.py` sets `ARSUNE_ENV_FILE` to an empty value, so local model keys, prices, or NEAR accounts cannot change a result. Settings still come from `ARSUNE_*` environment variables, for example `ARSUNE_DATABASE_URL` for a separate test database. CI runs the same commands (`.github/workflows/ci.yml`).
 
 Engine tests start their own controlled site on port 18541. They use actual Chromium for browser checks and a stub transport for model failures and budgets. A stub test does not prove a live model connection.
 
@@ -193,4 +247,4 @@ Open `/swarm` (optionally `?bounty=<id>`) for the live swarm board. It polls the
 
 ## Demo shop
 
-The demo site serves a larger shop, Northwind Supply, under `/shop/` (for example `http://127.0.0.1:8541/shop/`). It has 8 category pages, 25 plan pages and 6 information pages, with 50 seeded faults (20 broken links, 15 mobile overflow pages, 15 price mismatches) and 18 decoys that look like faults but must not be proven. The ground truth is in `backend/app/demo_shop.py` (`GROUND_TRUTH`, `build_ground_truth`); no route serves it. `backend/tests/engine/test_demo_shop.py` checks every fault and decoy with real Chromium.
+The demo site serves a larger shop, Northwind Supply, under `/shop/` (for example `http://127.0.0.1:8541/shop/`). It has 8 category pages, 25 plan pages, 6 information pages, and 2 picture pages (`/shop/gallery`, `/shop/team`), with 66 seeded faults (20 broken links, 15 mobile overflow pages, 15 price mismatches, 10 broken images, 6 page errors) and 26 decoys that look like faults but must not be proven. The ground truth is in `backend/app/demo_shop.py` (`GROUND_TRUTH`, `build_ground_truth`); no route serves it. `backend/tests/engine/test_demo_shop.py` checks every fault and decoy with real Chromium.

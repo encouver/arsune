@@ -19,6 +19,8 @@ These rules cover website checks, incident investigation, and the bug bounty mar
 | Role | Initial check | Confirmation requirement |
 | --- | --- | --- |
 | Navigation | Broken internal link | Observe the source link and reproduce the failing target response or navigation. |
+| Navigation | Broken image | Read the page again, find the shown `<img>`, and observe its request fail with HTTP 400 or higher, or an HTTP 2xx answer that the browser cannot decode. |
+| Navigation | Uncaught page error | Load the page again and observe an uncaught error or unhandled promise rejection with the claimed message, raised by a script on the site's own origin. |
 | Mobile | Horizontal overflow or a specifically measured layout fault | Repeat the measurement at the recorded viewport and capture the affected page. |
 | Consistency | Conflicting values for an explicitly matched fact | Read both pages and verify the same product or field, units, and context. |
 
@@ -28,7 +30,7 @@ Different billing periods, product variants, or currencies are not automatically
 
 Every candidate contains a stable identifier, specialist role, claim type, plain explanation, affected URLs, expected behavior, observed behavior, and reproduction steps. Evidence records capture time, viewport, source location or selector where useful, observations, and a screenshot reference when available.
 
-The checker records a separate result from fresh observations. A broken link needs a fresh request or navigation. A mobile finding needs a fresh measurement. A consistency finding needs both values and their contexts.
+The checker records a separate result from fresh observations. A broken link needs a fresh request or navigation. A mobile finding needs a fresh measurement. A consistency finding needs both values and their contexts. A broken image needs a fresh page read with the failed image request. A page error needs a fresh page load that raises the error. Console messages, caught errors, and rejections that get a handler later are not page errors.
 
 ## Finding states
 
@@ -80,23 +82,51 @@ A site owner pays for proven functional faults on the owner's own site. Independ
 | Party | Pays | Receives |
 | --- | --- | --- |
 | Site owner | The bounty budget | Proven faults with evidence |
-| Hunter | A bond for each claim | For a proven, unique claim: the reward minus the scout share, plus the bond. For a duplicate or unverified claim: the bond. |
+| Hunter | A bond for each claim. The amount depends on the hunter's reputation. | For a proven, unique claim: the reward minus the scout share, plus the bond. For a duplicate, unverified, or unfunded claim: the bond. |
 | Scout | Nothing to Arsune | The scout share of the reward when the claim that names the scout is proven and unique |
 | Arsune | Rewards, scout shares, and refunds from held money | The fee for each proven claim |
 
 ### Scope
 
 - Only the owner of a site can open a bounty for it. The owner puts the bounty token in `/.well-known/arsune-bounty.txt` on the bounty origin. Arsune checks no claims before this proof.
-- Only functional faults are in scope: a broken internal link, horizontal overflow at the 390-pixel mobile viewport, and a price mismatch for one matched product context. Other claim types are rejected at submission.
+- Only functional faults are in scope: a broken internal link, horizontal overflow at the 390-pixel mobile viewport, a price mismatch for one matched product context, a broken image, and an uncaught error on page load. Other claim types are rejected at submission.
+- A page error counts only when a script on the bounty origin raises it. An error from a script on another origin does not count.
 - Security testing of any kind is out of scope. The checker does not submit forms, sign in, buy, change the site, or put load on the site.
-- All claim URLs and detail URLs must be on the bounty origin and must not have a query string. The claim URLs must be exactly the pages that the details name.
+- All claim URLs and detail URLs must be on the bounty origin and must not have a query string. The claim URLs must be exactly the pages that the details name. For a broken image or a page error, the claim URLs are only the `page`; the `image` URL is a detail URL, not a page.
 - A hunter can have at most three unresolved claims on one bounty.
 
 ### Money in
 
-- Each transfer into Arsune is a signed NEP-413 transfer of the exact amount of the bounty token to Arsune's account. The memo must be exact: `arsune:fund:{fund_id}` for funding and `arsune:bond:{claim_id}` for a bond. The client makes each ID as a lowercase UUID v4 and can use it only once.
+- Each transfer into Arsune is a signed `transfer` intent of the exact amount of the bounty token to Arsune's account. The signature is NEP-413 (a NEAR key) or ERC-191 (an Ethereum key, `personal_sign`). The memo must be exact: `arsune:fund:{fund_id}` for funding and `arsune:bond:{claim_id}` for a bond. The client makes each ID as a lowercase UUID v4 and can use it only once.
+- An ERC-191 transfer comes from the signer's implicit account: its `0x` address. The address must be lowercase, because NEAR account IDs have no capital letters. A checksummed (EIP-55) address as hunter, sender, owner, or scout gets 422 with the message "Use the lowercase 0x address". Arsune pays a `0x` account like any other account.
 - Arsune checks the signature, sender, receiver, token, amount, memo, contract, and deadline before it saves the claim or the funding row. An invalid transfer creates no claim.
+- In `near_intents` mode, an owner can also fund a bounty from another chain through NEAR Intents 1Click. Arsune adds the amount that 1Click reports as delivered to Arsune's account, once for each deposit address. The ledger row has the memo `arsune:fund:1click:{deposit address}`.
 - A claim is accepted only when the bounty is open and its budget covers one reward and its fee. A closed bounty rejects new claims with 409.
+
+### Bonds and reputation
+
+The `bond_amount` of a bounty is the base bond. Each hunter pays the base bond multiplied by the multiplier of the hunter's reputation tier. A hunter with a good record pays less. A hunter with many false claims pays more.
+
+- Reputation belongs to the hunter account. It counts the claims of that account on all bounties.
+- A proven claim is correct. An unfunded claim is also correct, because the checker reproduced the fault. A rejected claim is false. Duplicate, unverified, and unresolved claims do not change the reputation.
+- The score is `(correct + 1) / (correct + rejected + 2)`. An account with no decided claims has a score of 0.5.
+- An account with fewer than three correct or rejected claims is in the `new` tier and pays the base bond. One early mistake or one early success does not change the bond.
+
+| Tier | Condition (first match) | Multiplier |
+| --- | --- | --- |
+| `new` | Fewer than 3 correct or rejected claims | 1.0 |
+| `trusted` | Score 0.75 or more | 0.5 |
+| `standard` | Score 0.5 or more | 1.0 |
+| `poor` | Score 0.3 or more | 2.0 |
+| `very_poor` | Score less than 0.3 | 3.0 |
+
+Examples, as correct and rejected claims: 3 and 0 give 0.8 (`trusted`). 2 and 1 give 0.6 (`standard`). 1 and 2 give 0.4 (`poor`). 0 and 3 give 0.2 (`very_poor`).
+
+- The required bond is the base bond multiplied by the multiplier, rounded up to a whole token unit. It is at least 1 unit.
+- In `near_intents` mode, the required bond is at most `ARSUNE_MAX_PAYMENT_AMOUNT` minus the reward, because one transfer returns the reward and the bond. This limit applies after the multiplier.
+- `GET /api/bounties/{id}/bond?hunter=<account>` gives the required bond. The signed bond must be exactly that amount. A different amount is rejected with 422, and the message gives the required amount.
+- Arsune calculates the required bond again under the bounty lock, before it saves the claim. If a decision changed the hunter's tier after the signature check, the claim is rejected with 422 and the new amount. The hunter must sign the new amount.
+- A refund, a forfeit, and the bond part of a reward payment always use the bond that Arsune collected for that claim. A later change of tier does not change them.
 
 ### Outcomes
 
@@ -109,9 +139,9 @@ A site owner pays for proven functional faults on the owner's own site. Independ
 | Unverified | Access, resources, or scope prevent a conclusion | The bond is refunded. No reward. |
 
 - The first proven claim for a fault wins. The fingerprint names the fault: the claim type, the canonical URLs, and the details. It does not name the hunter. The database permits one proven claim for each fingerprint on a bounty.
-- The fault is held by the final URLs that the checker reached after redirects, not by the submitted URLs. A claim on a redirecting alias (for example `/shop/old-pricing`, which redirects to `/shop/pricing`) and a claim on the final page are one fault. Whichever is proven first holds it, and the other is a duplicate. For a broken link, the fault is one final source page with one final target page: two links that redirect to the same missing page are one fault, and a source page that redirects counts as the page it reaches.
+- The fault is held by the final URLs that the checker reached after redirects, not by the submitted URLs. A claim on a redirecting alias (for example `/shop/old-pricing`, which redirects to `/shop/pricing`) and a claim on the final page are one fault. Whichever is proven first holds it, and the other is a duplicate. For a broken link, the fault is one final source page with one final target page: two links that redirect to the same missing page are one fault, and a source page that redirects counts as the page it reaches. For a broken image, the fault is the final page with the final image file after redirects; the image query string does not count. For a page error, the fault is the final page with the full message of the matched error, so claims that quote different parts of one message are one fault.
 - A claim for a fault that is already proven is a duplicate. If the submitted URLs match the held fault exactly, no browser check is needed. Otherwise the fresh check finds the duplicate.
-- A proven claim that finds the budget unable to pay one reward and its fee is `unfunded`: the bond is refunded and the bounty closes. The claim holds no fault, so a later funded bounty can pay it.
+- A proven claim that finds the budget unable to pay one reward and its fee is `unfunded`: the bond is refunded and the bounty closes. The claim holds no fault, so a later claim for the same fault can be paid after a top-up.
 - A timeout, a blocked page, or a missing resource makes a claim unverified, not rejected. Only contradicting evidence forfeits a bond.
 
 ### Fees and shares
@@ -119,6 +149,14 @@ A site owner pays for proven functional faults on the owner's own site. Independ
 - The fee is `reward * fee_bps / 10000`, rounded down. The default is 1000 basis points (10%). The budget pays the fee for each proven claim, in addition to the reward.
 - A hunter can name one scout for a claim, with a share of 1 to 5000 basis points (0.01% to 50%) of the reward. The scout share comes from the reward, not from the budget.
 - The bounty closes when its budget is less than one reward and its fee. The budget is reserved for a proven claim when the checker decides it, so two claims cannot be paid from the same money.
+
+### Closing and top-ups
+
+- Arsune records why a bounty closed (`closed_reason`). Today a spent budget (`budget_spent`) is the only reason.
+- An owner can add money to an open bounty, or to a bounty that closed only because its budget was spent. This applies to a signed funding transfer and to a 1Click deposit.
+- A top-up opens such a bounty again when the new budget can pay one reward and its fee. A smaller top-up is added to the budget, and the bounty stays closed.
+- A bounty that closed for another reason (for example a deadline or an owner close) does not open again. It refuses a signed funding transfer and a new 1Click deposit address with 409. Money from a 1Click deposit that arrives after such a close is added to the budget, and the bounty stays closed.
+- A bond that a rejected claim forfeits is added to the budget, but it is not a top-up: it does not open a closed bounty.
 
 ### Payment safety
 
