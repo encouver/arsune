@@ -1,3 +1,5 @@
+import type { SettlementMode } from "../bounties/api";
+
 export type AgentState =
   "searching" | "negotiating" | "claiming" | "waiting" | "broke" | "done";
 
@@ -56,6 +58,7 @@ export type Claim = {
   urls: string[];
   status: string;
   checker_reason?: string | null;
+  evidence_hash?: string | null;
   scout?: { account: string; share_bps: number; tip_id?: string } | null;
   created_at?: string;
   updated_at?: string;
@@ -95,7 +98,7 @@ export type Bounty = {
   fee_bps: number;
   budget_amount: number;
   budget_target?: number | null;
-  settlement_mode: "dry" | "near_intents";
+  settlement_mode: SettlementMode;
   created_at?: string;
   claims?: Claim[];
   ledger?: LedgerRow[];

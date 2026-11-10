@@ -7,13 +7,17 @@ export type Token = {
   contract_address: string | null;
 };
 
+export type SettlementMode = "dry" | "near_intents" | "escrow";
+
 export type Options = {
-  settlement_mode: "dry" | "near_intents";
+  settlement_mode: SettlementMode;
   arsune_account: string;
   token: string;
   token_symbol: string;
   token_decimals: number;
   intents_contract: string;
+  // Escrow mode only: funding deposits go to this contract.
+  escrow_contract: string | null;
   demo_site_url: string;
   demo_site_origin: string;
   simulated_funding: boolean;
@@ -33,6 +37,17 @@ export type LedgerRow = {
   created_at: string;
 };
 
+export type OwnerClaim = {
+  id: string;
+  hunter_account: string;
+  claim_type: string;
+  status: string;
+  outcome: string | null;
+  // Set once the claim is decided: sha256 of the public evidence bundle.
+  evidence_hash: string | null;
+  evidence_url: string | null;
+};
+
 export type OwnerBounty = {
   id: string;
   url: string;
@@ -47,11 +62,11 @@ export type OwnerBounty = {
   fee_amount: number;
   budget_amount: number;
   budget_target: number;
-  settlement_mode: "dry" | "near_intents";
+  settlement_mode: SettlementMode;
   proof_token: string;
   proof_url: string;
   created_at: string;
-  claims: { id: string; status: string }[];
+  claims: OwnerClaim[];
   ledger: LedgerRow[];
 };
 
@@ -92,6 +107,22 @@ export type FundingList = {
 };
 
 export const DEFAULT_FEE_BPS = 1000;
+
+// The escrow is not deployed on mainnet, so its badge does not promise real money.
+const SETTLEMENT_BADGES: Record<SettlementMode, string | null> = {
+  dry: null,
+  near_intents: "Real settlement via NEAR Intents",
+  escrow: "Settlement by the escrow contract",
+};
+
+/** The header badge for a mode that is not dry; dry pages show the simulation tag instead. */
+export function settlementBadge(mode: SettlementMode): string | null {
+  return SETTLEMENT_BADGES[mode];
+}
+
+export function shortHash(hash: string): string {
+  return `${hash.slice(0, 12)}…`;
+}
 // Same rule as the API: NEAR account IDs, named or 64-hex implicit.
 export const ACCOUNT =
   /^(?=.{2,64}$)([a-z\d]+[-_])*[a-z\d]+(\.([a-z\d]+[-_])*[a-z\d]+)*$/;

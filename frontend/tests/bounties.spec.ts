@@ -5,20 +5,24 @@ const TOKEN = "Qk3pYz0aLxVwq8RtNm2cB7sDfGh4JkLp";
 const USDC =
   "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1";
 
-type Mode = "dry" | "near_intents";
+const ESCROW = "escrow.arsune.near";
+const HASH = "3f1a9c0b7d2e4f6a8b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a";
+
+type Mode = "dry" | "near_intents" | "escrow";
 
 function options(mode: Mode, demo = "http://127.0.0.1:8541") {
   const live = mode === "near_intents";
   return {
     settlement_mode: mode,
-    arsune_account: live ? "arsune.near" : "arsune.dry",
+    arsune_account: mode === "dry" ? "arsune.dry" : "arsune.near",
     token: USDC,
     token_symbol: "USDC",
     token_decimals: 6,
     intents_contract: "intents.near",
+    escrow_contract: mode === "escrow" ? ESCROW : null,
     demo_site_url: demo,
     demo_site_origin: demo,
-    simulated_funding: !live,
+    simulated_funding: mode === "dry",
     crosschain: live
       ? {
           available: true,
@@ -45,8 +49,7 @@ function options(mode: Mode, demo = "http://127.0.0.1:8541") {
         }
       : {
           available: false,
-          reason:
-            "Funding from another chain needs live settlement on NEAR Intents. This Arsune runs in dry mode, where no real money can arrive. Use simulated funding instead.",
+          reason: `Funding from another chain needs live settlement on NEAR Intents. This Arsune runs in ${mode === "dry" ? "dry mode, where no real money can arrive. Use simulated funding instead." : "escrow mode, where funds go to the escrow contract. Use a signed deposit instead."}`,
           tokens: [],
         },
   };
@@ -71,7 +74,7 @@ function makeBounty(mode: Mode, url: string) {
     proof_token: TOKEN,
     proof_url: `${origin}/.well-known/arsune-bounty.txt`,
     created_at: "2026-11-09T10:00:00Z",
-    claims: [] as unknown[],
+    claims: [] as Record<string, unknown>[],
     ledger: [] as Record<string, unknown>[],
     hunters: [],
   };
@@ -500,4 +503,86 @@ test("a failed signed transfer gets a new fund_id and memo, a 422 keeps them", a
     page.getByRole("button", { name: "Submit signed transfer" }),
   ).toBeEnabled();
   await expect(memo).toHaveText(second);
+});
+
+test("decided claims show the evidence hash, its bundle and the verify command", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  const api = await mockApi(page, "dry", "https://shop.example.com/");
+  const decided = "8d3b5a4e-1f2c-4d6e-9a7b-0c1d2e3f4a5b";
+  Object.assign(api.bounty, {
+    status: "open",
+    budget_amount: 8_900_000,
+    claims: [
+      {
+        id: decided,
+        hunter_account: "hunter-a.near",
+        claim_type: "broken_link",
+        status: "unverified",
+        outcome: "unverified",
+        evidence_hash: HASH,
+        evidence_url: `/api/claims/${decided}/evidence`,
+      },
+      {
+        id: "1c2d3e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f",
+        hunter_account: "hunter-b.near",
+        claim_type: "horizontal_overflow",
+        status: "checking",
+        outcome: null,
+        evidence_hash: null,
+        evidence_url: null,
+      },
+    ],
+  });
+  await page.goto(`/bounties/${ID}`);
+  const rows = page.getByTestId("decided-claim");
+  await expect(rows).toHaveCount(1);
+  await expect(rows.first()).toContainText("unverified");
+  await expect(rows.first()).toContainText(`claim ${decided}`);
+  const hash = rows.first().getByTestId("evidence-hash");
+  await expect(hash).toHaveText(`sha256 ${HASH.slice(0, 12)}…`);
+  await expect(hash).toHaveAttribute("title", HASH);
+  await expect(rows.first().getByTestId("evidence-link")).toHaveAttribute(
+    "href",
+    `/api/claims/${decided}/evidence`,
+  );
+  await rows
+    .first()
+    .getByRole("button", { name: "Copy evidence hash" })
+    .click();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(HASH);
+  await expect(page.getByTestId("verify-hint")).toContainText(
+    `uv run python -m app.verify ${new URL(baseURL!).origin} <claim_id>`,
+  );
+});
+
+test("escrow mode: a signed deposit to the escrow contract names the bounty", async ({
+  page,
+}) => {
+  const api = await mockApi(page, "escrow", "https://shop.example.com/");
+  api.bounty.status = "open";
+  await page.goto(`/bounties/${ID}`);
+  await expect(
+    page.getByText("Settlement by the escrow contract").first(),
+  ).toBeVisible();
+  await expect(page.getByText("Real settlement via NEAR Intents")).toHaveCount(
+    0,
+  );
+  await expect(page.getByTestId("sim-label")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Fund with simulated money" }),
+  ).toHaveCount(0);
+  await expect(page.getByTestId("crosschain-unavailable")).toContainText(
+    "escrow mode",
+  );
+  const direct = page.getByTestId("direct-option");
+  await expect(direct).toContainText(`token to ${ESCROW}`);
+  await expect(page.getByTestId("fund-msg")).toHaveText(`{"fund":"${ID}"}`);
+  await expect(direct).toContainText("app.settlement.escrow.sign_deposit");
+  await expect(direct).toContainText(`"msg":"{\\"fund\\":\\"${ID}\\"}"`);
+  // Escrow mode does not poll 1Click deposit addresses.
+  expect(api.calls.some((c) => c.path.endsWith("/funding"))).toBe(false);
 });

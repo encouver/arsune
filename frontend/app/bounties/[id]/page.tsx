@@ -18,13 +18,16 @@ import {
   FundingRequest,
   Options,
   OwnerBounty,
+  OwnerClaim,
   parseUsdc,
+  settlementBadge,
+  shortHash,
   Token,
   untilText,
   usdc,
   utcTime,
 } from "../api";
-import { Code, Message, SimTag } from "../ui";
+import { Code, CopyButton, Message, SimTag } from "../ui";
 
 const POLL_MS = 3000;
 const FUNDING_POLL_MS = 5000;
@@ -224,7 +227,7 @@ export default function BountyPage({
               <SimTag show={dry} />
               {!dry && (
                 <span className="sw-real">
-                  Real settlement via NEAR Intents
+                  {settlementBadge(bounty.settlement_mode)}
                 </span>
               )}
               <span
@@ -319,6 +322,7 @@ export default function BountyPage({
               >
                 Open the live board →
               </a>
+              <DecidedClaims claims={bounty.claims} />
             </Step>
           </ol>
         </div>
@@ -358,6 +362,61 @@ function Step({
         {children}
       </section>
     </li>
+  );
+}
+
+type DecidedClaim = OwnerClaim & {
+  evidence_hash: string;
+  evidence_url: string;
+};
+
+function isDecided(c: OwnerClaim): c is DecidedClaim {
+  return !!c.evidence_hash && !!c.evidence_url;
+}
+
+function DecidedClaims({ claims }: { claims: OwnerClaim[] }) {
+  const decided = claims.filter(isDecided);
+  if (decided.length === 0) return null;
+  // The UI forwards /api to Arsune, so this page's origin also serves the verify routes.
+  const apiUrl =
+    typeof window === "undefined" ? "<api>" : window.location.origin;
+  return (
+    <div className="bo-evidence" data-testid="decided-claims">
+      <h3>Decided claims and their evidence</h3>
+      <ul className="bo-claims">
+        {decided.map((c) => (
+          <li key={c.id} data-testid="decided-claim" data-status={c.status}>
+            <div className="bo-claim-top">
+              <span className="sw-kind">{c.status.replace("_", " ")}</span>
+              <span className="bo-muted">
+                {c.claim_type} · {c.hunter_account} · claim {c.id}
+              </span>
+            </div>
+            <div className="bo-claim-top">
+              <div className="bo-code bo-hash">
+                <code title={c.evidence_hash} data-testid="evidence-hash">
+                  sha256 {shortHash(c.evidence_hash)}
+                </code>
+                <CopyButton text={c.evidence_hash} label="evidence hash" />
+              </div>
+              <a
+                className="bo-link"
+                href={c.evidence_url}
+                target="_blank"
+                rel="noreferrer"
+                data-testid="evidence-link"
+              >
+                Evidence bundle
+              </a>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <p className="bo-muted" data-testid="verify-hint">
+        Check a ruling yourself, from the Arsune repository:{" "}
+        <code>uv run python -m app.verify {apiUrl} &lt;claim_id&gt;</code>
+      </p>
+    </div>
   );
 }
 
@@ -576,7 +635,7 @@ function FundStep({
         </span>
         <small className={amount ? undefined : "bo-invalid"}>
           {amount
-            ? `Arsune receives exactly this amount of USDC.`
+            ? `${bounty.settlement_mode === "escrow" ? "The escrow contract" : "Arsune"} receives exactly this amount of USDC.`
             : "Enter an amount above 0, with at most 6 decimals."}
         </small>
       </label>
@@ -834,7 +893,11 @@ function DirectOption({
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const dry = bounty.settlement_mode === "dry";
-  const receiver = options?.arsune_account ?? "…";
+  const escrow = bounty.settlement_mode === "escrow";
+  // An escrow deposit goes to the contract and names the bounty in its `msg`.
+  const receiver =
+    (escrow ? options?.escrow_contract : options?.arsune_account) ?? "…";
+  const msg = escrow ? JSON.stringify({ fund: bounty.id }) : null;
   const token = options?.token ?? "…";
   const memo = `arsune:fund:${fundId}`;
   const units = amount ?? 0;
@@ -844,6 +907,7 @@ function DirectOption({
       {
         intent: "transfer",
         memo,
+        ...(msg ? { msg } : {}),
         receiver_id: receiver,
         tokens: { [token]: String(units) },
       },
@@ -936,9 +1000,11 @@ function DirectOption({
           Sign a NEP-413 <code>transfer</code> intent for{" "}
           {options?.intents_contract ?? "intents.near"}: exactly{" "}
           <strong>{units}</strong> units ({usdc(units)} USDC) of the bounty
-          token to <strong>{receiver}</strong>, with this memo:
+          token to <strong>{receiver}</strong>, with this memo
+          {msg ? " and this msg" : ""}:
         </p>
         <Code text={memo} label="memo" testId="fund-memo" />
+        {msg && <Code text={msg} label="msg" testId="fund-msg" />}
         <span className="bo-muted">
           Message to sign (compact JSON, sorted keys):
         </span>
@@ -946,8 +1012,12 @@ function DirectOption({
         <span className="bo-muted">
           Use a versioned nonce with the salt from{" "}
           <code>GET /api/settlement</code>. In Python:{" "}
-          <code>app.settlement.near_intents.sign_transfer</code>. Then submit it
-          here, or POST{" "}
+          <code>
+            {escrow
+              ? "app.settlement.escrow.sign_deposit"
+              : "app.settlement.near_intents.sign_transfer"}
+          </code>
+          . Then submit it here, or POST{" "}
           <code>{`{fund_id, sender, amount, signed_intent}`}</code> to{" "}
           <code>/api/bounties/{bounty.id}/fund</code>.
         </span>

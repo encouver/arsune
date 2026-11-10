@@ -11,9 +11,19 @@ import {
   Options,
   OwnerBounty,
   parseUsdc,
+  SettlementMode,
+  settlementBadge,
   usdc,
 } from "../api";
 import { Message, SimTag } from "../ui";
+
+const FUND_HOW: Record<SettlementMode, string> = {
+  dry: "This Arsune runs in dry mode: fund with simulated money.",
+  near_intents:
+    "Send USDC with a signed NEAR Intents transfer, or pay from another chain through NEAR Intents 1Click.",
+  escrow:
+    "Send USDC with a signed deposit to the escrow contract. The escrow holds the budget and pays each proven claim.",
+};
 
 type Form = {
   url: string;
@@ -154,7 +164,7 @@ export default function NewBountyPage() {
               <SimTag show={dry} />
               {options && !dry && (
                 <span className="sw-real">
-                  Real settlement via NEAR Intents
+                  {settlementBadge(options.settlement_mode)}
                 </span>
               )}
             </div>
@@ -275,9 +285,7 @@ export default function NewBountyPage() {
                 <li>
                   <div>
                     <strong>Fund</strong>
-                    {dry
-                      ? "This Arsune runs in dry mode: fund with simulated money."
-                      : "Send USDC with a signed NEAR Intents transfer, or pay from another chain through NEAR Intents 1Click."}
+                    {FUND_HOW[options?.settlement_mode ?? "near_intents"]}
                   </div>
                 </li>
                 <li>

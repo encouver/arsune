@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { settlementBadge, shortHash } from "../bounties/api";
 import SiteHeader from "../site-header";
 import { clock, pagePath, share, usdc } from "./format";
 import styles from "./swarm.module.css";
@@ -381,7 +382,9 @@ export default function SwarmPage() {
           <div className="sw-meta">
             <SimTag dry={!!dry} />
             {bounty && !dry && (
-              <span className="sw-real">Real settlement via NEAR Intents</span>
+              <span className="sw-real">
+                {settlementBadge(bounty.settlement_mode)}
+              </span>
             )}
             <span className="sw-live" aria-live="polite">
               <i className={swarm && !swarm.finished ? "sw-pulse" : ""} />
@@ -771,6 +774,14 @@ function ClaimRow({ claim: c, names }: { claim: Claim; names: Names }) {
         {c.claim_type} · {pagePath(c.urls)}
         {c.scout &&
           ` · tip from ${names.get(c.scout.account) ?? c.scout.account} (${share(c.scout.share_bps)})`}
+        {c.evidence_hash && (
+          <>
+            {" · evidence "}
+            <span title={c.evidence_hash} data-testid="claim-hash">
+              {shortHash(c.evidence_hash)}
+            </span>
+          </>
+        )}
       </div>
       {c.checker_reason && <p className="sw-reason">{c.checker_reason}</p>}
     </li>

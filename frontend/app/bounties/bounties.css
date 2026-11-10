@@ -75,6 +75,12 @@
 .bo-details[open] { display: grid; gap: 8px; }
 .bo-board-link { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; background: var(--ink); color: var(--lime); padding: 10px 16px; border-radius: 6px; font-weight: 700; font-size: 13px; width: fit-content; }
 .bo-board-link:hover { background: #2c4f3f; }
+.bo-evidence { display: grid; gap: 8px; }
+.bo-evidence h3 { margin: 0; font-size: 14px; }
+.bo-claims { list-style: none; margin: 0; padding: 0; display: grid; }
+.bo-claims li { display: grid; gap: 6px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+.bo-claim-top { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; min-width: 0; }
+.bo-hash { width: fit-content; max-width: 100%; }
 @media (max-width: 1000px) {
   .bo-grid, .bo-options { grid-template-columns: 1fr; }
 }

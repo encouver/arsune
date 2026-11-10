@@ -77,8 +77,11 @@ function swarm(n = 12) {
   };
 }
 
-function bounty(mode: "dry" | "near_intents") {
-  const real = mode === "near_intents";
+type Mode = "dry" | "near_intents" | "escrow";
+const HASH = "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d9c8b7a6f5e4d3c2b1a0f9e8d";
+
+function bounty(mode: Mode) {
+  const real = mode !== "dry";
   return {
     id: "b1",
     url: "https://shop.example",
@@ -97,6 +100,7 @@ function bounty(mode: "dry" | "near_intents") {
         urls: ["https://shop.example/cart"],
         status: "paid",
         checker_reason: "Link returned 404 in a fresh browser.",
+        evidence_hash: HASH,
         scout: { account: "scout-a.testnet", share_bps: 1500, tip_id: "t1" },
         created_at: "2026-11-09T10:01:00Z",
       },
@@ -215,7 +219,7 @@ function bounty(mode: "dry" | "near_intents") {
 async function mock(
   page: Page,
   opts: {
-    mode?: "dry" | "near_intents";
+    mode?: Mode;
     swarm?: unknown | null;
     fail?: () => boolean;
   } = {},
@@ -290,6 +294,35 @@ test("near_intents mode links real payments to NearBlocks only", async ({
   await expect(
     page.getByText("Real settlement via NEAR Intents"),
   ).toBeVisible();
+});
+
+test("escrow mode names the escrow contract and links its transactions", async ({
+  page,
+}) => {
+  await mock(page, { mode: "escrow" });
+  await page.goto("/swarm?bounty=b1");
+  await expect(
+    page.getByText("Settlement by the escrow contract"),
+  ).toBeVisible();
+  await expect(page.getByText("Real settlement via NEAR Intents")).toHaveCount(
+    0,
+  );
+  await expect(page.getByTestId("sim-label")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "NearBlocks" })).toHaveCount(3);
+});
+
+test("a decided claim shows the short evidence hash", async ({ page }) => {
+  await mock(page);
+  await page.goto("/swarm");
+  const paid = page.locator('[data-testid="claim-row"][data-status="paid"]');
+  const hash = paid.getByTestId("claim-hash");
+  await expect(hash).toHaveText(`${HASH.slice(0, 12)}…`);
+  await expect(hash).toHaveAttribute("title", HASH);
+  await expect(paid).toContainText("evidence");
+  const rejected = page.locator(
+    '[data-testid="claim-row"][data-status="rejected"]',
+  );
+  await expect(rejected.getByTestId("claim-hash")).toHaveCount(0);
 });
 
 test("works without the swarm runner", async ({ page }) => {
