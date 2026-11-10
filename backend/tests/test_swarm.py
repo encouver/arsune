@@ -6,6 +6,7 @@ import json
 import random
 import re
 from collections import Counter
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -903,11 +904,70 @@ async def test_a_valid_answer_becomes_a_claim_with_the_models_reason():
     assert finding.key == arsune_fingerprint("price_mismatch", finding.urls, finding.details)
     assert why in finding.explanation
     assert f"hunter-ai-01: {why}; claiming price_mismatch" in log
-    user = model.requests[0]["messages"][1]["content"]
-    assert "p2 /site/p/hosting" in user and "L1 /site/gone" in user and "HTTP 404" in user
+    system, user = (m["content"] for m in model.requests[0]["messages"])
+    assert "p2 /site/p/hosting" in user and 'links that fail: L1 /site/gone "" HTTP 404' in user
     assert "phone width 640 px" in user and "also seen: p1 /site/c/hosting USD 19" in user
+    # The system prompt is the same for every AI hunter; the agent's name is in the user text.
+    assert user.startswith("You are hunter-ai-01.") and "hunter-ai-01" not in system
     assert hunter.identity.private_key not in json.dumps(model.requests)
     assert swarm.ai.budget.calls == 1 and not hunter.notebook.unreviewed
+    await swarm.ai.close()
+
+
+def test_a_free_local_model_is_allowed_and_never_spends_the_budget():
+    free = ModelSettings("http://127.0.0.1:11434/v1", "ollama", "llama3:latest", 0.0, 0.0)
+    assert free.problem() is None
+    assert "token prices" in ModelSettings("http://m.test/v1", "k", "m", -1.0, 0.0).problem()
+    budget = AiBudget(0.01, 0.0, 0.0)
+    for _ in range(100):
+        budget.settle(budget.reserve(50_000, 1200), None)
+    assert budget.spent == 0 and budget.calls == 100 and not budget.exhausted
+
+
+def test_timeout_and_temperature_come_from_the_swarms_own_settings(monkeypatch):
+    monkeypatch.setenv("ARSUNE_SWARM_MODEL_TIMEOUT_SECONDS", "300")
+    monkeypatch.setenv("ARSUNE_SWARM_MODEL_TEMPERATURE", "0.2")
+    settings = model_settings(env_file=None)
+    assert (settings.timeout_seconds, settings.temperature) == (300, 0.2)
+    monkeypatch.delenv("ARSUNE_SWARM_MODEL_TIMEOUT_SECONDS")
+    monkeypatch.delenv("ARSUNE_SWARM_MODEL_TEMPERATURE")
+    settings = model_settings(env_file=None)
+    assert (settings.timeout_seconds, settings.temperature) == (60, None)
+
+
+async def test_requests_ask_for_json_and_send_a_temperature_only_when_set():
+    model = FakeModel(lambda system, user: '{"claims": []}')
+    cold = model.client()
+    tuned = replace(AI_MODEL, temperature=0.2, timeout_seconds=300)
+    warm = ModelClient(tuned, cold.budget, httpx.MockTransport(model.handler))
+    await cold.ask("s", "u", 100)
+    await warm.ask("s", "u", 100)
+    first, second = model.requests
+    assert first["response_format"] == {"type": "json_object"} and "temperature" not in first
+    assert second["temperature"] == 0.2 and second["response_format"] == first["response_format"]
+    assert cold.http.timeout.read == 60 and warm.http.timeout.read == 300
+    await cold.close()
+    await warm.close()
+
+
+async def test_an_id_with_its_label_attached_still_names_what_the_agent_saw():
+    why = "/site/c/hosting lists USD 19, /site/p/hosting USD 29."
+    claim = {
+        "type": "price_mismatch",
+        "pages": ["p1", "p2 /site/p/hosting"],
+        "fact": "F1 hosting (USD per month)",
+        "why": why,
+    }
+    model = FakeModel(lambda system, user: json.dumps({"claims": [claim], "tips": []}))
+    swarm, hunter, log = ai_hunter(model)
+    await hunter.consult([])
+    [(finding, _)] = hunter.queue
+    assert finding.urls == [LISTING, PLAN] and finding.details == {"key": PRICE["key"]}
+    assert f"hunter-ai-01: {why[:-1]}; claiming price_mismatch" in log  # no ".;" in the log
+    notebook = hunter.notebook
+    assert notebook.value("F", " F1: USD 29") == PRICE["key"]
+    assert notebook.value("F", "F12") is None and notebook.value("F", "fact F1") is None
+    assert notebook.value("L", "F1") is None and notebook.value("F", None) is None
     await swarm.ai.close()
 
 
