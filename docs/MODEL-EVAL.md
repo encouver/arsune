@@ -138,7 +138,8 @@ Notes on the table:
 ## What every model ran into
 
 These come from the agent code, not from one model. They lower recall for all four. We did not
-change them, so that every model ran the same code.
+change them, so that every model ran the same code. [After fixes](#after-fixes) gives the fixes
+for problems 1 to 4 and two reruns.
 
 1. The prompt shows "Open claims: N of 3". Many answers read it as a limit for the answer
    ("I can hold only 3 open claims"). The agent can queue more claims, but it never shows a
@@ -156,6 +157,94 @@ change them, so that every model ran the same code.
 5. All three hunters start on the same page, and every model claimed its broken image in the
    first answer. A hunter drops a fault that the public page shows as claimed, but claims in the
    same second still race: in the Opus run, 2 of the 3 became duplicates.
+
+## After fixes
+
+Later on 10 November we fixed problems 1 to 4 and one board problem (beads `arsune-p28.22` to
+`arsune-p28.26`):
+
+| Commit | Change |
+| --- | --- |
+| `9a0febb` | Problem 4: when an answer is not only JSON, the parser takes the first complete JSON object in the text. The agent still checks every field. |
+| `60f09a5` | Problem 2: each page error says "from the site's own script" or "from another origin's script", and the fault list says that the first one is a fault. |
+| `4bcc781` | Problem 3: tips on offer wait for the next page review. After its crawl, a hunter calls the model for tips alone only when 4 are on offer or no scout still searches. |
+| `7879390` | Problem 1: the prompt tells the model to list every fault that it can prove, up to 10 in each answer. The agent queues the claims above the limit of 3 open claims. A page that still shows a fault that nobody claimed comes back once, under "Pages again", when a claim slot is free. |
+| `984a1ee` | The board shows tile amounts up to 999.99 in full (the old screenshot showed "+13.1("). |
+
+Then we ran `claude-haiku-5-5` and `claude-opus-5-5` again on commit `984a1ee`, with the setup
+above: the same command, seed, pages, prices and isolated stack, and a fresh database and Redis
+database for each run. Only the AI budget caps were lower: 0.25 USD for Haiku and 1.50 USD for
+Opus. Problem 5 is not fixed.
+
+| | Haiku, first | Haiku, after fixes | Opus, first | Opus, after fixes |
+| --- | --- | --- | --- | --- |
+| Wall time | 70.8 s | 57.9 s | 130.6 s | 86.5 s |
+| AI claims | 32 | 55 | 39 | 56 |
+| Proven | 31 | 54 | 37 | 52 |
+| Rejected (bond lost) | 0 | 0 | 0 | 0 |
+| Duplicates | 1 | 1 | 2 | 4 |
+| Unverified (bond refunded) | 0 | 0 | 0 | 0 |
+| Precision | 100% | 100% | 100% | 100% |
+| Seeded bugs in view of any AI agent | 57 | 58 | 55 | 55 |
+| Proven of those (recall) | 31 (54%) | 54 (93%) | 37 (67%) | 52 (95%) |
+| Seeded bugs in view of an AI hunter | 52 | 57 | 47 | 48 |
+| Proven of those (recall) | 31 (60%) | 54 (95%) | 35 (74%) | 48 (100%) |
+| Proven from own finds / AI-scout tips / scripted-scout tips | 31 / 0 / 0 | 54 / 0 / 0 | 26 / 11 / 0 | 48 / 4 / 0 |
+| Decoys claimed | 0 | 0 | 0 | 0 |
+| AI hunters' tip decisions: accept / counter / walk | 0 / 0 / 90 | 0 / 0 / 41 | 0 / 18 / 96 | 0 / 27 / 36 |
+| Tips (all scouts): offered / countered / sold | 30 / 0 / 0 | 30 / 0 / 0 | 39 / 15 / 11 | 40 / 16 / 5 |
+| AI scout: tips offered / sold | 20 / 0 | 20 / 0 | 25 / 11 | 22 / 5 |
+| AI scout's answers to counters | none | none | 11 accept | 5 accept, 1 refuse |
+| Model calls (hunter / scout / counter) | 40 (36 / 4 / 0) | 18 (14 / 4 / 0) | 58 (43 / 4 / 11) | 31 (21 / 4 / 6) |
+| Hunter calls with tips only, no new pages | 20 | 1 | 28 | 9 |
+| Hunter calls with "Pages again" (pages) | - | 3 (7) | - | 0 (0) |
+| Answers dropped: not JSON | 0 | 0 | 0 | 0 |
+| Answers with invalid items (items dropped) | 0 | 0 | 1 (1) | 1 (1) |
+| Refusals | 0 | 0 | 0 | 0 |
+| Latency per call, median / p90 | 3.2 s / 5.8 s | 5.4 s / 7.1 s | 5.1 s / 6.9 s | 5.3 s / 9.2 s |
+| Tokens in / out | 60,264 / 27,974 | 38,539 / 20,251 | 73,047 / 24,101 | 48,518 / 16,309 |
+| USD spent (swarm accounting) | 0.0200 | 0.0140 | 0.7742 | 0.5203 |
+| USD from tokens x price | 0.0200 | 0.0140 | 0.7742 | 0.5203 |
+| USD per proven bug | 0.0006 | 0.0003 | 0.0209 | 0.0100 |
+| Calls per hour, back-to-back races | 2,034 | 1,119 | 1,599 | 1,290 |
+| USD per hour, back-to-back races | 1.02 | 0.87 | 21.34 | 21.65 |
+
+What changed:
+
+- Recall: the Haiku hunters proved 95% of the seeded bugs in their view (60% before), and the
+  Opus hunters proved all 48 (74% before). Haiku proved all 6 page errors; in its first run it
+  proved none. Opus proved the 5 page errors in its view.
+- Problem 1: no Opus answer left a fault for later. Answers listed up to 9 claims, and the
+  agent queued them. 2 of 14 Haiku answers still listed 3 claims and put 5 more faults in the
+  note as "queued for later claims". Those pages came back under "Pages again" (3 calls, 7
+  pages) and gave 2 more claims. Other hunters had claimed the rest by then
+  (`arsune-p28.28`).
+- Problem 3: calls with tips only fell from 20 to 1 (Haiku) and from 28 to 9 (Opus). The 9 Opus
+  calls came after the crawl, with up to 4 tips each. In each of them the model wrote that it
+  had no page observations, then countered or walked away.
+- Calls and cost: each race made about half the calls and ended sooner. A Haiku race cost
+  0.0140 USD (0.0200 before) and an Opus race 0.5203 USD (0.7742 before). The cost per proven
+  bug fell by half. The cost per hour of back-to-back Opus races stays about the same, because
+  each race is shorter.
+- Trading: Opus sold 5 tips (11 before), all from the AI scout at 10% or 15%. 4 were proven;
+  the fifth was a duplicate: another hunter claimed the same overflow in the same second.
+  Its hunters found more faults first (48 own finds, 26 before). The scripted scout refused
+  all 10 of its counters at 10% or 12%, below its floor of 20% or 23%. Haiku still walked away
+  from every tip.
+- Duplicates: 3 of the 4 Opus duplicates came in the first 5 seconds of claims. Two hunters
+  claimed the same faults from the pages that both read first: the start page, /shop/shipping
+  and /shop/c/support (problem 5).
+- Problem 4 did not show: every Haiku and Opus answer was only JSON. Unit tests cover the new
+  parser path.
+- A new limit: an image that answers HTTP 200 but does not decode shows as "HTTP 200 shown".
+  9 Haiku answers left such an image out because it answers HTTP 200. Haiku proved 6 of the 9
+  broken images in its hunters' view; Opus proved 10 of 10 (`arsune-p28.27`).
+- Spend for the two reruns: 0.5342 USD (Haiku 0.0140, Opus 0.5203), by the swarm's accounting.
+  The four first runs and the reruns together: 1.5576 USD.
+
+The choices below hold. Opus is still the demo model: 52 proven bugs, the Claude model that
+trades most, 87 s and 0.52 USD a race. Haiku still fits a hosted demo: 54 proven bugs for
+0.014 USD a race, but no trade. We did not run Sonnet again.
 
 ## Which model fits
 
@@ -175,7 +264,8 @@ answers about 4.6 calls a minute, so a race takes about 8.4 minutes and one race
 
 ![Swarm board near the end of the Opus race](img/swarm-claude.png)
 
-The board near the end of the `claude-opus-5-5` race: 35 proven bugs, 58 model calls, 0.76 USD.
+The board near the end of the `claude-opus-5-5` rerun after the fixes: 52 proven bugs, 31 model
+calls, 0.51 USD. (We painted out the Next.js dev-tools button in the bottom left corner.)
 
 ## Limits of this evaluation
 

@@ -197,8 +197,8 @@ An AI agent crawls and measures pages like a scripted generalist: it reads the s
 link, the content width at a 390 px phone viewport, and the price cards. In the same desktop
 visit it also reads the images that finished loading without a picture (and whether each is
 shown), and the uncaught errors and unhandled rejections of the page (a rejection that is
-handled later does not count). Every 6 pages (or at the end of its crawl, or when tips are
-offered) it sends a compact summary to the model:
+handled later does not count). Every 6 pages (or at the end of its crawl) it sends a compact
+summary to the model, with the tips on offer:
 
 ```text
 p2 /shop/p/hosting-plus "Hosting Plus - Northwind Supply" phone width 390 px (fits)
@@ -207,7 +207,7 @@ p2 /shop/p/hosting-plus "Hosting Plus - Northwind Supply" phone width 390 px (fi
   links that fail: L4 /shop/retired/item-02 "Service status history" HTTP 404
   price F2 hosting plus (USD per month): USD 39; also seen: p1 /shop/c/hosting USD 29
   images that do not load: I1 /shop/img/partner-badge.png HTTP 404 shown
-  uncaught errors: E1 "Error: Chat widget failed to start" from another origin's script
+  uncaught errors: E1 "TypeError: Cannot read properties of undefined (reading 'items')" from the site's own script; E2 "Error: Chat widget failed to start" from another origin's script
 ```
 
 AI agents claim and sell all five provable types: `broken_link`, `horizontal_overflow`,
@@ -217,15 +217,22 @@ as Arsune normalizes it (whitespace collapsed, case folded), so its key is Arsun
 scripted `images`, `errors` and `generalist` strategies use the same observations and the same
 rules.
 
-- An AI hunter's model answers strict JSON: the claims to make (`type` with page, link and
-  fact ids), a decision on each offered tip (`accept`, `counter` with a share of 5% to 50%, or
-  `walk`), and a short reason for each.
+- An AI hunter's model answers one JSON object: the claims to make (`type` with page, link
+  and fact ids), a decision on each offered tip (`accept`, `counter` with a share of 5% to 50%,
+  or `walk`), and a short reason for each.
+- A hunter holds at most 3 open claims, but its model lists every fault that it can prove (at
+  most 10 in each answer). The agent queues the claims above the limit and makes each one when
+  a claim settles. A reviewed page that still shows a fault that nobody claimed comes back
+  once, under "Pages again", when a claim slot is free.
+- Tips on offer wait for the next page review. After its crawl, a hunter calls the model for
+  tips alone only when 4 tips are on offer or no scout still searches.
 - An AI scout's model answers the tips to offer and the asking share (10% to 50%). When a
   hunter counters, the scout's model accepts or refuses the counter.
 - Page text is untrusted data. The prompt says so, and the answer can only name ids that the
   agent itself observed. Unknown ids, other claim types and bad shares are dropped. An id with
-  text after it (`"F3 analytics scale"`) names `F3`. An answer that is not a JSON object means
-  no action.
+  text after it (`"F3 analytics scale"`) names `F3`. When a sentence comes before or after the
+  JSON, the agent reads the first complete JSON object. An answer with no JSON object means no
+  action.
 - The system prompt is the same for every agent of a role. The agent's name, wallet, bond and
   record are in the user message, so a model server can reuse the cached system prompt.
 - The agent builds the claim from its own observations, then claims through the same bond
@@ -336,11 +343,11 @@ Notes:
 - Each call asks for low effort. The swarm sends no temperature, top-p or thinking setting (current models reject them), so `ARSUNE_SWARM_MODEL_TEMPERATURE` has no effect here.
 - Claude thinks before it answers, and the thinking tokens count in `max_tokens` and in the output bill. Each call therefore allows at least 4,000 output tokens, and the budget holds that worst case before the call. A small `--ai-budget` with Opus can stop the run after a few calls.
 - For `claude-opus-5-5` and `claude-sonnet-5-5`, a policy refusal is retried on the server (`server-side-fallback-2026-07-01`). That retry bills at the fallback model's rates, which the swarm budget does not know. Use `claude-haiku-5-5` for a strict budget.
-- The SDK retries a failed call twice. A refusal, a cut-off answer or an API error is "no action" for the agent. The swarm does not use structured outputs; the strict JSON parser checks each answer.
+- The SDK retries a failed call twice. A refusal, a cut-off answer or an API error is "no action" for the agent. The swarm does not use structured outputs. The parser takes the JSON object of an answer, also when a sentence comes before it, and the agent checks every field.
 
 Result of a run on Claude:
 
-On 10 November 2026, three AI hunters and one AI scout ran on `claude-opus-5-5`, with one scripted scout and no scripted hunters (`--hunters 0 --ai-hunters 3 --scouts 1 --ai-scouts 1 --pages 25 --pace 1 --seed 11`). The hunters made 39 claims: 37 proven, 0 rejected, 2 duplicates. They made 15 counter-offers and bought 11 tips from the AI scout at 15% or 20%; all 11 were proven. All 58 model calls answered valid JSON. The race took 131 s and spent 0.77 USD of a 2.00 USD AI budget. With the same settings, `claude-sonnet-5-5` proved more bugs (52) in 66 s for 0.23 USD but almost did not trade, and `claude-haiku-5-5` cost 0.02 USD. [MODEL-EVAL.md](MODEL-EVAL.md) compares all four models, with the local `llama3:latest`.
+On 10 November 2026, three AI hunters and one AI scout ran on `claude-opus-5-5`, with one scripted scout and no scripted hunters (`--hunters 0 --ai-hunters 3 --scouts 1 --ai-scouts 1 --pages 25 --pace 1 --seed 11`). After the fixes in [MODEL-EVAL.md](MODEL-EVAL.md#after-fixes), the hunters made 56 claims: 52 proven, 0 rejected, 4 duplicates. They proved every seeded bug on the pages that they read. They made 16 counter-offers and bought 5 tips from the AI scout at 10% or 15%; 4 were proven and 1 was a duplicate. All 31 model calls answered valid JSON. The race took 87 s and spent 0.52 USD of a 1.50 USD AI budget. In the same rerun, `claude-haiku-5-5` proved 54 bugs for 0.014 USD but bought no tip. Before the fixes, `claude-sonnet-5-5` proved 52 bugs in 66 s for 0.23 USD but almost did not trade. [MODEL-EVAL.md](MODEL-EVAL.md) compares all four models, with the local `llama3:latest`.
 
 ## Modes
 
