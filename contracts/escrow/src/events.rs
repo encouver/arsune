@@ -79,6 +79,9 @@ pub enum Event {
         bounty_id: String,
         reason: CloseReason,
     },
+    /// A top-up after a spent budget brought the balance to one reward and its fee.
+    #[event_version("1.0.0")]
+    Reopen { bounty_id: String, balance: U128 },
     #[event_version("1.0.0")]
     Withdraw {
         bounty_id: String,

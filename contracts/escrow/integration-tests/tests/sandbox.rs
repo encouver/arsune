@@ -618,6 +618,58 @@ async fn proven_without_budget_becomes_unfunded() -> Result<()> {
 }
 
 #[tokio::test]
+async fn top_up_reopens_a_bounty_whose_budget_ran_out() -> Result<()> {
+    let env = Env::new().await?;
+    env.create("b1", Terms::default()).await?;
+    env.fund("b1", REWARD + FEE).await?;
+    env.bond("b1", "c1", None).await?;
+    done(env.rule(&env.judge, "c1", "proven").await?).await?;
+    assert_eq!(env.bounty("b1").await?["close_reason"], "budget_spent");
+    // A top-up below one reward and its fee is kept; the bounty stays closed.
+    env.fund("b1", FEE).await?;
+    let (used, result) = env
+        .deposit(&env.hunter, BOND, &bond_msg("b1", "c2", None))
+        .await?;
+    assert_eq!(used, 0);
+    assert_eq!(events(&result, "refund")[0]["reason"], "bounty_closed");
+    let fund = json!({ "fund": "b1" }).to_string();
+    let (used, result) = env.deposit(&env.owner, REWARD, &fund).await?;
+    assert_eq!(used, REWARD);
+    let reopen = &events(&result, "reopen")[0];
+    assert_eq!(reopen["balance"], (REWARD + FEE).to_string());
+    assert_eq!(env.bounty("b1").await?["status"], "open");
+    env.bond("b1", "c2", None).await?;
+    done(env.rule(&env.judge, "c2", "proven").await?).await?;
+    assert_eq!(env.bounty("b1").await?["close_reason"], "budget_spent");
+
+    // A close for a spent budget does not release the storage pool; the owner's close does.
+    let withdraw = || {
+        env.judge
+            .call(&env.escrow, "withdraw_remaining")
+            .args_json(json!({"bounty_id": "b1"}))
+            .gas(Gas::from_tgas(100))
+            .transact()
+    };
+    assert!(failure_text(&withdraw().await?).contains("open until the owner closes it"));
+    done(
+        env.owner
+            .call(&env.escrow, "close_bounty")
+            .args_json(json!({"bounty_id": "b1"}))
+            .deposit(ONE_YOCTO)
+            .transact()
+            .await?,
+    )
+    .await?;
+    let (used, result) = env.deposit(&env.owner, REWARD + FEE, &fund).await?;
+    assert_eq!(used, 0);
+    assert_eq!(events(&result, "refund")[0]["reason"], "bounty_closed");
+    let result = ok(withdraw().await?).await?;
+    assert_eq!(events(&result, "withdraw")[0]["amount"], "0");
+    assert_eq!(env.bounty("b1").await?["close_reason"], "owner");
+    env.assert_solvent().await
+}
+
+#[tokio::test]
 async fn only_the_judge_rules_and_only_once() -> Result<()> {
     let env = Env::new().await?;
     env.create("b1", Terms::default()).await?;

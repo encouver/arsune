@@ -1187,6 +1187,110 @@ fn stale_claims_can_be_cleared_so_owner_can_withdraw() {
     assert_eq!(e.withdraw_remaining("b1".to_string()).0, 2 * (REWARD + FEE));
 }
 
+// ---- top-ups after a spent budget (RULES.md "Closing and top-ups") ----
+
+/// A bounty that paid its one reward and closed for a spent budget, with `extra` left.
+fn spent_bounty(extra: u128) -> Escrow {
+    let mut e = setup();
+    create(&mut e);
+    accepted(fund(&mut e, REWARD + FEE + extra));
+    accepted(bond(&mut e, "c1", BASE_BOND, None));
+    rule(&mut e, "c1", Outcome::Proven);
+    assert_eq!(bounty(&e).close_reason, Some(CloseReason::BudgetSpent));
+    e
+}
+
+#[test]
+fn top_up_after_spent_budget_reopens_bounty() {
+    let mut e = spent_bounty(5);
+    // Less than one reward and its fee: the money is kept and the bounty stays closed.
+    accepted(fund(&mut e, 5));
+    let b = bounty(&e);
+    assert_eq!((b.status.as_str(), b.balance.0), ("closed", 10));
+    assert!(events("reopen").is_empty());
+    refunded(
+        bond(&mut e, "c2", BASE_BOND, None),
+        BASE_BOND,
+        "bounty_closed",
+    );
+    accepted(fund(&mut e, REWARD + FEE - 10));
+    let b = bounty(&e);
+    assert_eq!((b.status.as_str(), b.close_reason), ("open", None));
+    assert_eq!(b.funded_total.0, 2 * (REWARD + FEE));
+    let reopen = events("reopen");
+    assert_eq!(reopen[0]["bounty_id"], "b1");
+    assert_eq!(reopen[0]["balance"], (REWARD + FEE).to_string());
+    accepted(bond(&mut e, "c2", BASE_BOND, None));
+    rule(&mut e, "c2", Outcome::Proven);
+    assert_eq!(bounty(&e).close_reason, Some(CloseReason::BudgetSpent));
+    assert_solvent(&e);
+}
+
+#[test]
+fn top_up_after_unfunded_close_reopens_bounty() {
+    let mut e = setup();
+    create(&mut e);
+    accepted(fund(&mut e, REWARD + FEE));
+    accepted(bond(&mut e, "c1", BASE_BOND, None));
+    let mut b = e.bounties.get("b1").unwrap().clone();
+    b.balance = REWARD; // as if part of the budget were already spent
+    e.bounties.insert("b1".to_string(), b);
+    rule(&mut e, "c1", Outcome::Proven);
+    assert_eq!(bounty(&e).close_reason, Some(CloseReason::Unfunded));
+    accepted(fund(&mut e, FEE));
+    assert_eq!(bounty(&e).status, "open");
+    assert_eq!(events("reopen").len(), 1);
+}
+
+#[test]
+fn owner_close_after_spent_budget_is_final() {
+    let mut e = spent_bounty(5);
+    call("owner.near", 1, T0 + 5);
+    e.close_bounty("b1".to_string());
+    assert_eq!(bounty(&e).close_reason, Some(CloseReason::Owner));
+    refunded(fund(&mut e, REWARD + FEE), REWARD + FEE, "bounty_closed");
+    call("judge.near", 0, T0 + 10);
+    assert_eq!(e.withdraw_remaining("b1".to_string()).0, 5);
+}
+
+#[test]
+#[should_panic(expected = "the bounty is open until the owner closes it or the deadline passes")]
+fn spent_budget_close_does_not_allow_early_withdraw() {
+    // A top-up can still open the bounty, and it would need its storage pool.
+    let mut e = spent_bounty(5);
+    call("judge.near", 0, T0 + 5);
+    e.withdraw_remaining("b1".to_string());
+}
+
+#[test]
+fn spent_bounty_withdraws_after_deadline_and_takes_no_top_up() {
+    let mut e = spent_bounty(5);
+    refunded(
+        deposit_at(
+            &mut e,
+            T0 + DAY,
+            "owner.near",
+            REWARD + FEE,
+            r#"{"fund":"b1"}"#,
+        ),
+        REWARD + FEE,
+        "deadline_passed",
+    );
+    call("judge.near", 0, T0 + DAY);
+    assert_eq!(e.withdraw_remaining("b1".to_string()).0, 5);
+    assert_eq!(bounty(&e).close_reason, Some(CloseReason::BudgetSpent));
+}
+
+#[test]
+#[should_panic(expected = "the bounty is already closed")]
+fn owner_close_is_final() {
+    let mut e = setup();
+    create(&mut e);
+    call("owner.near", 1, T0);
+    e.close_bounty("b1".to_string());
+    e.close_bounty("b1".to_string());
+}
+
 // ---- payout failure ----
 
 #[test]

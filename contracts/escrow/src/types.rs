@@ -35,6 +35,14 @@ pub enum CloseReason {
     Deadline,
 }
 
+impl CloseReason {
+    /// Only a spent budget lets a top-up open the bounty again (RULES.md "Closing and
+    /// top-ups"). An owner close and the deadline are final.
+    pub fn takes_top_ups(self) -> bool {
+        matches!(self, CloseReason::BudgetSpent | CloseReason::Unfunded)
+    }
+}
+
 #[near(serializers = [borsh, json])]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Scout {

@@ -412,7 +412,8 @@ impl Escrow {
         U128(bond)
     }
 
-    /// The owner stops new funding and new claims. Open claims are still ruled.
+    /// The owner stops new funding and new claims. Open claims are still ruled. The owner can
+    /// also make a close for a spent budget final, so that no top-up opens the bounty again.
     #[payable]
     pub fn close_bounty(&mut self, bounty_id: String) {
         near_sdk::assert_one_yocto();
@@ -424,7 +425,10 @@ impl Escrow {
             env::predecessor_account_id() == bounty.owner,
             "only the owner can close the bounty"
         );
-        require!(bounty.closed.is_none(), "the bounty is already closed");
+        require!(
+            bounty.closed.is_none_or(|reason| reason.takes_top_ups()),
+            "the bounty is already closed"
+        );
         bounty.closed = Some(CloseReason::Owner);
         Event::Close {
             bounty_id,
@@ -434,16 +438,18 @@ impl Escrow {
     }
 
     /// Send the remaining balance to the owner and unused storage NEAR to its payer, once the
-    /// bounty is closed or past its deadline and no claim is open. Anyone can call it: the
-    /// receivers are fixed.
+    /// owner closed the bounty or the deadline passed, and no claim is open. Anyone can call
+    /// it: the receivers are fixed. A close for a spent budget is not enough, because a top-up
+    /// can still open the bounty, and it would need its storage pool.
     pub fn withdraw_remaining(&mut self, bounty_id: String) -> U128 {
         let now = env::block_timestamp();
         let bounty = self
             .bounties
             .get_mut(&bounty_id)
             .unwrap_or_else(|| env::panic_str("unknown bounty"));
+        let final_close = bounty.closed.is_some_and(|reason| !reason.takes_top_ups());
         require!(
-            bounty.closed.is_some() || now >= bounty.deadline_ns,
+            final_close || now >= bounty.deadline_ns,
             "the bounty is open until the owner closes it or the deadline passes"
         );
         require!(bounty.open_claims == 0, "claims are still open");
@@ -624,27 +630,43 @@ impl Escrow {
         Ok(bounty)
     }
 
+    /// A top-up is taken by an open bounty, and by one that closed only because its budget
+    /// ran out. It opens such a bounty again when the balance pays one reward and its fee.
     fn accept_fund(
         &mut self,
         sender_id: &AccountId,
         amount: u128,
         bounty_id: String,
     ) -> Result<(), &'static str> {
-        let balance = self
-            .open_bounty(&bounty_id)?
-            .balance
-            .checked_add(amount)
-            .ok_or("overflow")?;
+        let bounty = self.bounties.get(&bounty_id).ok_or("unknown_bounty")?;
+        if bounty.closed.is_some_and(|reason| !reason.takes_top_ups()) {
+            return Err("bounty_closed");
+        }
+        if env::block_timestamp() >= bounty.deadline_ns {
+            return Err("deadline_passed");
+        }
+        let balance = bounty.balance.checked_add(amount).ok_or("overflow")?;
         let bounty = self.bounties.get_mut(&bounty_id).unwrap();
         bounty.balance = balance;
         bounty.funded_total += amount;
+        let reopen = bounty.closed.is_some() && balance >= bounty.claim_cost();
+        if reopen {
+            bounty.closed = None;
+        }
         Event::Fund {
-            bounty_id,
+            bounty_id: bounty_id.clone(),
             sender_id: sender_id.clone(),
             amount: U128(amount),
             balance: U128(balance),
         }
         .emit();
+        if reopen {
+            Event::Reopen {
+                bounty_id,
+                balance: U128(balance),
+            }
+            .emit();
+        }
         Ok(())
     }
 
