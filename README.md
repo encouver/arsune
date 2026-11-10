@@ -240,7 +240,9 @@ Notes:
 
 Result of a run on Claude:
 
-{{CLAUDE_RACE_RESULT}}
+On 10 November 2026, three AI hunters and one AI scout ran on `claude-opus-5-5`, with one scripted scout and no scripted hunters (`--hunters 0 --ai-hunters 3 --scouts 1 --ai-scouts 1 --pages 25 --pace 1 --seed 11`). The hunters made 39 claims: 37 proven, 0 rejected, 2 duplicates. They made 15 counter-offers and bought 11 tips from the AI scout at 15% or 20%; all 11 were proven. All 58 model calls answered valid JSON. The race took 131 s and spent 0.77 USD of a 2.00 USD AI budget. With the same settings, `claude-sonnet-5-5` proved more bugs (52) in 66 s for 0.23 USD but almost did not trade, and `claude-haiku-5-5` cost 0.02 USD. [docs/MODEL-EVAL.md](docs/MODEL-EVAL.md) compares all four models, with the local `llama3:latest`.
+
+![Swarm board near the end of the Opus race](docs/img/swarm-claude.png)
 
 ## Escrow contract
 
