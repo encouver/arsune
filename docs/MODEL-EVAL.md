@@ -3,7 +3,8 @@
 On 10 November 2026 we ran the same race four times. Each run used a different model for the
 AI hunters and the AI scout: three Claude models through the Anthropic SDK, and `llama3:latest`
 on a local GPU as a free baseline. This page gives the setup, the numbers, real decisions with
-Arsune's verdicts, and which model fits which use.
+Arsune's verdicts, and which model fits which use. A later section covers two models on
+NEAR AI Cloud.
 
 ## Setup
 
@@ -246,6 +247,116 @@ The choices below hold. Opus is still the demo model: 52 proven bugs, the Claude
 trades most, 87 s and 0.52 USD a race. Haiku still fits a hosted demo: 54 proven bugs for
 0.014 USD a race, but no trade. We did not run Sonnet again.
 
+## NEAR AI Cloud
+
+On 10 November 2026 we ran the same race on NEAR AI Cloud (`https://cloud-api.near.ai/v1`), with
+the default provider (`openai_compatible`). NEAR AI was down after an incident on 9 November. It
+works again. Two models ran on commit `b97ee8f`: the code is the same as in the reruns, and the
+command, seed, agent mix, pages, isolated stack and fresh database and Redis database are the
+same. Dry settlement mode. The wrapper that records the calls is the same as in the first runs.
+A probe call of 50 tokens or less showed that the endpoint accepts the request that the swarm
+sends (`response_format` with `json_object`, `max_tokens`, a system message).
+
+| Model | Settings | `--ai-budget` |
+| --- | --- | --- |
+| `openai/gpt-5.6-luna` | prices 0.20 / 1.20 | 0.50 |
+| `anthropic/claude-haiku-5-5` | `ARSUNE_SWARM_MODEL_NAME` set, prices 0.10 / 0.50 | 0.25 |
+
+The luna model thinks before it answers. Its thinking tokens count in `max_tokens` and in the
+price. The swarm sends `max_tokens` 1,200 to hunters on this provider. A Claude model on NEAR AI
+goes through the same path, so it gets 1,200 tokens too. The direct Anthropic path always sends
+at least 4,000 (`CLAUDE_MIN_MAX_TOKENS`).
+
+| | Luna, NEAR AI | Haiku, NEAR AI | Haiku, direct, after fixes | Opus, direct, after fixes |
+| --- | --- | --- | --- | --- |
+| Wall time | 94.5 s | 63.4 s | 57.9 s | 86.5 s |
+| AI claims | 50 | 9 | 55 | 56 |
+| Proven | 49 | 9 | 54 | 52 |
+| Rejected (bond lost) | 0 | 0 | 0 | 0 |
+| Duplicates | 1 | 0 | 1 | 4 |
+| Unverified (bond refunded) | 0 | 0 | 0 | 0 |
+| Precision | 100% | 100% | 100% | 100% |
+| Seeded bugs in view of any AI agent | 58 | 55 | 58 | 55 |
+| Proven of those (recall) | 49 (84%) | 9 (16%) | 54 (93%) | 52 (95%) |
+| Seeded bugs in view of an AI hunter | 55 | 52 | 57 | 48 |
+| Proven of those (recall) | 47 (85%) | 9 (17%) | 54 (95%) | 48 (100%) |
+| Proven from own finds / AI-scout tips / scripted-scout tips | 42 / 7 / 0 | 9 / 0 / 0 | 54 / 0 / 0 | 48 / 4 / 0 |
+| Decoys claimed | 0 | 0 | 0 | 0 |
+| AI hunters' tip decisions: accept / counter / walk | 3 / 7 / 32 | 0 / 0 / 0 (see notes) | 0 / 0 / 41 | 0 / 27 / 36 |
+| Tips (all scouts): offered / countered / sold | 29 / 4 / 7 | 20 / 0 / 0 | 30 / 0 / 0 | 40 / 16 / 5 |
+| AI scout: tips offered / sold | 19 / 7 | 10 / 0 | 20 / 0 | 22 / 5 |
+| AI scout's answers to counters | 4 accept | none | none | 5 accept, 1 refuse |
+| Model calls (hunter / scout / counter) | 24 (16 / 4 / 4) | 25 (21 / 4 / 0) | 18 (14 / 4 / 0) | 31 (21 / 4 / 6) |
+| Hunter calls with tips only, no new pages | 2 | 0 | 1 | 9 |
+| Hunter calls with "Pages again" (pages) | 4 (9) | 12 (54) | 3 (7) | 0 (0) |
+| Answers dropped: not JSON | 4 | 3 | 0 | 0 |
+| Answers cut off at `max_tokens` | 4 | 20 | 0 | 0 |
+| Answers with invalid items (items dropped) | 0 | 0 | 0 | 1 (1) |
+| Refusals | 0 | 0 | 0 | 0 |
+| Latency per call, median / p90 | 7.3 s / 14.4 s | 5.5 s / 6.3 s | 5.4 s / 7.1 s | 5.3 s / 9.2 s |
+| Tokens in / out | 29,271 / 15,439 | 54,778 / 28,012 | 38,539 / 20,251 | 48,518 / 16,309 |
+| USD spent (swarm accounting) | 0.0244 | 0.0195 | 0.0140 | 0.5203 |
+| USD from tokens x price | 0.0244 | 0.0195 | 0.0140 | 0.5203 |
+| USD per proven bug | 0.0005 | 0.0022 | 0.0003 | 0.0100 |
+| Calls per hour, back-to-back races | 914 | 1,420 | 1,119 | 1,290 |
+| USD per hour, back-to-back races | 0.93 | 1.11 | 0.87 | 21.65 |
+
+Notes on the table:
+
+- No run hit its AI budget. Every run ended because every agent was done.
+- The luna model used 10,738 of its 15,439 output tokens for thinking. 4 of its 24 answers
+  used all 1,200 tokens for thinking and came back empty. The swarm dropped them with "the
+  answer is not valid JSON". Each one covered 4 to 6 pages and 4 tips. Four hunter calls out
+  of 16 is a loss of 25%.
+- The Haiku answers on NEAR AI have no thinking tokens in the usage, but 20 of 25 answers stopped
+  at 1,200 tokens (`finish_reason` is `length`). The text ends in the middle of a claim. 3 of
+  these gave no text or text that the parser could not read. The other 17 were not dropped:
+  the parser takes the first complete JSON object in the text, and in a cut-off answer that
+  object is one claim, not the answer. The agent finds no `claims` list and logs "read 6 pages
+  and 4 tips and acts on none: nothing is worth a bond". So the table shows 0 for "not JSON"
+  on most of them, and the tip decisions of these answers are lost. We did not change the
+  code. A cut-off answer is a problem of the request, not of NEAR AI.
+- The first answer of a Haiku hunter that we read in full listed 6 complete claims before the cut.
+  The agent used none of them. The answers that ended normally (5 of 25) held all 9 claims of the
+  race, and all 9 were proven.
+- A first luna race gave the same result within a few bugs: 48 claims, 47 proven, 1 duplicate,
+  96.4 s, 24 calls, 0.0264 USD. We did not save its prompts, so we ran luna again to measure
+  the bugs in view. The table shows the second race. The cost of both luna races is in the total.
+- The Haiku tip decisions are 0 because no answer that the parser accepted had a `tips` list.
+- The latency is the API time. No call waited for a slot.
+- The USD cross-check uses the usage that each response reported, times the price. It matches
+  the swarm's accounting. We did not compare it with the NEAR AI invoice.
+- Spend: luna 0.0244 USD (first luna race 0.0264, not in the table), Haiku 0.0195 USD, two
+  probe calls less than 0.0001 USD. Total 0.0704 USD.
+
+### Decisions, with Arsune's verdict
+
+| Agent and its words | Verdict |
+| --- | --- |
+| Luna, `hunter-ai-03`: "/shop/c/hosting raises a site's own-script TypeError reading undefined items" (page error) | Proven. Luna proved 4 of the 6 page errors; in their reruns Haiku proved all 6 and Opus the 5 in its view. |
+| Luna, `hunter-ai-03` countered a price mismatch tip: "10% instead of 25%, because The cited Storage Plus mismatch matches the observed USD 23 versus USD 33 values"; `scout-ai-01` accepted: "The hunter corroborates the exact USD 23 versus USD 33 mismatch" | Proven (fresh reads 33 and 23). All 7 tips that luna bought were proven. |
+| Luna, `hunter-ai-02`: an empty answer, `finish_reason` `length`, 1,200 of 1,200 tokens used for thinking | Dropped: "takes no action on 6 pages and 4 tips: the answer is not valid JSON". 4 times in 16 hunter calls. |
+| Haiku on NEAR AI, `hunter-ai-01`: `{"claims":[{"type":"broken_link","page":"p5","link":"L3","why":"/shop/c/security links to /shop/archive/item-15 (Release notes), which answers HTTP 410."},` and 5 more complete claims, then the text stops in a claim | The agent read the first claim as the whole answer. It made no claim: "read 6 pages and 4 tips and acts on none". |
+| Haiku on NEAR AI, `hunter-ai-02`: "/shop/p/storage-plus lists Storage Plus at USD 33 per month; /shop/c/storage lists it at USD 23." | Proven: fresh reads 33 and 23. |
+
+### What this shows
+
+- Luna on NEAR AI is a good cheap model for the swarm. It proved 49 bugs (85% of the bugs in
+  its hunters' view) in 95 s for 0.0244 USD, with no false claim. It cost 0.0005 USD per proven
+  bug: close to Haiku direct (0.0003), and 20 times less than Opus direct (0.0100). Its recall
+  is lower than Haiku's and Opus's after the fixes (95% and 100%), mostly because 4 of 16 hunter
+  answers used all their tokens for thinking.
+- Luna traded. Its hunters made 7 counters in their answers (4 made on the board, all accepted)
+  and bought 7 tips, all proven. Haiku direct bought none. Opus direct bought 5. This is the
+  first cheap model that trades.
+- Claude on NEAR AI works with the swarm's request, but with a limit of 1,200 output tokens it
+  loses 80% of its answers. Haiku gave 9 proven bugs against 54 on the direct path. The fix
+  belongs in the swarm: a higher `max_tokens` for models that think, and a parser that rejects
+  a cut-off answer (`finish_reason` `length`) instead of reading one claim from it. Until then,
+  use Claude through the direct Anthropic path.
+- A thinking model on the openai-compatible path needs about 1,000 tokens for its thinking. A
+  limit of 1,200 tokens is too low for a hunter with 6 pages and 4 tips.
+
 ## Which model fits
 
 **(a) The judge demo or video: `claude-opus-5-5`.** Every answer was valid JSON, no claim was
@@ -261,6 +372,13 @@ false claim and no call failed. Its limits: it walked away from every tip, so th
 stays quiet, and it proved 31 of the 57 bugs in view. At the same rate, Sonnet costs about 12.50
 USD an hour and Opus about 21.34 USD an hour. `llama3:latest` costs nothing, but one small GPU
 answers about 4.6 calls a minute, so a race takes about 8.4 minutes and one race runs at a time.
+
+**(c) A hosted demo that trades, on NEAR AI Cloud: `openai/gpt-5.6-luna`.** One race cost 0.0244
+USD and took 95 s. It proved 49 bugs, made no false claim, and bought 7 tips from the AI scout,
+all proven. It is the cheapest model that trades. Its limit: 4 of 16 hunter answers used all
+1,200 tokens for thinking and came back empty. A higher `max_tokens` for hunters would lift
+its recall. Do not run a Claude model through NEAR AI with the current request (see
+[NEAR AI Cloud](#near-ai-cloud)). Our choice for the judge demo stays `claude-opus-5-5`.
 
 ![Swarm board near the end of the Opus race](img/swarm-claude.png)
 
