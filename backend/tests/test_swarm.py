@@ -1094,6 +1094,57 @@ async def test_an_ai_hunter_counters_with_the_models_share_and_reason():
     await swarm.ai.close()
 
 
+async def test_faults_past_the_open_claim_limit_are_queued_and_their_pages_come_back_once():
+    replies = [
+        {
+            "claims": [
+                {"type": "horizontal_overflow", "page": "p2", "why": "/site/p/hosting is 640 px"}
+            ],
+            "note": "I hold 3 open claims, so the 404 link and the price gap wait",
+        },
+        {"claims": [{"type": "broken_link", "page": "p2", "link": "L1", "why": "a 404 link"}]},
+    ]
+    model = FakeModel(lambda system, user: json.dumps(replies.pop(0)))
+    swarm, hunter, log = ai_hunter(model)
+    hunter.crawl.frontier.clear()
+    hunter.pending = {f"c{n}": (None, None) for n in range(3)}
+    claimed = []
+
+    async def claim(finding, tip=None):
+        claimed.append(finding.claim_type)
+
+    hunter.claim = claim
+    assert await hunter.act()  # the last pages go to the model even with 3 open claims
+    system, user = (m["content"] for m in model.requests[0]["messages"])
+    assert "You may hold at most 3 open claims at a time." in system
+    assert "up to 10 per answer" in system and "Open claims: 3 of 3, 0 more queued." in user
+    assert [f.claim_type for f, _ in hunter.queue] == ["horizontal_overflow"]
+    # Both pages still show faults that nobody claimed: the 404 link and the price gap.
+    assert [s.url for s in hunter.notebook.again] == [LISTING, PLAN]
+    assert not hunter.worth_a_call()  # no free slot yet
+    hunter.pending.clear()  # the open claims settle
+    assert await hunter.act() and claimed == ["horizontal_overflow"]
+    # Another hunter claims the price gap: the listing page has nothing left to show.
+    [gap] = price_mismatches(hunter.notebook.facts())
+    swarm.feed.claimed[gap.key] = {
+        "hunter_account": "other.near",
+        "claim_type": "price_mismatch",
+        "details": gap.details,
+        "urls": gap.urls,
+    }
+    assert await hunter.act()
+    user = model.requests[1]["messages"][1]["content"]
+    assert "New pages:" not in user and "Pages again:\np2 /site/p/hosting" in user
+    assert "(mismatch claimed)" in user and not re.search(r"^p1 ", user, re.MULTILINE)
+    assert [f.claim_type for f, _ in hunter.queue] == ["broken_link"]
+    assert "hunter-ai-01: a 404 link; claiming broken_link" in log
+    assert await hunter.act() and claimed == ["horizontal_overflow", "broken_link"]
+    hunter.keep_open([hunter.notebook.seen[PLAN]])
+    assert hunter.notebook.again == [] and not hunter.worth_a_call()  # shown again only once
+    assert not await hunter.act() and len(model.requests) == 2
+    await swarm.ai.close()
+
+
 async def test_tips_wait_for_the_next_page_review_instead_of_a_call_of_their_own():
     reply = {"claims": [], "tips": [{"tip": "T1", "action": "walk", "why": "no evidence"}]}
     model = FakeModel(lambda system, user: json.dumps(reply))
@@ -1111,6 +1162,7 @@ async def test_tips_wait_for_the_next_page_review_instead_of_a_call_of_their_own
     assert "New pages:" in user and "Tips on offer:\nT1 from scout-01" in user
     assert first.status == "offered" and hunter.fresh_offers() == []
     assert "hunter-ai-01 walked away from scout-01's mobile overflow tip: no evidence." in log
+    hunter.notebook.again.clear()  # pages with faults left over are another test
     # After the crawl, a lone tip waits while a scout still searches for more.
     hunter.crawl.frontier.clear()
     swarm.board.post("scout-01", "scout.near", overflow(LISTING, 900), 3000)
