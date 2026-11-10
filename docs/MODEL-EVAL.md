@@ -263,9 +263,10 @@ sends (`response_format` with `json_object`, `max_tokens`, a system message).
 | `anthropic/claude-haiku-5-5` | `ARSUNE_SWARM_MODEL_NAME` set, prices 0.10 / 0.50 | 0.25 |
 
 The luna model thinks before it answers. Its thinking tokens count in `max_tokens` and in the
-price. The swarm sends `max_tokens` 1,200 to hunters on this provider. A Claude model on NEAR AI
-goes through the same path, so it gets 1,200 tokens too. The direct Anthropic path always sends
-at least 4,000 (`CLAUDE_MIN_MAX_TOKENS`).
+price. At the time of these two races, the swarm sent `max_tokens` 1,200 to hunters on this
+provider. A Claude model on NEAR AI goes through the same path, so it got 1,200 tokens too. The
+direct Anthropic path always sent at least 4,000 (`CLAUDE_MIN_MAX_TOKENS`, now `MIN_MAX_TOKENS`
+on both paths).
 
 | | Luna, NEAR AI | Haiku, NEAR AI | Haiku, direct, after fixes | Opus, direct, after fixes |
 | --- | --- | --- | --- | --- |
@@ -352,10 +353,41 @@ Notes on the table:
 - Claude on NEAR AI works with the swarm's request, but with a limit of 1,200 output tokens it
   loses 80% of its answers. Haiku gave 9 proven bugs against 54 on the direct path. The fix
   belongs in the swarm: a higher `max_tokens` for models that think, and a parser that rejects
-  a cut-off answer (`finish_reason` `length`) instead of reading one claim from it. Until then,
-  use Claude through the direct Anthropic path.
+  a cut-off answer (`finish_reason` `length`) instead of reading one claim from it. We made
+  both changes (see [After the fix](#after-the-fix)).
 - A thinking model on the openai-compatible path needs about 1,000 tokens for its thinking. A
   limit of 1,200 tokens is too low for a hunter with 6 pages and 4 tips.
+
+### After the fix
+
+The swarm now asks for at least 4,000 output tokens on every provider. It treats an answer with
+`finish_reason` `length` as a failure ("the answer was cut off (max_tokens)"), and the agent
+keeps its pages for a retry. The parser no longer reads an inner object from a cut-off answer.
+An answer with none of the keys that the prompt asks for is a failure, not "acts on none". We
+ran the same two races again on the changed code. The command, seed, agent mix, pages, isolated
+stack, fresh database and flushed Redis database are the same. Each race had `--ai-budget` 0.25.
+
+| | Luna, NEAR AI | Haiku, NEAR AI |
+| --- | --- | --- |
+| Wall time | 87.5 s | 65.0 s |
+| AI claims | 53 | 49 |
+| Proven | 51 | 48 |
+| Rejected (bond lost) | 0 | 0 |
+| Duplicates | 2 | 1 |
+| Seeded bugs in view of an AI hunter | 49 | 51 |
+| Proven of those (recall) | 49 (100%) | 48 (94%) |
+| Model calls | 23 | 20 |
+| Answers cut off at `max_tokens` | 0 | 0 |
+| Answers dropped: not JSON | 0 | 0 |
+| Tips bought | 4 | 0 |
+| USD spent (swarm accounting) | 0.0216 | 0.0167 |
+
+Before the fix, luna had 4 answers cut off and Haiku had 20 of 25. Now no answer of either
+model ends at the limit, and no answer is dropped. Haiku through NEAR AI proved 48 bugs (9
+before) and is close to Haiku through the direct path (54). Luna used 7,790 of its 13,371
+output tokens for thinking, and none of its answers was empty. Luna bought 4 tips, all proven.
+Haiku walked away from every tip, as it does on the direct path. The two races cost 0.0383 USD
+together. One run per model: a difference of a few bugs is not a result.
 
 ## Which model fits
 
@@ -376,9 +408,10 @@ answers about 4.6 calls a minute, so a race takes about 8.4 minutes and one race
 **(c) A hosted demo that trades, on NEAR AI Cloud: `openai/gpt-5.6-luna`.** One race cost 0.0244
 USD and took 95 s. It proved 49 bugs, made no false claim, and bought 7 tips from the AI scout,
 all proven. It is the cheapest model that trades. Its limit: 4 of 16 hunter answers used all
-1,200 tokens for thinking and came back empty. A higher `max_tokens` for hunters would lift
-its recall. Do not run a Claude model through NEAR AI with the current request (see
-[NEAR AI Cloud](#near-ai-cloud)). Our choice for the judge demo stays `claude-opus-5-5`.
+1,200 tokens for thinking and came back empty. After the fix (4,000 tokens, no empty answer) it
+proved 51 bugs for 0.0216 USD. A Claude model also works through NEAR AI now: Haiku proved 48
+bugs for 0.0167 USD (see [After the fix](#after-the-fix)). Our choice for the judge demo stays
+`claude-opus-5-5`.
 
 ![Swarm board near the end of the Opus race](img/swarm-claude.png)
 

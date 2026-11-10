@@ -234,9 +234,9 @@ Prices per million tokens (prompts up to 100K tokens):
 Notes:
 
 - Each call asks for low effort. The swarm sends no temperature, top-p or thinking setting (current models reject them), so `ARSUNE_SWARM_MODEL_TEMPERATURE` has no effect here.
-- Claude thinks before it answers, and the thinking tokens count in `max_tokens` and in the output bill. Each call therefore allows at least 4,000 output tokens, and the budget holds that worst case before the call. A small `--ai-budget` with Opus can stop the run after a few calls.
+- A model thinks before it answers, and the thinking tokens count in `max_tokens` and in the output bill. Each call therefore allows at least 4,000 output tokens, on every provider, and the budget holds that worst case before the call. A small `--ai-budget` with Opus can stop the run after a few calls.
 - For `claude-opus-5-5` and `claude-sonnet-5-5`, a policy refusal is retried on the server (`server-side-fallback-2026-07-01`). That retry bills at the fallback model's rates, which the swarm budget does not know. Use `claude-haiku-5-5` for a strict budget.
-- The SDK retries a failed call twice. A refusal, a cut-off answer or an API error is "no action" for the agent. The swarm does not use structured outputs. The parser takes the JSON object of an answer, also when a sentence comes before it, and the agent checks every field.
+- The SDK retries a failed call twice. A refusal, a cut-off answer (`max_tokens`, or `finish_reason` `length` on the OpenAI-compatible path) or an API error is "no action" for the agent, and so is an answer that has none of the keys the prompt asks for. The parser does not read an inner object from a cut-off answer. The swarm does not use structured outputs. The parser takes the JSON object of an answer, also when a sentence comes before it, and the agent checks every field.
 
 Result of a run on Claude:
 

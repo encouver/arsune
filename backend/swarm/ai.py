@@ -440,6 +440,12 @@ def to_decision(item, offers: dict[str, Tip]) -> tuple[Tip, str, int, str] | Non
     return tip, action, limit, why
 
 
+def require_keys(answer: dict, keys: tuple[str, ...]):
+    """An answer without any key the prompt asks for is a lost answer, not an empty one."""
+    if not any(key in answer for key in keys):
+        raise ModelFailure(f"the answer has none of the keys {', '.join(keys)}")
+
+
 def items(answer: dict, name: str) -> tuple[list, int]:
     """The answer's list `name`, cut to MAX_ITEMS, and how many entries it drops."""
     value = answer.get(name, [])
@@ -571,6 +577,7 @@ class AiHunter(Hunter):
         self.considered.update(t.id for t in offers)
         try:
             answer = await self.swarm.ai.ask(*self.prompt(pages, tips, again), DECIDE_TOKENS)
+            require_keys(answer, ("claims", "tips", "note"))
         except BudgetSpent:
             notebook.unreviewed[:0] = pages
             notebook.again[:0] = again
@@ -712,6 +719,7 @@ class AiScout(Scout):
         )
         try:
             answer = await self.swarm.ai.ask(system, user, DECIDE_TOKENS)
+            require_keys(answer, ("tips", "note"))
         except BudgetSpent:
             self.notebook.unreviewed[:0] = pages
             self.go_scripted()

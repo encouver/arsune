@@ -39,6 +39,7 @@ from swarm.llm import (
     ModelClient,
     ModelFailure,
     ModelSettings,
+    first_object,
     model_settings,
     parse_answer,
 )
@@ -869,10 +870,10 @@ def test_ai_agents_refuse_to_start_without_token_prices():
 
 async def test_budget_charges_reported_usage_and_refuses_a_call_it_cannot_pay():
     model = FakeModel(lambda system, user: '{"claims": []}')
-    client = model.client(limit=0.0101)
+    client = model.client(limit=0.0201)
     assert await client.ask("s", "u", 1000) == {"claims": []}
     assert client.budget.spent == pytest.approx((1000 * 1.0 + 200 * 4.0) / 1e6)
-    client.budget.spent = 0.01  # the next worst case (1000 output tokens) does not fit
+    client.budget.spent = 0.02  # the next worst case (4000 output tokens) does not fit
     with pytest.raises(BudgetSpent):
         await client.ask("s", "u", 1000)
     assert len(model.requests) == 1 and client.budget.exhausted
@@ -982,6 +983,75 @@ async def test_invalid_json_is_no_action():
     await hunter.consult([])
     assert hunter.queue == [] and not hunter.scripted
     assert log[-1] == "hunter-ai-01 takes no action on 2 pages: the answer is not valid JSON."
+    await swarm.ai.close()
+
+
+def length_reply(content='{"claims":[{"type":"broken_link"},{"type":'):
+    body = {"choices": [{"message": {"content": content}, "finish_reason": "length"}]}
+    return httpx.Response(
+        200, json={**body, "usage": {"prompt_tokens": 1000, "completion_tokens": 4000}}
+    )
+
+
+async def test_an_answer_cut_off_at_max_tokens_is_a_failure_that_is_still_billed():
+    model = FakeModel(lambda system, user: length_reply())
+    client = model.client()
+    with pytest.raises(ModelFailure, match=r"cut off \(max_tokens\)"):
+        await client.ask("s", "u", 1200)
+    assert client.budget.spent == pytest.approx((1000 * 1.0 + 4000 * 4.0) / 1e6)
+    assert client.budget.held == 0
+    await client.close()
+
+
+async def test_the_openai_compatible_path_asks_for_at_least_4000_output_tokens():
+    model = FakeModel(lambda system, user: '{"claims": []}')
+    client = model.client()
+    await client.ask("s", "u", 1200)
+    await client.ask("s", "u", 9000)
+    assert [r["max_tokens"] for r in model.requests] == [4000, 9000]
+    await client.close()
+
+
+def test_a_cut_off_object_is_not_read_as_its_inner_object():
+    assert first_object('{"claims":[{"a":1},{"b":') is None
+    assert first_object('{"claims":[{"a":1},{"note":"cut of') is None
+    assert first_object('Here it is: {"claims": []} ok') == {"claims": []}
+    assert first_object('See {x} first: {"claims": []}') == {"claims": []}
+    with pytest.raises(ModelFailure, match="not valid JSON"):
+        parse_answer('{"claims":[{"a":1},{"b":')
+
+
+async def test_a_cut_off_hunter_answer_keeps_the_pages_open():
+    model = FakeModel(lambda system, user: length_reply())
+    swarm, hunter, log = ai_hunter(model)
+    await hunter.consult([])
+    assert hunter.queue == []
+    assert (
+        log[-1] == "hunter-ai-01 takes no action on 2 pages: the answer was cut off (max_tokens)."
+    )
+    assert hunter.notebook.again  # the page with an open fault is kept for another call
+    await swarm.ai.close()
+
+
+async def test_an_answer_without_the_asked_keys_is_no_action_not_acts_on_none():
+    model = FakeModel(lambda system, user: '{"type": "broken_link", "page": "p2"}')
+    swarm, hunter, log = ai_hunter(model)
+    await hunter.consult([])
+    assert "takes no action on 2 pages: the answer has none of the keys" in log[-1]
+    assert "acts on none" not in " ".join(log) and hunter.notebook.again
+    await swarm.ai.close()
+    scout_model = FakeModel(lambda system, user: '{"claims": []}')
+    swarm, scout, log = ai_scout(scout_model)
+    await scout.consult()
+    assert "takes no action on 2 pages: the answer has none of the keys" in log[-1]
+    await swarm.ai.close()
+
+
+async def test_an_answer_with_the_keys_and_empty_lists_acts_on_none():
+    model = FakeModel(lambda system, user: '{"claims": [], "tips": [], "note": "none"}')
+    swarm, hunter, log = ai_hunter(model)
+    await hunter.consult([])
+    assert log[-1] == "hunter-ai-01 read 2 pages and acts on none: none."
     await swarm.ai.close()
 
 

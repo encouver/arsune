@@ -30,8 +30,10 @@ DEFAULT_TIMEOUT_SECONDS = 60.0  # a cloud API; a model on a local GPU can need m
 FRAMING_TOKENS = 64  # chat framing on top of the message text
 NOT_BILLED = {"prompt_tokens": 0, "completion_tokens": 0}
 OPENAI_COMPATIBLE, ANTHROPIC = "openai_compatible", "anthropic"
-# Claude thinks before it answers, and thinking tokens count in max_tokens and are billed.
-CLAUDE_MIN_MAX_TOKENS = 4000
+# Thinking models think before they answer; thinking tokens count in max_tokens and are billed.
+# A call asks for at least this many output tokens on every provider.
+MIN_MAX_TOKENS = 4000
+CUT_OFF = "the answer was cut off (max_tokens)"
 CLAUDE_SDK_RETRIES = 2
 # Only these models can retry a policy refusal on the server (beta header for fallbacks="default").
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-sonnet-5-5"}
@@ -196,12 +198,18 @@ def parse_answer(content) -> dict:
 
 
 def first_object(text: str) -> dict | None:
-    """The first complete JSON object in the text, or None."""
+    """The first complete JSON object in the text, or None. An object that the end of the text
+    cuts off stops the search: every later "{" is inside that object, and a complete inner
+    object is only a part of the answer."""
     decoder = json.JSONDecoder()
     start = text.find("{")
     while start != -1:
         try:
             return decoder.raw_decode(text, start)[0]
+        except json.JSONDecodeError as exc:
+            if exc.pos >= len(text.rstrip()) or exc.msg.startswith("Unterminated string"):
+                return None
+            start = text.find("{", start + 1)
         except ValueError:
             start = text.find("{", start + 1)
     return None
@@ -222,7 +230,7 @@ def _claude_text(response) -> str:
         category = getattr(getattr(response, "stop_details", None), "category", None)
         raise ModelFailure("the model refused to answer" + (f" ({category})" if category else ""))
     if response.stop_reason == "max_tokens":
-        raise ModelFailure("the answer was cut off (max_tokens)")
+        raise ModelFailure(CUT_OFF)
     return "".join(b.text for b in response.content if b.type == "text")
 
 
@@ -252,9 +260,11 @@ class ModelClient:
         self._slots = asyncio.Semaphore(concurrency)
 
     async def ask(self, system: str, user: str, max_tokens: int) -> dict:
-        """One chat call that must answer a JSON object. Raises BudgetSpent or ModelFailure."""
+        """One chat call that must answer a JSON object. Raises BudgetSpent or ModelFailure.
+        `max_tokens` is raised to MIN_MAX_TOKENS; an answer that hits the limit is a failure."""
         if self.budget.exhausted:
             raise BudgetSpent
+        max_tokens = max(max_tokens, MIN_MAX_TOKENS)
         if self.settings.provider == ANTHROPIC:
             return await self._ask_claude(system, user, max_tokens)
         async with self._slots:
@@ -271,9 +281,13 @@ class ModelClient:
         if problem:
             raise ModelFailure(problem)
         try:
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            content = choice["message"]["content"]
         except (KeyError, IndexError, TypeError):
             raise ModelFailure("the answer has no message") from None
+        if choice.get("finish_reason") == "length":
+            logger.warning("The model's answer was cut off: %r", str(content)[:200])
+            raise ModelFailure(CUT_OFF)
         try:
             return parse_answer(content)
         except ModelFailure:
@@ -281,7 +295,6 @@ class ModelClient:
             raise
 
     async def _ask_claude(self, system: str, user: str, max_tokens: int) -> dict:
-        max_tokens = max(max_tokens, CLAUDE_MIN_MAX_TOKENS)
         async with self._slots:
             held = self.budget.reserve(len((system + user).encode()), max_tokens)
             usage = None  # no report: the whole reservation stays charged
