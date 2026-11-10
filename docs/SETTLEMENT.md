@@ -2,11 +2,12 @@
 
 Arsune pays proven claims and collects hunter bonds in USDC inside the NEAR Intents
 Verifier contract `intents.near`. This contract is on mainnet only. There is no testnet
-deployment. Every money movement is a NEP-413 signed `transfer` intent that a relayer
-submits with `execute_intents`.
+deployment. Every money movement is a signed `transfer` intent that a relayer
+submits with `execute_intents`. Arsune signs with NEP-413 (NEAR key). Hunters and funders
+sign with NEP-413 or, with only an Ethereum key, with ERC-191 (see "Ethereum wallets").
 
-- Code: `backend/app/settlement/near_intents.py` (intents) and `near_tx.py` (keys, RPC,
-  transactions).
+- Code: `backend/app/settlement/near_intents.py` (intents), `near_tx.py` (keys, RPC,
+  transactions) and `erc191.py` (Ethereum keys and signatures).
 - Interface: `backend/app/settlement/base.py` (`Settlement.collect` / `Settlement.pay`).
 - `ARSUNE_SETTLEMENT_MODE=dry` (the default) moves no money. `near_intents` moves real USDC.
 
@@ -57,7 +58,8 @@ These references were checked by unit tests:
 
 ## What each step checks
 
-`verify_signed_transfer` (local, before any RPC call):
+`verify_signed_transfer` (local, before any RPC call). It dispatches on `standard`
+(`nep413` or `erc191`; the `erc191` checks are in "Ethereum wallets"):
 
 - The JSON has exactly the keys shown above, `standard == "nep413"`, and the recipient is the configured contract.
 - The nonce is 32 bytes. The key is 32 bytes and the signature is 64 bytes.
@@ -105,6 +107,18 @@ The alternatives:
 Arsune sends only `FunctionCall` transactions, so the small encoder is easier to audit. Published
 near-api-js vectors pin its output byte for byte.
 
+For ERC-191 the settlement adds two libraries (see "Ethereum wallets"):
+
+- `coincurve` (21.x, MIT/Apache-2.0): bindings to libsecp256k1, the Bitcoin Core library.
+  It signs with RFC 6979 nonces and low s, gives recoverable signatures and recovers keys.
+  Wheels exist for CPython 3.9 to 3.13. It has no runtime dependencies.
+- `pycryptodome` (3.x, pinned `<4`): Keccak-256. Python's `hashlib.sha3_256` is NIST SHA-3,
+  which pads differently, so it gives other hashes. `eth-hash` pins the same `<4` range.
+  The 4.x series had five releases in the three weeks before 2026-11-09.
+
+`eth-keys` and `eth-account` were not used. They add `eth-utils`, `eth-typing` and their
+dependencies for about 40 lines of code.
+
 ## RPC
 
 `https://free.rpc.fastnear.com` is the default. A probe of a `current_salt` view on 2026-11-09 gave:
@@ -133,6 +147,105 @@ account and `simulate_intents` only. It sends no transaction. The Verifier gave 
 | Deadline in the past | `deadline has expired` |
 | Named account without a registered key | `public key '…' doesn't exist for account 'intents.near'` |
 | `add_public_key` intent (needs no balance) | Success: `intents_executed` lists our nonce; event `public_key_added`; `state.fee = 1`, `current_salt = 252812b3` |
+
+## Ethereum wallets
+
+A hunter agent with only an Ethereum key (a `0x` address) can sign its bond and get paid.
+The Verifier derives the account from the key: `0x` + lowercase hex of the last 20 bytes of
+`keccak256(public key x | y)`. This is the Ethereum address. The account is implicit, so it
+needs no `add_public_key`.
+
+```python
+from app.settlement.erc191 import generate_evm_key
+from app.settlement.near_intents import sign_transfer_erc191
+
+private_key, address = generate_evm_key()  # or an existing 0x... key
+bond = sign_transfer_erc191(
+    private_key, arsune_account, token, bond_amount, f"arsune:bond:{claim_id}",
+    deadline, bytes.fromhex(salt),  # salt from GET /api/settlement
+)
+# Send the claim with hunter_account=address and bond_intent=bond.
+```
+
+### Signed transfer format (confirmed on mainnet)
+
+```json
+{
+  "standard": "erc191",
+  "payload": "{\"deadline\":\"2026-11-09T22:56:35.388528Z\",\"intents\":[{\"intent\":\"transfer\",\"memo\":\"<memo>\",\"receiver_id\":\"<receiver>\",\"tokens\":{\"nep141:17208628...33a1\":\"1\"}}],\"nonce\":\"<base64 of 32 bytes>\",\"signer_id\":\"0x<40 lowercase hex>\",\"verifying_contract\":\"intents.near\"}",
+  "signature": "secp256k1:<base58 of 65 bytes r | s | v>"
+}
+```
+
+- `payload` is one JSON string with `signer_id`, `verifying_contract`, `deadline`, `nonce` and
+  `intents` (`DefusePayload` in near/intents). NEP-413 puts the same data in `recipient`,
+  `nonce` and `message`. Arsune writes compact JSON with sorted keys. The Verifier accepts any
+  key order.
+- There is no `public_key`. The Verifier recovers the key from the signature.
+- The signed hash is `keccak256("\x19Ethereum Signed Message:\n" + decimal byte length of payload + payload)`.
+  This is what `personal_sign` signs. The Verifier's `intent_hash` is base58 of this hash
+  (checked on mainnet).
+- The signature is r | s | v (65 bytes), base58 with the prefix `secp256k1:`.
+  - v must be 0 or 1. Wallets give 27 or 28. `erc191.normalize_signature` subtracts 27.
+  - s must be in the lower half of the curve order. The Verifier calls `ecrecover` with the
+    malleability check on. libsecp256k1 always signs with low s.
+- The nonce, salt and deadline rules are the same as for NEP-413.
+- `signer_id` must be lowercase, because NEAR account IDs have no upper case. The Verifier
+  rejects a checksummed (EIP-55) address as signer or receiver. The ERC-191 example in the
+  NEAR Intents docs shows a checksummed `signer_id`. Its signature is valid, but for the
+  lowercase address.
+
+### What `verify_signed_transfer` checks for `erc191`
+
+- The JSON has exactly `standard`, `payload` and `signature`. `payload` is a string.
+- The signature is 65 bytes, v is 0 or 1, 0 < r < n and 0 < s ≤ n/2.
+- The address recovered from the signature is the `signer_id` of the payload. Thus only
+  implicit 0x accounts can sign with ERC-191. A named account with a registered secp256k1
+  key would pass the Verifier but not this check.
+- The payload has no duplicate JSON keys and exactly the five keys above.
+  `verifying_contract` is the configured contract. The nonce is 32 bytes in canonical base64.
+- Then the NEP-413 rules apply: `signer_id` is the expected sender, the deadline is in the
+  future, and there is exactly one `transfer` with the exact receiver, `{token: amount}` and memo.
+
+`simulate` and `execute` get the `(signer_id, nonce)` of both standards from `signer_and_nonce`.
+`DrySettlement` and `NearIntentsSettlement` accept ERC-191 bonds and funding with no other change.
+
+### Payouts to a 0x account
+
+`transfer` takes any NEAR `AccountId` as `receiver_id` (`Transfer` in
+`core/src/intents/tokens.rs`). A lowercase 0x address is a valid account ID (an Eth-implicit
+account). Arsune pays it with its usual NEP-413 `transfer`. The USDC stays in `intents.near`
+for the 0x account. The holder of the Ethereum key can sign more intents with it, for example
+a withdrawal.
+
+### Bounty intake
+
+`require_account` checks the hunter, sender, owner and scout accounts against the NEAR account
+ID rule. A lowercase 0x address passes. A checksummed address gets 422 with "Use the lowercase
+0x address for the hunter: 0x…" and the lowercase form. No schema change was necessary.
+
+### Live read-only check (2026-11-09)
+
+`backend/tests/test_settlement_evm.py` (marker `network`) uses `free.rpc.fastnear.com`, a
+throwaway Ethereum key and `simulate_intents` only. It sends no transaction.
+
+| Signed input | Verifier answer |
+| - | - |
+| ERC-191 transfer of 1 unit of USDC to a new 0x account | `insufficient balance or overflow` (format, signature, salt, nonce, signer and 0x receiver accepted) |
+| Empty `intents` list (needs no balance) | Success: `intents_executed` lists the 0x address and our nonce. `intent_hash` is base58 of the ERC-191 hash. |
+| v = 27 or 28 (not normalized) | `invalid signature` |
+| High-s twin of a valid signature (n − s, other v) | `invalid signature` |
+| One bit of s changed | `public key 'secp256k1:…' doesn't exist for account '0x…'` (another key is recovered) |
+| Amount changed after signing | `public key 'secp256k1:…' doesn't exist for account '0x…'` |
+| Checksummed `signer_id` or receiver | `JSON: invalid value: "0x6F41…", the Account ID contains an invalid character 'F' …` |
+
+Published vectors in the unit tests:
+
+- `recover_ok` in near/intents `crates/signatures/erc191` ("Hello world!").
+- The secp256k1 case of `to_implicit_account_id` in `core/src/public_key.rs`.
+- The ERC-191 example in the NEAR Intents signing docs.
+- The eth-account `Account.recover_message` doctest ("I♥SF", v = 28): v normalization, the
+  hash and the address. Our signature is the same as the wallet's (RFC 6979 nonces).
 
 ## First real payment
 
@@ -283,11 +396,17 @@ about 0.09 NEAR, mostly 11 × 0.007 NEAR for account creation.
   - `core/src/intents/tokens.rs` (`Transfer`)
   - `core/src/payload/nep413.rs`
   - `crates/signatures/nep413/src/lib.rs` (prehash, test vector)
+  - `crates/signatures/erc191/src/lib.rs` (prehash, test vector) and
+    `core/src/payload/{erc191,mod,multi}.rs` (payload format)
+  - `crates/crypto/src/secp256k1.rs` (65-byte signature, v, low s) and
+    `core/src/public_key.rs` (0x implicit account, test vector)
   - `contracts/defuse/src/contract/intents/state.rs` (implicit keys)
   - `core/src/error.rs`
 - [near-api-js](https://github.com/near/near-api-js) `test/unit/transactions/serialize.test.ts` and `data/*.json`
 - [NEAR RPC transactions](https://docs.near.org/api/rpc/transactions.md): `send_tx`, `tx`, `wait_until`, `TIMEOUT_ERROR`
 - [NEP-413](https://github.com/near/NEPs/blob/master/neps/nep-0413.md)
+- [EIP-191](https://eips.ethereum.org/EIPS/eip-191) and
+  [eth-account](https://github.com/ethereum/eth-account) `eth_account/account.py` (`recover_message` doctest)
 - [near-linkdrop](https://github.com/near/near-linkdrop) `src/lib.rs` (`create_account`, refund callback)
 - [Creating named accounts](https://docs.near.org/protocol/tutorials/creating-implicit-and-named-accounts.md),
   [Gas](https://docs.near.org/protocol/transactions/gas.md) (buy and burn price, account creation charge),

@@ -260,7 +260,9 @@ def test_extra_fields_and_other_contracts_are_rejected():
         verify(sign([transfer, transfer]))
     with pytest.raises(SettlementError, match="verifying contract"):
         verify(sign([transfer], contract="intents.testnet"))
-    with pytest.raises(SettlementError, match="nep413"):
+    with pytest.raises(SettlementError, match="nep413 or erc191"):
+        verify({**hunter_bond(), "standard": "tip191"})
+    with pytest.raises(SettlementError, match="exactly the keys"):
         verify({**hunter_bond(), "standard": "erc191"})
     with pytest.raises(SettlementError, match="exactly the keys"):
         verify({**hunter_bond(), "extra": 1})

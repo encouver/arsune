@@ -1,7 +1,7 @@
 """Settlement without network access, so dry results are never real payments.
 
-Incoming transfers still need a valid NEP-413 signature for the exact receiver, token,
-amount and memo, so a dry run shows the same signing work as a real one.
+Incoming transfers still need a valid NEP-413 or ERC-191 signature for the exact receiver,
+token, amount and memo, so a dry run shows the same signing work as a real one.
 """
 
 from uuid import uuid4

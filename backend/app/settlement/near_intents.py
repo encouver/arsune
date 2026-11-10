@@ -1,9 +1,10 @@
 """USDC settlement inside the NEAR Intents Verifier contract (intents.near, mainnet only).
 
-Every money movement is a NEP-413 signed `transfer` intent passed to
-`execute_intents`. Hunter agents can use `sign_transfer` to build the bond they
-send to Arsune; Arsune uses `verify_signed_transfer`, `simulate` and `execute`.
-See docs/SETTLEMENT.md for the payload format and sources.
+Every money movement is a signed `transfer` intent passed to `execute_intents`.
+Hunter agents build the bond they send to Arsune with `sign_transfer` (NEAR key,
+NEP-413) or `sign_transfer_erc191` (Ethereum key, ERC-191, signer = its 0x address).
+Arsune signs its own payouts with NEP-413 and uses `verify_signed_transfer`,
+`simulate` and `execute`. See docs/SETTLEMENT.md for the payload formats and sources.
 """
 
 import base64
@@ -19,6 +20,7 @@ from nacl.signing import VerifyKey
 from pydantic import SecretStr
 
 from app.core.config import Settings, settings
+from app.settlement import erc191
 from app.settlement.base import SettlementError
 from app.settlement.near_tx import (
     TGAS,
@@ -44,6 +46,9 @@ PAY_DEADLINE = timedelta(minutes=5)
 SIGNED_KEYS = {"standard", "payload", "public_key", "signature"}
 PAYLOAD_KEYS = {"recipient", "nonce", "message"}
 MESSAGE_KEYS = {"signer_id", "deadline", "intents"}
+# An erc191 payload is one JSON string; the public key is recovered from the signature.
+ERC191_SIGNED_KEYS = {"standard", "payload", "signature"}
+ERC191_PAYLOAD_KEYS = MESSAGE_KEYS | {"verifying_contract", "nonce"}
 TRANSFER_KEYS = {"intent", "receiver_id", "tokens", "memo"}
 
 
@@ -89,6 +94,17 @@ def current_salt(*, rpc: NearRpc | None = None, contract: str | None = None) -> 
     return bytes.fromhex(_rpc(rpc).view(_contract(contract), "current_salt", {}))
 
 
+def _signing_inputs(
+    deadline: datetime, salt: bytes | None, contract: str | None, rpc: NearRpc | None
+) -> tuple[datetime, bytes, str]:
+    if deadline.tzinfo is None:
+        raise SettlementError("deadline must be timezone-aware")
+    contract = _contract(contract)
+    if salt is None:
+        salt = current_salt(rpc=rpc, contract=contract)
+    return deadline.astimezone(UTC), salt, contract
+
+
 def sign_intents(
     account_id: str,
     private_key: str | SecretStr,
@@ -103,13 +119,8 @@ def sign_intents(
 
     `salt` is the Verifier's current 4-byte salt; it is fetched over RPC when omitted.
     """
-    if deadline.tzinfo is None:
-        raise SettlementError("deadline must be timezone-aware")
-    contract = _contract(contract)
     key = load_signing_key(private_key)
-    if salt is None:
-        salt = current_salt(rpc=rpc, contract=contract)
-    deadline = deadline.astimezone(UTC)
+    deadline, salt, contract = _signing_inputs(deadline, salt, contract, rpc)
     message = json.dumps(
         {"deadline": format_deadline(deadline), "intents": intents, "signer_id": account_id},
         separators=(",", ":"),
@@ -143,15 +154,70 @@ def sign_transfer(
     rpc: NearRpc | None = None,
 ) -> dict:
     """Return a signed `transfer` of `amount` (smallest unit) of `token_id` to `receiver_id`."""
+    intent = _transfer_intent(receiver_id, token_id, amount, memo)
+    return sign_intents(
+        account_id, private_key, [intent], deadline, salt=salt, contract=contract, rpc=rpc
+    )
+
+
+def _transfer_intent(receiver_id: str, token_id: str, amount: int, memo: str) -> dict:
     check_amount(amount)
-    intent = {
+    return {
         "intent": "transfer",
         "receiver_id": receiver_id,
         "tokens": {token_id: str(amount)},
         "memo": memo,
     }
-    return sign_intents(
-        account_id, private_key, [intent], deadline, salt=salt, contract=contract, rpc=rpc
+
+
+def sign_intents_erc191(
+    private_key: str | SecretStr,
+    intents: list[dict],
+    deadline: datetime,
+    salt: bytes | None = None,
+    *,
+    contract: str | None = None,
+    rpc: NearRpc | None = None,
+) -> dict:
+    """Return an ERC-191 signed payload from an Ethereum key (hex). The signer_id is the
+    key's lowercase 0x address, an implicit account that needs no key registration."""
+    key = erc191.load_evm_key(private_key)
+    deadline, salt, contract = _signing_inputs(deadline, salt, contract, rpc)
+    payload = json.dumps(
+        {
+            "deadline": format_deadline(deadline),
+            "intents": intents,
+            "nonce": base64.b64encode(versioned_nonce(salt, deadline)).decode(),
+            "signer_id": erc191.key_address(key),
+            "verifying_contract": contract,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    signature = erc191.sign(key, payload)
+    return {
+        "standard": "erc191",
+        "payload": payload,
+        "signature": erc191.encode_signature(signature),
+    }
+
+
+def sign_transfer_erc191(
+    private_key_hex: str | SecretStr,
+    receiver_id: str,
+    token_id: str,
+    amount: int,
+    memo: str,
+    deadline: datetime,
+    salt: bytes | None = None,
+    *,
+    contract: str | None = None,
+    rpc: NearRpc | None = None,
+) -> dict:
+    """`sign_transfer` for a hunter that holds only an Ethereum key."""
+    intent = _transfer_intent(receiver_id, token_id, amount, memo)
+    return sign_intents_erc191(
+        private_key_hex, [intent], deadline, salt, contract=contract, rpc=rpc
     )
 
 
@@ -180,8 +246,74 @@ def _parse_deadline(text: object) -> datetime:
     return deadline
 
 
+def _decode_nonce(text: object) -> bytes:
+    try:
+        nonce = base64.b64decode(text, validate=True)
+    except (TypeError, binascii.Error) as error:
+        raise SettlementError("nonce is not base64") from error
+    if len(nonce) != 32 or base64.b64encode(nonce).decode() != text:
+        raise SettlementError("nonce must be 32 bytes in canonical base64")
+    return nonce
+
+
+def _load_json(text: str, what: str) -> object:
+    try:
+        return json.loads(text, object_pairs_hook=_no_duplicate_keys)
+    except ValueError as error:
+        raise SettlementError(f"{what} is not valid JSON") from error
+
+
+def signer_and_nonce(signed: dict) -> tuple[str, str]:
+    """(signer_id, base64 nonce) of a nep413 or erc191 payload, as intents_executed lists them."""
+    try:
+        if signed["standard"] == "erc191":
+            payload = json.loads(signed["payload"])
+            return payload["signer_id"], payload["nonce"]
+        return json.loads(signed["payload"]["message"])["signer_id"], signed["payload"]["nonce"]
+    except (KeyError, TypeError, ValueError) as error:
+        raise SettlementError("signed intent is not a nep413 or erc191 payload") from error
+
+
 def signed_nonce(signed: dict) -> str:
-    return signed["payload"]["nonce"]
+    return signer_and_nonce(signed)[1]
+
+
+def _verify_nep413(signed: dict, contract: str) -> dict:
+    """Check the envelope and ed25519 signature; return the signed message."""
+    signed = _exact_keys(signed, SIGNED_KEYS, "signed intent")
+    payload = _exact_keys(signed["payload"], PAYLOAD_KEYS, "payload")
+    if payload["recipient"] != contract:
+        raise SettlementError("signed intent is for another verifying contract")
+    nonce = _decode_nonce(payload["nonce"])
+    public_key = decode_ed25519(signed["public_key"], 32, "public_key")
+    signature = decode_ed25519(signed["signature"], 64, "signature")
+    if not isinstance(payload["message"], str):
+        raise SettlementError("message must be a JSON string")
+    digest = nep413_hash(payload["message"], nonce, payload["recipient"])
+    try:
+        VerifyKey(public_key).verify(digest, signature)
+    except BadSignatureError as error:
+        raise SettlementError("signature does not match the signed message") from error
+    return _exact_keys(_load_json(payload["message"], "message"), MESSAGE_KEYS, "message")
+
+
+def _verify_erc191(signed: dict, contract: str) -> dict:
+    """Recover the signer's 0x address; return the payload only if it is the signer_id.
+
+    Only implicit 0x accounts are accepted: a secp256k1 key registered on a named
+    account would pass the Verifier but not this check.
+    """
+    signed = _exact_keys(signed, ERC191_SIGNED_KEYS, "signed intent")
+    if not isinstance(signed["payload"], str):
+        raise SettlementError("erc191 payload must be a JSON string")
+    signer = erc191.recover_address(signed["payload"], erc191.decode_signature(signed["signature"]))
+    payload = _exact_keys(_load_json(signed["payload"], "payload"), ERC191_PAYLOAD_KEYS, "payload")
+    if payload["signer_id"] != signer:
+        raise SettlementError("signature does not match the signer_id address")
+    if payload["verifying_contract"] != contract:
+        raise SettlementError("signed intent is for another verifying contract")
+    _decode_nonce(payload["nonce"])
+    return payload
 
 
 def verify_signed_transfer(
@@ -195,39 +327,20 @@ def verify_signed_transfer(
     contract: str | None = None,
     now: datetime | None = None,
 ) -> None:
-    """Raise SettlementError unless `signed` is a valid, unexpired NEP-413 transfer of
-    exactly `amount` of `token_id` from `sender` to `receiver` with exactly `memo`.
+    """Raise SettlementError unless `signed` is a valid, unexpired NEP-413 or ERC-191
+    transfer of exactly `amount` of `token_id` from `sender` to `receiver` with exactly `memo`.
 
     Key ownership, balance, salt and nonce reuse are checked by simulate().
     """
     check_amount(amount)
-    signed = _exact_keys(signed, SIGNED_KEYS, "signed intent")
-    if signed["standard"] != "nep413":
-        raise SettlementError("signed intent must use the nep413 standard")
-    payload = _exact_keys(signed["payload"], PAYLOAD_KEYS, "payload")
-    if payload["recipient"] != _contract(contract):
-        raise SettlementError("signed intent is for another verifying contract")
-    try:
-        nonce = base64.b64decode(payload["nonce"], validate=True)
-    except (TypeError, binascii.Error) as error:
-        raise SettlementError("nonce is not base64") from error
-    if len(nonce) != 32 or base64.b64encode(nonce).decode() != payload["nonce"]:
-        raise SettlementError("nonce must be 32 bytes in canonical base64")
-    public_key = decode_ed25519(signed["public_key"], 32, "public_key")
-    signature = decode_ed25519(signed["signature"], 64, "signature")
-    if not isinstance(payload["message"], str):
-        raise SettlementError("message must be a JSON string")
-    digest = nep413_hash(payload["message"], nonce, payload["recipient"])
-    try:
-        VerifyKey(public_key).verify(digest, signature)
-    except BadSignatureError as error:
-        raise SettlementError("signature does not match the signed message") from error
-
-    try:
-        message = json.loads(payload["message"], object_pairs_hook=_no_duplicate_keys)
-    except ValueError as error:
-        raise SettlementError("message is not valid JSON") from error
-    message = _exact_keys(message, MESSAGE_KEYS, "message")
+    if not isinstance(signed, dict):
+        raise SettlementError("signed intent must be a JSON object")
+    if signed.get("standard") == "nep413":
+        message = _verify_nep413(signed, _contract(contract))
+    elif signed.get("standard") == "erc191":
+        message = _verify_erc191(signed, _contract(contract))
+    else:
+        raise SettlementError("signed intent must use the nep413 or erc191 standard")
     if message["signer_id"] != sender:
         raise SettlementError("signer_id is not the expected sender")
     if _parse_deadline(message["deadline"]) <= (now or datetime.now(UTC)):
@@ -251,13 +364,7 @@ def _executed_nonces(entries: list[dict]) -> set[tuple[str, str]]:
 
 
 def _expected_nonces(signed_list: list[dict]) -> set[tuple[str, str]]:
-    try:
-        return {
-            (json.loads(signed["payload"]["message"])["signer_id"], signed_nonce(signed))
-            for signed in signed_list
-        }
-    except (KeyError, TypeError, ValueError) as error:
-        raise SettlementError("signed intent is not a nep413 payload") from error
+    return {signer_and_nonce(signed) for signed in signed_list}
 
 
 def simulate(
