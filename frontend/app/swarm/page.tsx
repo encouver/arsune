@@ -501,7 +501,7 @@ export default function SwarmPage() {
                   <button
                     key={a.id}
                     type="button"
-                    className="sw-tile"
+                    className={`sw-tile ${styles.tile}`}
                     data-testid="agent-tile"
                     data-state={st}
                     data-outcome={res}
@@ -519,7 +519,7 @@ export default function SwarmPage() {
                     </span>
                     {mark && (
                       <small
-                        className="sw-mark"
+                        className={`sw-mark ${styles.mark}`}
                         data-testid="tile-mark"
                         data-kind={net < 0 ? "lost" : "earned"}
                         aria-hidden="true"
@@ -528,10 +528,18 @@ export default function SwarmPage() {
                       </small>
                     )}
                     <em aria-hidden="true">{a.id.replace(/^\D+/, "")}</em>
-                    {a.role === "scout" && <b aria-hidden="true">S</b>}
+                    {a.role === "scout" && (
+                      <b
+                        className={styles.scoutBadge}
+                        data-testid="scout-badge"
+                        aria-hidden="true"
+                      >
+                        S
+                      </b>
+                    )}
                     {isAi(a) && (
                       <span
-                        className={`${styles.badge} ${styles.tileBadge}${a.role === "scout" ? ` ${styles.belowScout}` : ""}`}
+                        className={`${styles.badge} ${styles.tileBadge}`}
                         data-testid="ai-badge"
                         aria-hidden="true"
                       >

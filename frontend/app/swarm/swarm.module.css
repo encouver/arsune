@@ -10,14 +10,33 @@
   letter-spacing: 0.3px;
 }
 
+/* A tile shows money in its top row and who it is in its bottom row: the scout and AI badges
+   sit in the bottom corners, so a net amount up to 999.99 has the full width of the tile. */
+.tile .mark {
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .tileBadge {
   position: absolute;
-  top: 2px;
+  bottom: 2px;
   right: 3px;
 }
 
-.belowScout {
-  top: 16px;
+.tile .scoutBadge {
+  top: auto;
+  bottom: 2px;
+  right: auto;
+  left: 3px;
+}
+
+@media (max-width: 640px) {
+  .tile .mark {
+    font-size: 8px;
+    padding: 0 2px;
+  }
 }
 
 .usage {

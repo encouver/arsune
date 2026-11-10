@@ -551,6 +551,70 @@ test("AI agents carry a badge and the AI spend shows near the totals", async ({
   );
 });
 
+test("tile amounts up to 999.99 fit beside the scout and AI badges", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  const base = { ...agents(1)[0], bonds_lost: 0 };
+  await mock(page, {
+    swarm: {
+      ...swarm(),
+      agents: [
+        { ...base, id: "hunter-ai-01", strategy: "ai", earned: 13_100_000 },
+        {
+          ...base,
+          id: "scout-ai-01",
+          account: "scout-ai-1.testnet",
+          role: "scout",
+          strategy: "ai-scout",
+          earned: 999_990_000,
+        },
+        {
+          ...base,
+          id: "hunter-02",
+          account: "hunter2.testnet",
+          earned: 0,
+          bonds_lost: 999_990_000,
+        },
+      ],
+    },
+  });
+  await page.goto("/swarm");
+  const tiles = page.getByTestId("agent-tile");
+  await expect(tiles).toHaveCount(3);
+  const labels = ["+13.10", "+999.99", "−999.99"];
+  for (const [i, label] of labels.entries()) {
+    const tile = tiles.nth(i);
+    const mark = tile.getByTestId("tile-mark");
+    await expect(mark).toHaveText(label);
+    expect(await mark.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(
+      true,
+    );
+    const t = (await tile.boundingBox())!;
+    const m = (await mark.boundingBox())!;
+    expect(m.x).toBeGreaterThanOrEqual(t.x);
+    expect(m.x + m.width).toBeLessThanOrEqual(t.x + t.width);
+    const badges = tile.locator(
+      "[data-testid=ai-badge], [data-testid=scout-badge]",
+    );
+    for (const badge of await badges.all()) {
+      const b = (await badge.boundingBox())!;
+      const apart =
+        b.y >= m.y + m.height ||
+        b.y + b.height <= m.y ||
+        b.x >= m.x + m.width ||
+        b.x + b.width <= m.x;
+      expect(apart).toBe(true);
+    }
+  }
+  await expect(tiles.nth(1).getByTestId("scout-badge")).toBeVisible();
+  await expect(page.getByTestId("ai-badge")).toHaveCount(2);
+  await page.getByTestId("agent-grid").screenshot({
+    path: testInfo.outputPath("swarm-tile-amounts-1440.png"),
+  });
+  console.log("SCREENSHOT", testInfo.outputPath("swarm-tile-amounts-1440.png"));
+});
+
 test("the AI block stays hidden when no AI agent runs", async ({ page }) => {
   await mock(page, {
     swarm: {
