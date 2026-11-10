@@ -18,7 +18,7 @@ from app.settlement.dry import DRY_ACCOUNT, DRY_SALT
 from app.settlement.near_intents import verify_signed_transfer
 from app.settlement.swarm_accounts import plan_swarm_accounts, save_swarm_accounts
 from swarm.agents import SCOUT_FINDERS, STRATEGIES, Hunter, Scout, Swarm
-from swarm.ai import AiHunter, AiScout, Seen, scripted_findings
+from swarm.ai import AiHunter, AiScout, Seen, scripted_findings, short_id
 from swarm.arsune import ApiError, BountyFeed
 from swarm.findings import (
     broken_image,
@@ -969,6 +969,7 @@ async def test_an_id_with_its_label_attached_still_names_what_the_agent_saw():
     assert notebook.value("F", " F1: USD 29") == PRICE["key"]
     assert notebook.value("F", "F12") is None and notebook.value("F", "fact F1") is None
     assert notebook.value("L", "F1") is None and notebook.value("F", None) is None
+    assert short_id("T", "T2 from scout-01") == "T2" and short_id("T", "tip T2") is None
     await swarm.ai.close()
 
 
@@ -1021,7 +1022,7 @@ async def test_an_ai_hunter_counters_with_the_models_share_and_reason():
         "claims": [],
         "tips": [
             {
-                "tip": "T1",
+                "tip": "T1 from scout-01",  # an id with text after it names T1
                 "action": "counter",
                 "share": 20,
                 "why": "scout-01 has no proven tips yet",
