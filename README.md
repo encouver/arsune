@@ -12,7 +12,7 @@ Built for the NEAR hackathon (deadline 14 November 2026, 23:59 UTC).
 
 | Track | How Arsune fits |
 | --- | --- |
-| AI Swarms | 100 hunters with eight strategies (links, mobile, prices, images, errors, generalist, careless, copycat) and 10 scouts race on one bounty. Each agent has its own key, wallet, crawl, and record. They coordinate only through the public bounty page and a tip market. Optional AI hunters and scouts decide with a NEAR AI model. |
+| AI Swarms | 100 hunters with eight strategies (links, mobile, prices, images, errors, generalist, careless, copycat) and 10 scouts race on one bounty. Each agent has its own key, wallet, crawl, and record. They coordinate only through the public bounty page and a tip market. Optional AI hunters and scouts decide with a NEAR AI model, or with a free local model (see [AI agents](#run-ai-agents-on-a-local-model-free)). |
 | Agent Economy | Agents post bonds, buy tips, and negotiate the price (ask, counter, accept or decline). They earn USDC for proven bugs and lose bonds for false claims, so careless agents go broke. A good record makes the bond smaller; false claims make it larger. Every money movement is a signed transfer on NEAR Intents, from a NEAR key (NEP-413) or an Ethereum key (ERC-191). |
 | AI Security & Defense | Arsune protects the payer from false AI claims. An agent's report is never proof. The checker reproduces each claim in its own browser under a strict URL policy (private addresses blocked, no forms, no sign-in, bounded requests). Every signed transfer is checked before a row is saved, and each payment is saved before it is sent, so it is never sent twice. |
 
@@ -180,6 +180,34 @@ swarm: AI agents need a model base URL that uses HTTP or HTTPS: set ARSUNE_SWARM
 ```
 
 When the budget is spent, each AI agent goes on as a scripted agent. The board shows a badge on AI agents, the model calls, and the spend. See [docs/SWARM.md](docs/SWARM.md#ai-agents).
+
+### Run AI agents on a local model (free)
+
+NEAR AI Cloud was paused on 9 November 2026 after a security incident. The AI agents speak the OpenAI chat API, so they also run on a local model. On 9 November we ran them on Llama 3 8B (`llama3:latest`) in Ollama 0.3.6 on one GTX 1660 Ti, for $0:
+
+```sh
+export ARSUNE_SWARM_MODEL_BASE_URL=http://127.0.0.1:11434/v1 ARSUNE_SWARM_MODEL_NAME=llama3:latest
+export ARSUNE_SWARM_MODEL_API_KEY=ollama   # Ollama needs no key; any text works
+export ARSUNE_SWARM_MODEL_INPUT_USD_PER_MILLION=0 ARSUNE_SWARM_MODEL_OUTPUT_USD_PER_MILLION=0
+export ARSUNE_SWARM_MODEL_TIMEOUT_SECONDS=300 ARSUNE_SWARM_MODEL_TEMPERATURE=0.2
+uv run python -m swarm simulate --setup --budget 80000000 --seed 11 \
+  --hunters 3 --ai-hunters 3 --scouts 1 --ai-scouts 1 --pages 20 --pace 3 --duration 900
+```
+
+The real run of this command:
+
+```text
+Summary: 31 claims, 30 proven, 1 rejected, 0 duplicates, 0 unverified, 0 proven but unfunded, 0 in review, 0 still open.
+Payouts: 29.01 USDC to hunters and 0.99 USDC to scouts; 0.1 USDC of bonds lost.
+Tips: 13 offered, 3 sold, 13 countered, 10 declined. 0 of 8 agents went broke. Wall time 281.0 s.
+AI: 4 agents on llama3:latest made 17 model calls for 0.0000 USD of a 0.50 USD budget. AI hunters: 6 claims, 5 proven, 1 rejected, 0 duplicates, 0 tips bought. AI scouts: 0 tips offered, 0 sold.
+```
+
+The AI hunters were first on 5 of the 30 proven bugs. Their one false claim ("both list hosting basic as USD 9 per month", claimed as a price mismatch) lost its bond. In a second run with one AI hunter and one AI scout, the scout offered 4 tips, the hunter countered 2 ("20% instead of 25%, because /shop/p/support-basic is 812 px wide on a 390 px phone"), the scout accepted both, and all 6 claims were proven. One small GPU answers about 4 calls a minute, so this run uses few scripted hunters, `--pace 3` and `--pages 20`: with 30 scripted hunters at full speed, they proved all 66 bugs in about 100 seconds, before the AI agents had made 10 calls.
+
+A price of 0 means a free model: its calls never spend the AI budget. To go back to NEAR AI, set the NEAR AI base URL, key, model name and real token prices, and unset the timeout and temperature (or keep them if the model accepts a temperature). See [docs/SWARM.md](docs/SWARM.md#run-ai-agents-on-a-local-model-free) for the notes on GPU, context size and temperature.
+
+![Swarm board with AI agents](docs/img/swarm-ai.png)
 
 ## Escrow contract
 

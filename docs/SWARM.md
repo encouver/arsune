@@ -182,10 +182,14 @@ falls back to the matching `ARSUNE_MODEL_*` value:
 | `ARSUNE_SWARM_MODEL_NAME` | `ARSUNE_MODEL_NAME` |
 | `ARSUNE_SWARM_MODEL_INPUT_USD_PER_MILLION` | `ARSUNE_MODEL_INPUT_USD_PER_MILLION` |
 | `ARSUNE_SWARM_MODEL_OUTPUT_USD_PER_MILLION` | `ARSUNE_MODEL_OUTPUT_USD_PER_MILLION` |
+| `ARSUNE_SWARM_MODEL_TIMEOUT_SECONDS` | none; default 60, at most 900 |
+| `ARSUNE_SWARM_MODEL_TEMPERATURE` | none; not sent when it is not set |
 
 The swarm refuses to start AI agents without a base URL, a key, a model name and both token
-prices. The model client (`backend/swarm/llm.py`) is the swarm's own. It does not use
-Arsune's judge model code.
+prices. A price of 0 means a free model, for example one on your own machine: its calls never
+spend the budget. Do not set 0 for a paid model. Some cloud models refuse a temperature, so
+the swarm sends one only when `ARSUNE_SWARM_MODEL_TEMPERATURE` is set. The model client
+(`backend/swarm/llm.py`) is the swarm's own. It does not use Arsune's judge model code.
 
 ### What the model does
 
@@ -197,9 +201,10 @@ handled later does not count). Every 6 pages (or at the end of its crawl, or whe
 offered) it sends a compact summary to the model:
 
 ```text
-p2 /shop/p/hosting-plus "Hosting Plus - Northwind Supply" phone width 390 px
+p2 /shop/p/hosting-plus "Hosting Plus - Northwind Supply" phone width 390 px (fits)
   text: All hosting plans Hosting Plus USD 39 per month, per account ...
-  links: 18 answer below 400; L4 /shop/retired/item-02 "Service status history" HTTP 404
+  links: 18 answer below 400
+  links that fail: L4 /shop/retired/item-02 "Service status history" HTTP 404
   price F2 hosting plus (USD per month): USD 39; also seen: p1 /shop/c/hosting USD 29
   images that do not load: I1 /shop/img/partner-badge.png HTTP 404 shown
   uncaught errors: E1 "Error: Chat widget failed to start" from another origin's script
@@ -218,8 +223,11 @@ rules.
 - An AI scout's model answers the tips to offer and the asking share (10% to 50%). When a
   hunter counters, the scout's model accepts or refuses the counter.
 - Page text is untrusted data. The prompt says so, and the answer can only name ids that the
-  agent itself observed. Unknown ids, other claim types and bad shares are dropped. An answer
-  that is not a JSON object means no action.
+  agent itself observed. Unknown ids, other claim types and bad shares are dropped. An id with
+  text after it (`"F3 analytics scale"`) names `F3`. An answer that is not a JSON object means
+  no action.
+- The system prompt is the same for every agent of a role. The agent's name, wallet, bond and
+  record are in the user message, so a model server can reuse the cached system prompt.
 - The agent builds the claim from its own observations, then claims through the same bond
   path as every hunter. The model never sees a key.
 - The reason (at most 140 characters) goes to the log, for example "hunter-ai-03: the plan
@@ -235,6 +243,71 @@ rules.
   scripted generalist or scripted scout, and its pages that are not reviewed get the scripted
   checks.
 - The summary and `/state` show the calls and the spend.
+
+### Run AI agents on a local model (free)
+
+NEAR AI Cloud is the main provider. It was paused on 9 November 2026 after a security
+incident. The AI agents use any OpenAI-compatible chat API, so they also run on a local model
+at no cost. On 9 November they ran on `llama3:latest` (Llama 3 8B, Q4_0) in Ollama 0.3.6 on one
+GTX 1660 Ti (6 GB):
+
+```sh
+export ARSUNE_SWARM_MODEL_BASE_URL=http://127.0.0.1:11434/v1
+export ARSUNE_SWARM_MODEL_NAME=llama3:latest
+export ARSUNE_SWARM_MODEL_API_KEY=ollama          # Ollama needs no key; any text works
+export ARSUNE_SWARM_MODEL_INPUT_USD_PER_MILLION=0 # 0 = a free model
+export ARSUNE_SWARM_MODEL_OUTPUT_USD_PER_MILLION=0
+export ARSUNE_SWARM_MODEL_TIMEOUT_SECONDS=300     # calls wait in the model's queue
+export ARSUNE_SWARM_MODEL_TEMPERATURE=0.2         # steadier JSON from a small model
+uv run python -m swarm simulate --setup --budget 80000000 --seed 11 \
+  --hunters 3 --ai-hunters 3 --scouts 1 --ai-scouts 1 --pages 20 --pace 3 --duration 900
+```
+
+What we saw on 9 November (all runs dry, all model calls $0):
+
+- The race above (3 scripted and 3 AI hunters, 1 scripted and 1 AI scout, each agent reads at
+  most 20 of the 41 pages): `Summary: 31 claims, 30 proven, 1 rejected, 0 duplicates` and
+  `Tips: 13 offered, 3 sold, 13 countered, 10 declined`, wall time 281 s. The AI agents made
+  17 model calls. AI hunters: 6 claims, 5 proven, 1 rejected, 0 duplicates; they were first on
+  5 of the 30 proven bugs. The AI scout offered no tip: the faults it saw were already claimed.
+  A call took 65 s (median) as the agent saw it, mostly in the one-slot queue; the model
+  itself needed about 15 s.
+- One AI hunter and one AI scout (`--hunters 0 --scouts 0 --ai-hunters 1 --ai-scouts 1
+  --pages 12`): 8 calls; the scout offered 4 tips, the hunter countered 2 and bought them at
+  20%; 6 claims, 6 proven, 126.9 s.
+- One AI hunter alone (`--hunters 0 --scouts 0 --ai-hunters 1`): 7 calls, 14 claims, 12
+  proven, 2 rejected, 181.5 s.
+
+Decisions from these runs, with the checker's verdict:
+
+| Agent and its reason | Verdict |
+| --- | --- |
+| `hunter-ai-03`: "/shop/c/payments lists Payments Plus at USD 33, /shop/p/payments-plus at USD 43" | Proven: fresh reads 33 and 43 |
+| `hunter-ai-03`: "/shop/p/support-basic is 812 px wide on a 390 px phone" | Proven: content width 812 px |
+| `hunter-ai-03`: "/shop/p/hosting-basic and /shop/c/hosting both list hosting basic as USD 9 per month" (claimed as a price mismatch) | Rejected, bond lost: fresh reads 9 and 9 |
+| `hunter-ai-01` countered a tip: "20% instead of 25%, because /shop/p/support-basic is 812 px wide on a 390 px phone"; `scout-ai-01` accepted: "Hunter's offer is reasonable, and I'm willing to take the risk" | Proven; the scout earned 0.2 USDC |
+| `hunter-ai-01`: an overflow on /shop/p/storage-scale ("450 px wide") | Rejected, bond lost: content width 390 px |
+
+Notes for a local model:
+
+- Make sure that the model runs on the GPU: `curl -s 127.0.0.1:11434/api/ps` shows
+  `size_vram`. On 16 CPU cores, one decision took 96 s. On the GPU it took 9 to 33 s, at
+  about 23 output tokens per second. Our system Ollama had started before the GPU driver and
+  ran on the CPU, so the run used a second `ollama serve` with `OLLAMA_NUM_PARALLEL=1` (two
+  parallel slots were not faster on this card).
+- One GPU answers about 4 calls a minute for all AI agents together, and each AI agent reads
+  every page itself, so more AI agents do not cover the site faster. With 30 scripted hunters
+  and 5 AI hunters at full speed, the scripted agents proved all 66 bugs in about 100 seconds,
+  before the AI agents had made 10 calls. With 5 scripted and 5 AI hunters at `--pace 3`, the
+  scripted agents proved 63 bugs in less than 2 minutes, and the AI hunters 1 (a tip that one
+  bought after a counter). So the race above uses 3 scripted hunters, `--pace 3` and
+  `--pages 20`. These limits come from the speed of one small GPU, not from the agents.
+- Ollama's default context is 2,048 tokens, and Ollama cuts a longer prompt without an error.
+  A 6-page prompt was at most about 1,460 tokens in our runs, and an answer about 50 to 230.
+- At Ollama's default temperature (1.0 on its OpenAI API), llama3 sometimes broke a JSON key
+  and then wrote spaces up to the token limit. At 0.2, all answers in our runs were JSON.
+- `llama3.2:latest` (3B) answered in 37 s on the CPU but claimed two page errors that did not
+  exist and a 392 px page as an overflow, so the run used the 8B model.
 
 ## Modes
 
