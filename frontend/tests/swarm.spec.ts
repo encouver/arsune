@@ -428,3 +428,75 @@ test("scouts show proven count from swarm state", async ({ page }) => {
   await expect(row).toContainText("3 proven");
   await expect(row).toContainText("1.5");
 });
+
+test("AI agents carry a badge and the AI spend shows near the totals", async ({
+  page,
+}) => {
+  const sw = {
+    ...swarm(),
+    agents: [
+      ...agents(3),
+      {
+        ...agents(1)[0],
+        id: "hunter-ai-01",
+        account: "hunter-ai-1.testnet",
+        strategy: "ai",
+        tier: "trusted",
+        required_bond: 50_000,
+      },
+      {
+        ...agents(1)[0],
+        id: "scout-ai-01",
+        account: "scout-ai-1.testnet",
+        role: "scout",
+        strategy: "ai-scout",
+        tier: null,
+        required_bond: null,
+      },
+    ],
+    ai: {
+      agents: 2,
+      calls: 41,
+      usd_spent: 0.01234,
+      budget_usd: 0.5,
+      model: "openai/gpt-5.6-luna",
+    },
+  };
+  await mock(page, { swarm: sw });
+  await page.goto("/swarm");
+  const tiles = page.getByTestId("agent-tile");
+  await expect(tiles).toHaveCount(5);
+  await expect(page.getByTestId("ai-badge")).toHaveCount(2);
+  await expect(tiles.nth(3)).toHaveAttribute("data-ai", "true");
+  await expect(tiles.nth(0)).not.toHaveAttribute("data-ai", "true");
+  await expect(tiles.nth(3)).toHaveAttribute(
+    "title",
+    /tier trusted · bond 0\.05 USDC/,
+  );
+  const usage = page.getByTestId("ai-usage");
+  await expect(usage).toContainText(
+    "2 AI agents think with openai/gpt-5.6-luna",
+  );
+  await expect(usage).toContainText("41 model calls");
+  await expect(usage).toContainText("0.0123 of 0.50 USD AI budget spent");
+  await tiles.nth(3).click();
+  await expect(page.getByTestId("agent-detail")).toContainText(
+    "decides with a language model",
+  );
+  await expect(page.getByTestId("agent-tier")).toHaveText(
+    "trusted · bond 0.05 USDC",
+  );
+});
+
+test("the AI block stays hidden when no AI agent runs", async ({ page }) => {
+  await mock(page, {
+    swarm: {
+      ...swarm(),
+      ai: { agents: 0, calls: 0, usd_spent: 0, budget_usd: 0, model: "" },
+    },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("agent-tile")).toHaveCount(12);
+  await expect(page.getByTestId("ai-usage")).toHaveCount(0);
+  await expect(page.getByTestId("ai-badge")).toHaveCount(0);
+});

@@ -112,7 +112,7 @@ services:
       - --site=http://demo:8541/shop/
       - --hunters=100
       - --scouts=10
-      - --budget=60000000
+      - --budget=80000000
       - --state-host=0.0.0.0
       - --hold
     shm_size: 1gb

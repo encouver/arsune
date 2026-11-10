@@ -9,6 +9,7 @@ from decimal import Decimal
 from swarm.arsune import claim_result
 
 LOG_SIZE = 200
+NO_AI = {"calls": 0, "usd_spent": 0.0, "budget_usd": 0.0, "model": ""}
 
 
 def now_iso() -> str:
@@ -27,6 +28,7 @@ class SwarmState:
         self.finished = False
         self.agents: list = []
         self.board = None
+        self.ai = None  # the run's model client when AI agents run
         self.events: deque[dict] = deque(maxlen=LOG_SIZE)
 
     def log(self, agent: str, text: str):
@@ -45,7 +47,12 @@ class SwarmState:
             "agents": [agent.view() for agent in self.agents],
             "tips": [tip.view() for tip in self.board.tips.values()] if self.board else [],
             "log": list(self.events),
+            "ai": self.ai_view(),
         }
+
+    def ai_view(self) -> dict:
+        agents = sum(1 for agent in self.agents if agent.uses_ai)
+        return {"agents": agents, **(self.ai.usage() if self.ai else NO_AI)}
 
 
 async def serve_state(state: SwarmState, host: str, port: int) -> asyncio.Server:
@@ -106,12 +113,33 @@ def summarize(state: SwarmState, claims: list[dict], wall_seconds: float) -> dic
         "tips_declined": tip_status["declined"],
         "broke": sum(1 for a in state.agents if a.state == "broke"),
         "agents": len(state.agents),
+        "tiers": dict(Counter(a.tier for a in hunters if a.tier)),
         "wall_seconds": round(wall_seconds, 1),
         "leaderboard": [
             {"id": a.id, "strategy": a.strategy, "earned": a.wallet.earned, **_counts(a)}
             for a in leaders[:10]
             if a.wallet.earned
         ],
+        "ai": _ai_summary(state, ours, tips),
+    }
+
+
+def _ai_summary(state: SwarmState, claims: list[dict], tips: list) -> dict:
+    hunters = {a.account for a in state.agents if a.uses_ai and a.role == "hunter"}
+    buyers = {a.id for a in state.agents if a.uses_ai and a.role == "hunter"}
+    scouts = {a.id for a in state.agents if a.uses_ai and a.role == "scout"}
+    counts = Counter(claim_result(c) for c in claims if c["hunter_account"] in hunters)
+    return {
+        **state.ai_view(),
+        "claims": sum(counts.values()),
+        "proven": counts["proven"],
+        "rejected": counts["rejected"],
+        "duplicate": counts["duplicate"],
+        "tips_bought": sum(1 for t in tips if t.status == "sold" and t.buyer in buyers),
+        "tips_offered": sum(1 for t in tips if t.scout in scouts),
+        "tips_sold": sum(1 for t in tips if t.status == "sold" and t.scout in scouts),
+        "earned": sum(a.wallet.earned for a in state.agents if a.uses_ai),
+        "bonds_lost": sum(a.wallet.bonds_lost for a in state.agents if a.uses_ai),
     }
 
 
@@ -140,6 +168,18 @@ def summary_lines(summary: dict) -> list[str]:
             f"Wall time {s['wall_seconds']} s."
         ),
     ]
+    if s["tiers"]:
+        tiers = ", ".join(f"{n} {t.replace('_', ' ')}" for t, n in sorted(s["tiers"].items()))
+        lines.append(f"Hunter reputation tiers at the end: {tiers}.")
+    ai = s["ai"]
+    if ai["agents"]:
+        lines.append(
+            f"AI: {ai['agents']} agents on {ai['model']} made {ai['calls']} model calls for "
+            f"{ai['usd_spent']:.4f} USD of a {ai['budget_usd']:.2f} USD budget. AI hunters: "
+            f"{ai['claims']} claims, {ai['proven']} proven, {ai['rejected']} rejected, "
+            f"{ai['duplicate']} duplicates, {ai['tips_bought']} tips bought. AI scouts: "
+            f"{ai['tips_offered']} tips offered, {ai['tips_sold']} sold."
+        )
     for rank, row in enumerate(s["leaderboard"], 1):
         lines.append(
             f"Leaderboard {rank}: {row['id']} ({row['strategy']}) earned {usdc(row['earned'])} "

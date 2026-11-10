@@ -10,23 +10,30 @@ from uuid import uuid4
 import httpx
 
 from swarm.agents import Careless, Copycat, Hunter, Scout, Swarm
+from swarm.ai import AiHunter, AiScout
 from swarm.arsune import ArsuneApi, BountyFeed, resolved
 from swarm.identity import Identity, fund_memo, load_accounts, sign_payment
+from swarm.llm import AiBudget, ModelClient, ModelSettings, model_settings
 from swarm.market import TipBoard
 from swarm.site import BrowserPool, SiteReader, origin
 from swarm.state import SwarmState, serve_state, summarize, summary_lines, usdc
 
+# The specialists follow the demo shop's bugs: 20 links, 15 overflows, 15 prices, 10 images,
+# 6 page errors. Generalists run all five checks.
 DEFAULT_MIX = {
-    "links": 20,
-    "mobile": 20,
-    "prices": 15,
+    "links": 17,
+    "mobile": 13,
+    "prices": 12,
+    "images": 8,
+    "errors": 5,
     "generalist": 25,
     "careless": 10,
     "copycat": 10,
 }
-DEFAULT_SCOUT_MIX = {"links": 4, "mobile": 3, "prices": 2, "hasty": 1}
+DEFAULT_SCOUT_MIX = {"links": 3, "mobile": 2, "prices": 2, "images": 1, "errors": 1, "hasty": 1}
 AGENT_CLASSES = {"careless": Careless, "copycat": Copycat}
 LIVE_CAP = 1_000_000  # the approved live budget: 1 USDC
+MAX_AI_BUDGET_USD = 5.0  # a typo guard for --ai-budget
 
 
 class SwarmError(Exception):
@@ -42,6 +49,10 @@ class Config:
     setup: bool = False
     hunters: int = 100
     scouts: int = 10
+    ai_hunters: int = 0
+    ai_scouts: int = 0
+    ai_budget: float = 0.5  # USD for all model calls of the run
+    ai_model: ModelSettings | None = None  # None: ARSUNE_SWARM_MODEL_* / ARSUNE_MODEL_*
     mix: dict = field(default_factory=lambda: dict(DEFAULT_MIX))
     scout_mix: dict = field(default_factory=lambda: dict(DEFAULT_SCOUT_MIX))
     reward: int = 1_000_000
@@ -99,12 +110,30 @@ def check_mode(config: Config, settlement: dict):
             raise SwarmError("Live budgets are capped at 1 USDC, and reward plus bond at 1 USDC.")
 
 
+def start_ai(config: Config, transport=None) -> ModelClient | None:
+    """The model client for AI agents, or None without them. Refuses unpriced models."""
+    if not config.ai_hunters and not config.ai_scouts:
+        return None
+    settings = config.ai_model or model_settings()
+    problem = settings.problem()
+    if problem:
+        raise SwarmError(problem)
+    if not 0 < config.ai_budget <= MAX_AI_BUDGET_USD:
+        raise SwarmError(f"--ai-budget must be above 0 and at most {MAX_AI_BUDGET_USD} USD.")
+    budget = AiBudget(
+        config.ai_budget, settings.input_usd_per_million, settings.output_usd_per_million
+    )
+    return ModelClient(settings, budget, transport)
+
+
 def identities(config: Config) -> tuple[Identity, list[Identity], list[Identity]]:
+    """Owner, hunters (scripted first, then AI) and scouts (scripted first, then AI)."""
+    hunters, scouts = config.hunters + config.ai_hunters, config.scouts + config.ai_scouts
     if not config.live:
         return (
             Identity.generate("owner"),
-            [Identity.generate("hunter") for _ in range(config.hunters)],
-            [Identity.generate("scout") for _ in range(config.scouts)],
+            [Identity.generate("hunter") for _ in range(hunters)],
+            [Identity.generate("scout") for _ in range(scouts)],
         )
     accounts = load_accounts(config.accounts)
     owners = [a for a in accounts if a.role == "owner"]
@@ -112,8 +141,8 @@ def identities(config: Config) -> tuple[Identity, list[Identity], list[Identity]
         raise SwarmError(f"{config.accounts} has no owner account for --setup.")
     return (
         owners[0] if owners else None,
-        [a for a in accounts if a.role == "hunter"][: config.hunters],
-        [a for a in accounts if a.role == "scout"][: config.scouts],
+        [a for a in accounts if a.role == "hunter"][:hunters],
+        [a for a in accounts if a.role == "scout"][:scouts],
     )
 
 
@@ -153,11 +182,14 @@ async def setup_bounty(config, api, site, owner, settlement, log) -> str:
 
 
 def build_agents(config: Config, swarm: Swarm, hunters, scouts, rng) -> list:
+    """Scripted hunters, AI hunters, scripted scouts, AI scouts, in that order."""
+    hunters, ai_hunters = hunters[: config.hunters], hunters[config.hunters :]
+    scouts, ai_scouts = scouts[: config.scouts], scouts[config.scouts :]
+    start = 0 if config.live else config.hunter_wallet
     strategies = assign(len(hunters), config.mix, rng)
     agents = []
     for index, (identity, strategy) in enumerate(zip(hunters, strategies, strict=True), 1):
         cls = AGENT_CLASSES.get(strategy, Hunter)
-        start = 0 if config.live else config.hunter_wallet
         agents.append(
             cls(
                 swarm,
@@ -169,9 +201,10 @@ def build_agents(config: Config, swarm: Swarm, hunters, scouts, rng) -> list:
                 config.pages,
             )
         )
+    found = []
     specialties = assign(len(scouts), config.scout_mix, rng)
     for index, (identity, specialty) in enumerate(zip(scouts, specialties, strict=True), 1):
-        agents.append(
+        found.append(
             Scout(
                 swarm,
                 agent_id("scout", index, len(scouts)),
@@ -182,7 +215,15 @@ def build_agents(config: Config, swarm: Swarm, hunters, scouts, rng) -> list:
                 config.pages,
             )
         )
-    return agents
+    for index, identity in enumerate(ai_hunters, 1):
+        name = agent_id("hunter-ai", index, len(ai_hunters))
+        agents.append(
+            AiHunter(swarm, name, identity, "ai", random.Random(rng.random()), start, config.pages)
+        )
+    for index, identity in enumerate(ai_scouts, 1):
+        name = agent_id("scout-ai", index, len(ai_scouts))
+        found.append(AiScout(swarm, name, identity, random.Random(rng.random()), 0, config.pages))
+    return agents + found
 
 
 async def wait_for_end(swarm: Swarm, tasks: list, duration: float) -> str:
@@ -219,6 +260,7 @@ async def run(
     config: Config,
     api_transport: httpx.AsyncBaseTransport | None = None,
     site_transport: httpx.AsyncBaseTransport | None = None,
+    model_transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict:
     rng = random.Random(config.seed)
     state = SwarmState(
@@ -226,12 +268,13 @@ async def run(
     )
     api, site = ArsuneApi(config.api_url, api_transport), SiteReader(site_transport)
     browser = BrowserPool(config.browser_pages)
-    server = None
+    server, ai = None, None
     if config.state_port is not None:
         server = await serve_state(state, config.state_host, config.state_port)
         port = server.sockets[0].getsockname()[1]
         state.log("swarm", f"Swarm state at http://{config.state_host}:{port}/state")
     try:
+        ai = state.ai = start_ai(config, model_transport)
         settlement = await api.settlement()
         check_mode(config, settlement)
         owner, hunters, scouts = identities(config)
@@ -259,6 +302,7 @@ async def run(
             live=config.live,
             pace=config.pace,
             copy_loss_limit=config.copy_loss_limit,
+            ai=ai,
         )
         swarm.agents = state.agents = build_agents(config, swarm, hunters, scouts, rng)
         state.board = board
@@ -267,6 +311,12 @@ async def run(
             f"{len(hunters)} hunters and {len(scouts)} scouts start on bounty {bounty_id} "
             f"({state.mode}, settlement {settlement['mode']}).",
         )
+        if ai:
+            state.log(
+                "swarm",
+                f"{config.ai_hunters} AI hunters and {config.ai_scouts} AI scouts think with "
+                f"{ai.settings.name}; the AI budget is {config.ai_budget:.2f} USD.",
+            )
         started = time.monotonic()
         feed_task = asyncio.create_task(feed.run(swarm.stop))
         tasks = [asyncio.create_task(agent.run()) for agent in swarm.agents]
@@ -295,6 +345,8 @@ async def run(
     finally:
         if server:
             server.close()
+        if ai:
+            await ai.close()
         await browser.close()
         await api.close()
         await site.close()

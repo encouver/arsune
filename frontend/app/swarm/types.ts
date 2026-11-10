@@ -12,6 +12,17 @@ export type Agent = {
   proven: number;
   earned: number;
   bonds_lost: number;
+  // Arsune's reputation tier and the bond the hunter must sign now; null for scouts.
+  tier?: string | null;
+  required_bond?: number | null;
+};
+
+export type AiUsage = {
+  agents: number;
+  calls: number;
+  usd_spent: number;
+  budget_usd: number;
+  model: string;
 };
 
 export type Tip = {
@@ -35,6 +46,7 @@ export type SwarmState = {
   agents: Agent[];
   tips: Tip[];
   log: { at: string; agent: string; text: string }[];
+  ai?: AiUsage;
 };
 
 export type Claim = {

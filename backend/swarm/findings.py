@@ -1,8 +1,9 @@
-"""Turn what an agent saw into claims in Arsune's three provable shapes.
+"""Turn what an agent saw into claims in Arsune's five provable shapes.
 
-`broken_link` names {source, target}, `horizontal_overflow` names {url}, and `price_mismatch`
-names {key} for exactly two pages. The fault key is Arsune's published fingerprint, so an
-agent can tell when a fault is already proven on the public bounty page.
+`broken_link` names {source, target}, `horizontal_overflow` names {url}, `price_mismatch`
+names {key} for exactly two pages, `broken_image` names {page, image}, and `page_error` names
+{page, message}. The fault key is Arsune's published fingerprint, so an agent can tell when a
+fault is already proven on the public bounty page.
 """
 
 import hashlib
@@ -19,6 +20,8 @@ LABELS = {
     "broken_link": "broken link",
     "horizontal_overflow": "mobile overflow",
     "price_mismatch": "price mismatch",
+    "broken_image": "broken image",
+    "page_error": "page error",
 }
 SUSPICIOUS_LINK = re.compile(
     r"old|legacy|retired|archive|previous|gift|report|missing|deprecated|beta", re.IGNORECASE
@@ -32,6 +35,16 @@ def fingerprint(claim_type: str, urls: list[str], details: dict) -> str:
 
 def path(url: str) -> str:
     return urlsplit(url).path or "/"
+
+
+def claim_label(claim_type: str) -> str:
+    """A readable name for a claim type, also for types this swarm does not know yet."""
+    return LABELS.get(claim_type) or str(claim_type).replace("_", " ")
+
+
+def normalize_message(message: str) -> str:
+    """Arsune stores a page error message trimmed, with whitespace collapsed, case folded."""
+    return " ".join(message.split()).casefold()
 
 
 @dataclass
@@ -50,7 +63,7 @@ class Finding:
 
     @property
     def label(self) -> str:
-        return LABELS.get(self.claim_type, self.claim_type)
+        return claim_label(self.claim_type)
 
     @property
     def where(self) -> str:
@@ -74,6 +87,34 @@ def broken_link(source: str, target: str, status: int) -> Finding:
         f"The link from {path(source)} to {path(target)} returns HTTP {status}.",
         [f"Open {source}.", f"Follow the link to {target}.", f"The server answers HTTP {status}."],
         f"GET {path(target)} returned HTTP {status}; linked from {path(source)}",
+    )
+
+
+def broken_image(page: str, image: str, status: int | None) -> Finding:
+    if status and status >= 400:
+        answer = f"its request answers HTTP {status}"
+    else:  # an HTTP 2xx answer that is not a picture the browser can decode
+        answer = "the browser cannot show the file it gets"
+    return Finding(
+        "broken_image",
+        [page],
+        {"page": page, "image": image},
+        f"The image {path(image)} on {path(page)} does not load: {answer}.",
+        [f"Open {page} at a 1280 pixel wide viewport.", f"The image {image} shows no picture."],
+        f"image {path(image)} on {path(page)}: {answer}",
+    )
+
+
+def page_error(page: str, message: str) -> Finding:
+    """`message` is the full first line of the error, so the key is the fault's final key."""
+    text = normalize_message(message)
+    return Finding(
+        "page_error",
+        [page],
+        {"page": page, "message": text},
+        f"Loading {path(page)} raises an uncaught error from the site's own script: {message}",
+        [f"Open {page} at a 1280 pixel wide viewport.", f"The page raises: {message}"],
+        f'{path(page)} raises "{message[:80]}"',
     )
 
 
@@ -104,7 +145,7 @@ def overflow(url: str, width: int | None) -> Finding | None:
     )
 
 
-def _fact_label(fact: dict) -> str:
+def fact_label(fact: dict) -> str:
     context = fact.get("context")
     if context:
         return f"{context['name']} ({context['currency']} per {context['period']})"
@@ -128,13 +169,13 @@ def price_mismatches(facts_by_page: dict[str, list[dict]]) -> list[Finding]:
                         "price_mismatch",
                         [url_a, url_b],
                         {"key": key},
-                        f"{_fact_label(a)} costs {a['value']} on {path(url_a)} "
+                        f"{fact_label(a)} costs {a['value']} on {path(url_a)} "
                         f"and {b['value']} on {path(url_b)}.",
                         [
-                            f"Open {url_a} and read the {_fact_label(a)} price: {a['value']}.",
+                            f"Open {url_a} and read the {fact_label(a)} price: {a['value']}.",
                             f"Open {url_b} and read the same offer: {b['value']}.",
                         ],
-                        f"{_fact_label(a)}: {a['value']} vs {b['value']}",
+                        f"{fact_label(a)}: {a['value']} vs {b['value']}",
                     )
                 )
     return found
@@ -172,7 +213,7 @@ def copy_of(claim: dict) -> Finding:
         claim["claim_type"],
         list(claim["urls"]),
         dict(claim["details"]),
-        "Reported fault: " + LABELS.get(claim["claim_type"], claim["claim_type"]) + ".",
+        "Reported fault: " + claim_label(claim["claim_type"]) + ".",
         [f"Open {url}." for url in claim["urls"]],
         "copied from the public bounty page",
     )

@@ -1,0 +1,30 @@
+.badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 12px;
+  padding: 0 3px;
+  border-radius: 3px;
+  background: #3b2a7a;
+  color: #e4dcff;
+  letter-spacing: 0.3px;
+}
+
+.tileBadge {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+}
+
+.belowScout {
+  top: 16px;
+}
+
+.usage {
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.usage code {
+  font-size: 11px;
+}

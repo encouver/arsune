@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import SiteHeader from "../site-header";
 import { clock, pagePath, share, usdc } from "./format";
+import styles from "./swarm.module.css";
 import type {
   Agent,
   Bounty,
@@ -58,6 +59,18 @@ const CLAIM_FILTERS: [string, string][] = [
 ];
 
 type Result = "earned" | "lost" | "broke" | "none";
+
+// AI agents decide with a language model; their strategy is "ai" or "ai-scout".
+function isAi(a: Agent) {
+  return a.strategy === "ai" || a.strategy === "ai-scout";
+}
+
+function tierText(a: Agent) {
+  if (!a.tier) return "";
+  const bond =
+    a.required_bond != null ? ` · bond ${usdc(a.required_bond)} USDC` : "";
+  return `${a.tier.replace("_", " ")}${bond}`;
+}
 
 function resultOf(a: Agent): Result {
   if (a.state === "broke") return "broke";
@@ -420,6 +433,25 @@ export default function SwarmPage() {
               <SimTag dry /> These amounts are simulated.
             </div>
           )}
+          {swarm?.ai && swarm.ai.agents > 0 && (
+            <div
+              className={`sw-totals-note ${styles.usage}`}
+              data-testid="ai-usage"
+            >
+              <span className={styles.badge}>AI</span>
+              <span>
+                <strong>{swarm.ai.agents}</strong> AI agents think with{" "}
+                <code>{swarm.ai.model}</code>
+              </span>
+              <span>
+                <strong>{swarm.ai.calls}</strong> model calls
+              </span>
+              <span>
+                <strong>{swarm.ai.usd_spent.toFixed(4)}</strong> of{" "}
+                {swarm.ai.budget_usd.toFixed(2)} USD AI budget spent
+              </span>
+            </div>
+          )}
         </section>
 
         <div className="sw-cols">
@@ -475,8 +507,9 @@ export default function SwarmPage() {
                     data-lost={a.bonds_lost > 0 ? "true" : undefined}
                     data-role={a.role}
                     aria-pressed={picked === a.id}
-                    aria-label={`${a.id}, ${a.role}, ${st}${finished ? `, ${RESULT_LABELS[res]}` : ""}${a.bonds_lost > 0 ? `, lost ${usdc(a.bonds_lost)} in bonds` : ""}`}
-                    title={`${a.id} (${a.role}) · ${st}\n${a.strategy}\nbalance ${usdc(a.balance)} · proven ${a.proven} · earned ${usdc(a.earned)} · bonds lost ${usdc(a.bonds_lost)}`}
+                    data-ai={isAi(a) ? "true" : undefined}
+                    aria-label={`${a.id}, ${isAi(a) ? "AI " : ""}${a.role}, ${st}${finished ? `, ${RESULT_LABELS[res]}` : ""}${a.bonds_lost > 0 ? `, lost ${usdc(a.bonds_lost)} in bonds` : ""}`}
+                    title={`${a.id} (${isAi(a) ? "AI " : ""}${a.role}) · ${st}\n${a.strategy}${a.tier ? `\ntier ${tierText(a)}` : ""}\nbalance ${usdc(a.balance)} · proven ${a.proven} · earned ${usdc(a.earned)} · bonds lost ${usdc(a.bonds_lost)}`}
                     onClick={() => setPicked(picked === a.id ? null : a.id)}
                   >
                     <span aria-hidden="true">
@@ -494,6 +527,15 @@ export default function SwarmPage() {
                     )}
                     <em aria-hidden="true">{a.id.replace(/^\D+/, "")}</em>
                     {a.role === "scout" && <b aria-hidden="true">S</b>}
+                    {isAi(a) && (
+                      <span
+                        className={`${styles.badge} ${styles.tileBadge}${a.role === "scout" ? ` ${styles.belowScout}` : ""}`}
+                        data-testid="ai-badge"
+                        aria-hidden="true"
+                      >
+                        AI
+                      </span>
+                    )}
                   </button>
                 );
               })}
@@ -512,8 +554,17 @@ export default function SwarmPage() {
                 </div>
                 <div>
                   <dt>Strategy</dt>
-                  <dd>{selected.strategy}</dd>
+                  <dd>
+                    {selected.strategy}
+                    {isAi(selected) && " (decides with a language model)"}
+                  </dd>
                 </div>
+                {selected.tier && (
+                  <div>
+                    <dt>Reputation tier</dt>
+                    <dd data-testid="agent-tier">{tierText(selected)}</dd>
+                  </div>
+                )}
                 <div>
                   <dt>State</dt>
                   <dd>{selected.state}</dd>

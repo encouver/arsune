@@ -1,4 +1,5 @@
-"""How agents look at the bounty site: plain HTTP for pages and links, Chromium for layout and prices.
+"""How agents look at the bounty site: plain HTTP for pages and links, Chromium for layout,
+prices, images and page errors.
 
 Every agent walks the site itself. Only the transport is shared: one HTTP connection pool and
 one Chromium with a small pool of open pages, so a hundred agents stay light.
@@ -22,6 +23,36 @@ LABELLED_FACTS_JS = """() => Array.from(document.querySelectorAll('[data-fact-ke
   .filter(e => e.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})).slice(0, 40)
   .map(e => ({key: e.dataset.factKey + '|' + e.dataset.context, value: e.innerText.trim(),
               source: 'explicit_fact'}))"""
+# Uncaught errors and unhandled rejections, as a visitor's browser raises them. A rejection that
+# is handled later is marked handled, so it is not a page error (Arsune treats it the same way).
+ERRORS_INIT_JS = """(() => {
+  const list = window.__swarmErrors = [];
+  const firstLine = v => (v && v.stack ? String(v.stack).split('\\n')[0] : String(v));
+  const urlIn = v => ((v && v.stack ? String(v.stack) : '').match(/https?:\\/\\/[^\\s)]+/) || [''])[0];
+  addEventListener('error', e => {
+    if (!(e instanceof ErrorEvent) || list.length >= 20) return;
+    const message = e.error !== undefined ? firstLine(e.error) : e.message;
+    list.push({message, source: e.filename || urlIn(e.error)});
+  });
+  addEventListener('unhandledrejection', e => {
+    if (list.length < 20) list.push({message: firstLine(e.reason), source: urlIn(e.reason), promise: e.promise});
+  });
+  addEventListener('rejectionhandled', e => list.forEach(x => { if (x.promise === e.promise) x.handled = true; }));
+})()"""
+READ_ERRORS_JS = """() => (window.__swarmErrors || []).filter(e => !e.handled)
+  .map(e => ({message: String(e.message).slice(0, 500), source: String(e.source || '')}))"""
+# Images that finished loading but show no picture, and whether each one is shown.
+BROKEN_IMAGES_JS = """async () => {
+  const found = [];
+  for (const image of Array.from(document.images).slice(0, 60)) {
+    const src = (image.currentSrc || image.src || '').split('#')[0];
+    if (!src || !image.complete || image.naturalWidth > 0) continue;
+    const decoded = await Promise.race([image.decode().then(() => true, () => false),
+                                        new Promise(resolve => setTimeout(() => resolve(true), 500))]);
+    if (!decoded) found.push({src, shown: image.checkVisibility({checkOpacity: true, checkVisibilityCSS: true})});
+  }
+  return found;
+}"""
 
 
 def origin(url: str) -> str:
@@ -40,6 +71,28 @@ def canonical(url: str) -> str | None:
     if parts.scheme not in {"http", "https"} or not parts.hostname or parts.query:
         return None
     return origin(url) + urljoin("/", parts.path or "/")
+
+
+def failed_images(look: dict, page_url: str) -> list[dict]:
+    """Images on the page's own origin that show no picture, once each: {url, shown}.
+    A claim can name only an image on the bounty site, without a query string."""
+    images = {}
+    for image in look.get("images", []):
+        url = canonical(image["src"])
+        if url and origin(url) == origin(page_url) and url not in images:
+            images[url] = {"url": url, "shown": image["shown"]}
+    return list(images.values())
+
+
+def uncaught_errors(look: dict, page_url: str) -> list[dict]:
+    """Uncaught errors of at least 8 characters, once each: {message, first_party}."""
+    errors = {}
+    for error in look.get("errors", []):
+        source, message = error["source"], " ".join(error["message"].split())
+        first_party = not source.startswith("http") or origin(source) == origin(page_url)
+        if len(message) >= 8 and message not in errors:
+            errors[message] = {"message": message, "first_party": first_party}
+    return list(errors.values())
 
 
 def base_path(site_url: str) -> str:
@@ -185,6 +238,7 @@ class BrowserPool:
                     "mobile": await browser.new_context(viewport=MOBILE),
                     "desktop": await browser.new_context(viewport=DESKTOP),
                 }
+                await self._contexts["desktop"].add_init_script(ERRORS_INIT_JS)
         return self._contexts[kind]
 
     async def _visit(self, url: str, kind: str, work):
@@ -219,6 +273,21 @@ class BrowserPool:
             return labelled + extract_prices(blocks["blocks"])["facts"]
 
         return await self._visit(url, "desktop", facts)
+
+    async def desktop_look(self, url: str) -> dict | None:
+        """One desktop visit: price facts, images that do not load, and uncaught errors."""
+
+        async def look(page):
+            labelled = await page.evaluate(LABELLED_FACTS_JS)
+            blocks = await page.evaluate(PRICE_BLOCKS_JS)
+            await page.wait_for_timeout(250)  # errors thrown from timers and load handlers
+            return {
+                "facts": labelled + extract_prices(blocks["blocks"])["facts"],
+                "images": await page.evaluate(BROKEN_IMAGES_JS),
+                "errors": await page.evaluate(READ_ERRORS_JS),
+            }
+
+        return await self._visit(url, "desktop", look)
 
     async def close(self):
         if self._playwright:

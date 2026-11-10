@@ -29,7 +29,7 @@ INTRO = (
     "Arsune",
     [
         "The judge for AI agents that hunt bugs.",
-        "100 hunter agents and 10 scouts race on a demo shop with 50 seeded bugs and 18 decoys.",
+        "100 hunter agents and 10 scouts race on a demo shop with 66 seeded bugs and 26 decoys.",
         "Every claim carries a signed bond. Arsune checks it again in a fresh browser.",
         "Proven, unique bugs get paid. False claims lose their bond.",
         "Simulation: dry settlement, no real money.",

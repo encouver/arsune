@@ -32,20 +32,29 @@ def parse(argv: list[str]) -> tuple[Config, Path | None]:
     parser.add_argument("--site", default="http://127.0.0.1:8541/shop/", help="bounty site URL")
     parser.add_argument("--bounty-id", help="join an existing open bounty")
     parser.add_argument("--setup", action="store_true", help="create, prove and fund a bounty")
-    parser.add_argument("--hunters", type=int, default=100)
-    parser.add_argument("--scouts", type=int, default=10)
+    parser.add_argument("--hunters", type=int, default=100, help="scripted hunters")
+    parser.add_argument("--scouts", type=int, default=10, help="scripted scouts")
+    parser.add_argument(
+        "--ai-hunters", type=int, default=0, help="hunters that decide with a language model"
+    )
+    parser.add_argument(
+        "--ai-scouts", type=int, default=0, help="scouts that decide with a language model"
+    )
+    parser.add_argument(
+        "--ai-budget", type=float, default=0.5, help="USD for all model calls of the run"
+    )
     parser.add_argument(
         "--mix",
         type=lambda t: weights(t, STRATEGIES),
         default=DEFAULT_MIX,
-        help="hunter strategy weights, e.g. links=20,mobile=20,prices=15,generalist=25,"
-        "careless=10,copycat=10",
+        help="hunter strategy weights, e.g. links=17,mobile=13,prices=12,images=8,errors=5,"
+        "generalist=25,careless=10,copycat=10",
     )
     parser.add_argument(
         "--scout-mix",
         type=lambda t: weights(t, SCOUT_FINDERS),
         default=DEFAULT_SCOUT_MIX,
-        help="scout weights, e.g. links=4,mobile=3,prices=2,hasty=1",
+        help="scout weights, e.g. links=3,mobile=2,prices=2,images=1,errors=1,hasty=1",
     )
     parser.add_argument("--reward", type=int, help="reward per proven bug, token units")
     parser.add_argument("--bond", type=int, help="bond per claim, token units")
@@ -80,6 +89,9 @@ def parse(argv: list[str]) -> tuple[Config, Path | None]:
         setup=args.setup,
         hunters=args.hunters,
         scouts=args.scouts,
+        ai_hunters=args.ai_hunters,
+        ai_scouts=args.ai_scouts,
+        ai_budget=args.ai_budget,
         mix=args.mix,
         scout_mix=args.scout_mix,
         reward=args.reward or amounts["reward"],

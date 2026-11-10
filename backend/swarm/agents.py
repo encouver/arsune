@@ -12,12 +12,14 @@ import httpx
 
 from swarm.arsune import ApiError, ArsuneApi, BountyFeed, claim_result
 from swarm.findings import (
-    LABELS,
     Finding,
+    broken_image,
     broken_links,
+    claim_label,
     copy_of,
     guess,
     overflow,
+    page_error,
     path,
     price_mismatches,
 )
@@ -32,7 +34,7 @@ from swarm.market import (
     scout_accepts,
     success_chance,
 )
-from swarm.site import BrowserPool, Crawl, Page, SiteReader
+from swarm.site import BrowserPool, Crawl, Page, SiteReader, failed_images, uncaught_errors
 from swarm.state import usdc
 from swarm.wallet import Record, Wallet, is_broke
 
@@ -41,6 +43,10 @@ logger = logging.getLogger(__name__)
 MAX_UNRESOLVED = 3  # Arsune's limit of open claims per hunter and bounty
 MAX_BOND_FAILURES = 3
 CARELESS_GUESSES = 15
+BOND_RULE = "must be exactly"  # Arsune's 422 text when the signed bond is not the required one
+ALL_FINDERS = frozenset({"links", "mobile", "prices", "images", "errors"})
+# Checks that read images and uncaught errors in one desktop visit (prices come with it).
+LOOK_FINDERS = frozenset({"images", "errors"})
 
 
 @dataclass(frozen=True)
@@ -55,7 +61,9 @@ STRATEGIES = {
     "links": Strategy(frozenset({"links"}), 1.0, True, (0.45, 0.65)),
     "mobile": Strategy(frozenset({"mobile"}), 1.0, True, (0.45, 0.65)),
     "prices": Strategy(frozenset({"prices"}), 1.0, True, (0.45, 0.65)),
-    "generalist": Strategy(frozenset({"links", "mobile", "prices"}), 0.6, True, (0.35, 0.55)),
+    "images": Strategy(frozenset({"images"}), 1.0, True, (0.45, 0.65)),
+    "errors": Strategy(frozenset({"errors"}), 1.0, True, (0.45, 0.65)),
+    "generalist": Strategy(ALL_FINDERS, 0.6, True, (0.35, 0.55)),
     "careless": Strategy(frozenset(), 0.15, False, (0.0, 0.0)),
     "copycat": Strategy(frozenset(), 0.0, False, (0.0, 0.0)),
 }
@@ -63,6 +71,8 @@ SCOUT_FINDERS = {
     "links": frozenset({"links"}),
     "mobile": frozenset({"mobile"}),
     "prices": frozenset({"prices"}),
+    "images": frozenset({"images"}),
+    "errors": frozenset({"errors"}),
     "hasty": frozenset(),
 }
 
@@ -82,6 +92,7 @@ class Swarm:
     live: bool = False
     pace: float = 1.0
     copy_loss_limit: int = 3
+    ai: object = None  # the run's model client (swarm.llm.ModelClient) when AI agents run
     stop: asyncio.Event = field(default_factory=asyncio.Event)
     agents: list = field(default_factory=list)
     names: dict = field(default_factory=dict)  # account -> agent id, for readable sentences
@@ -96,6 +107,7 @@ class Swarm:
 
     @property
     def bond(self) -> int:
+        """The base bond. Each hunter pays its own bond, which depends on its record."""
         return self.bounty["bond_amount"]
 
     @property
@@ -126,16 +138,30 @@ async def inspect(swarm: Swarm, crawl: Crawl, facts: dict, finders, page: Page) 
         found += broken_links(page, statuses)
     if "mobile" in finders:
         found += filter(None, [overflow(page.url, await swarm.browser.page_width(page.url))])
+    look = (await swarm.browser.desktop_look(page.url) or {}) if finders & LOOK_FINDERS else None
     if "prices" in finders:
-        page_facts = await swarm.browser.price_facts(page.url)
+        if look is None:
+            page_facts = await swarm.browser.price_facts(page.url)
+        else:  # the desktop look already read the prices
+            page_facts = look.get("facts")
         if page_facts:
             facts[page.url] = page_facts
             found += [f for f in price_mismatches(facts) if page.url in f.urls]
+    if "images" in finders:
+        for image in failed_images(look, page.url):
+            if image["shown"]:  # a hidden image is not a fault
+                status = await crawl.status_of(image["url"])
+                found.append(broken_image(page.url, image["url"], status))
+    if "errors" in finders:
+        errors = uncaught_errors(look, page.url)
+        # Only an error that the site's own script raises is a fault of the site.
+        found += [page_error(page.url, e["message"]) for e in errors if e["first_party"]]
     return found
 
 
 class Agent:
     role = "agent"
+    uses_ai = False
 
     def __init__(
         self, swarm: Swarm, agent_id: str, identity: Identity, strategy: str, rng, start=0
@@ -149,6 +175,8 @@ class Agent:
         )
         self.state = "searching"
         self.wallet = Wallet(identity.account_id, start, live=swarm.live)
+        self.tier: str | None = None  # Arsune's reputation tier; hunters only
+        self.bond: int | None = None  # the bond this agent must sign; hunters only
         self._version = -1
         swarm.names[identity.account_id] = agent_id
 
@@ -176,6 +204,8 @@ class Agent:
             "proven": proven,
             "earned": self.wallet.earned,
             "bonds_lost": self.wallet.bonds_lost,
+            "tier": self.tier,
+            "required_bond": self.bond,
         }
 
     def log(self, text: str):
@@ -224,10 +254,11 @@ class Hunter(Agent):
     """Searches the site itself, claims what it can prove, and buys tips when they pay."""
 
     role = "hunter"
+    spec: Strategy | None = None  # set by subclasses that are not in STRATEGIES
 
     def __init__(self, swarm, agent_id, identity, strategy, rng, start=0, pages=60):
         super().__init__(swarm, agent_id, identity, strategy, rng, start)
-        spec = STRATEGIES[strategy]
+        spec = self.spec or STRATEGIES[strategy]
         self.finders, self.buys_tips = spec.finders, spec.buys_tips
         self.margin = rng.uniform(*spec.margin)
         self.crawl = Crawl(swarm.site, swarm.site_url, max(1, round(pages * spec.page_share)), rng)
@@ -239,11 +270,13 @@ class Hunter(Agent):
         self.facts: dict[str, list] = {}
         self.claims_made = self.proven = 0
         self.bond_failures = 0
+        self.bond = swarm.bond  # until Arsune quotes this hunter's own bond
 
     def counts(self):
         return self.claims_made, self.proven
 
     async def loop(self):
+        await self.quote_bond()
         while not self.swarm.stop.is_set():
             await self.sync()
             if self.finished():
@@ -253,7 +286,7 @@ class Hunter(Agent):
                 await self.swarm.feed.wait(2.0)
 
     async def act(self) -> bool:
-        if len(self.pending) < MAX_UNRESOLVED and self.wallet.can_afford(self.swarm.bond):
+        if len(self.pending) < MAX_UNRESOLVED and self.wallet.can_afford(self.bond):
             item = self.next_finding()
             if item:
                 await self.claim(*item)
@@ -270,11 +303,11 @@ class Hunter(Agent):
     # -- deciding when to stop
 
     def finished(self) -> bool:
-        if is_broke(self.wallet, self.swarm.bond, len(self.pending)):
+        if is_broke(self.wallet, self.bond, len(self.pending)):
             self.state = "broke"
             self.log(
                 f"{self.id} is broke: it has {usdc(self.wallet.available)} "
-                f"and a bond costs {usdc(self.swarm.bond)}."
+                f"and its bond costs {usdc(self.bond)}."
             )
             return True
         if self.bond_failures >= MAX_BOND_FAILURES and not self.pending:
@@ -322,10 +355,10 @@ class Hunter(Agent):
 
     async def negotiate(self, tip: Tip):
         self.state = "negotiating"
-        label = LABELS[tip.claim_type]
+        label = claim_label(tip.claim_type)
         proven, resolved = self.record.proven(tip.claim_type), self.record.resolved(tip.claim_type)
         chance = success_chance(proven, resolved)
-        limit = max_share_bps(chance, self.swarm.reward, self.swarm.bond, self.margin)
+        limit = max_share_bps(chance, self.swarm.reward, self.bond, self.margin)
         record = f"its record for {label} claims is {proven} proven of {resolved}"
         reason = (
             f"{record}, so {percent(limit)} is its limit"
@@ -337,38 +370,55 @@ class Hunter(Agent):
         if await self.swarm.board.negotiate(tip, self.id, limit, reason, scout):
             await self.claim(tip.finding, tip)
 
+    # -- the bond, which follows this hunter's record
+
+    async def quote_bond(self):
+        """Ask Arsune which bond this hunter must sign now."""
+        try:
+            quote = await self.swarm.api.bond_quote(self.swarm.bounty_id, self.account)
+        except (ApiError, httpx.HTTPError) as exc:
+            logger.warning("%s could not read its bond quote: %s", self.id, exc)
+            return
+        self.set_bond(quote.get("tier"), quote.get("required_bond"))
+
+    def set_bond(self, tier, bond):
+        if not isinstance(tier, str) or not isinstance(bond, int) or bond <= 0:
+            return
+        old_tier, old_bond = self.tier, self.bond
+        self.tier, self.bond = tier, bond
+        name = tier.replace("_", " ")
+        if old_tier is None and tier != "new":
+            self.log(f"{self.id} starts as {name}: its bond is {usdc(bond)}.")
+        elif old_tier is not None and tier != old_tier:
+            change = (
+                "drops to" if bond < old_bond else "rises to" if bond > old_bond else "stays at"
+            )
+            self.log(f"{self.id} is now {name}: its bond {change} {usdc(bond)}.")
+
     # -- claiming
 
     async def claim(self, finding: Finding, tip: Tip | None = None):
         self.state = "claiming"
-        swarm = self.swarm
-        settlement = await swarm.api.settlement() if swarm.live else swarm.settlement
-        claim_id = str(uuid4())
-        body = {
-            "claim_id": claim_id,
-            "hunter_account": self.account,
-            **finding.body(),
-            "bond_intent": sign_payment(self.identity, settlement, swarm.bond, bond_memo(claim_id)),
-        }
-        if tip:
-            body["scout"] = {
-                "account": tip.scout_account,
-                "share_bps": tip.final_share_bps,
-                "tip_id": tip.id,
-            }
-        self.known.add(finding.key)
-        self.wallet.reserved += swarm.bond
-        try:
-            data = await swarm.api.submit_claim(swarm.bounty_id, body)
-        except ApiError as exc:
-            await self.refused(claim_id, finding, tip, exc)
-            return
-        except httpx.HTTPError as exc:
-            # If Arsune saved the claim anyway, sync() adopts it from the public page.
-            self.log(f"{self.id} could not reach Arsune to claim a {finding.label}: {exc!r}.")
-            return
-        finally:
-            self.wallet.reserved -= swarm.bond
+        await self.quote_bond()
+        for attempt in (1, 2):
+            if not self.wallet.can_afford(self.bond):
+                self.queue.insert(0, (finding, tip))  # claim it when a refund arrives
+                return
+            claim_id = str(uuid4())
+            try:
+                data = await self.submit(claim_id, finding, tip)
+            except ApiError as exc:
+                if attempt == 1 and exc.status == 422 and BOND_RULE in exc.detail:
+                    # The record changed between the quote and the claim: sign the new bond.
+                    await self.quote_bond()
+                    continue
+                await self.refused(claim_id, finding, tip, exc)
+                return
+            except httpx.HTTPError as exc:
+                # If Arsune saved the claim anyway, sync() adopts it from the public page.
+                self.log(f"{self.id} could not reach Arsune to claim a {finding.label}: {exc!r}.")
+                return
+            break
         self.wallet.apply(data.get("ledger", []))
         self.pending[claim_id] = (finding, tip)
         self.claims_made += 1
@@ -379,10 +429,32 @@ class Hunter(Agent):
         via = f", bought from {tip.scout} for {percent(tip.final_share_bps)}" if tip else ""
         self.log(
             f"{self.id} {how} a {finding.label} on {finding.where}{via}, "
-            f"with a {usdc(swarm.bond)} bond."
+            f"with a {usdc(self.bond)} bond."
         )
         await self.read_balance()
         await self.think(0.3, 1.2)
+
+    async def submit(self, claim_id: str, finding: Finding, tip: Tip | None) -> dict:
+        swarm, bond = self.swarm, self.bond
+        settlement = await swarm.api.settlement() if swarm.live else swarm.settlement
+        body = {
+            "claim_id": claim_id,
+            "hunter_account": self.account,
+            **finding.body(),
+            "bond_intent": sign_payment(self.identity, settlement, bond, bond_memo(claim_id)),
+        }
+        if tip:
+            body["scout"] = {
+                "account": tip.scout_account,
+                "share_bps": tip.final_share_bps,
+                "tip_id": tip.id,
+            }
+        self.known.add(finding.key)
+        self.wallet.reserved += bond
+        try:
+            return await swarm.api.submit_claim(swarm.bounty_id, body)
+        finally:
+            self.wallet.reserved -= bond
 
     async def refused(self, claim_id: str, finding: Finding, tip: Tip | None, exc: ApiError):
         if exc.status in {429, 409}:
@@ -411,6 +483,8 @@ class Hunter(Agent):
             return
         feed = self.swarm.feed
         new_rows = self.wallet.apply(feed.rows_for(self.account))
+        row = feed.hunter(self.account)
+        self.set_bond(row.get("tier"), row.get("required_bond"))
         for claim in feed.claims_by(self.account):
             claim_id = claim["id"]
             if claim_id in self.closed:
@@ -432,7 +506,7 @@ class Hunter(Agent):
         self.record.add(claim["claim_type"], result)
         if tip:
             tip.outcome = result
-        label = LABELS.get(claim["claim_type"], claim["claim_type"])
+        label = claim_label(claim["claim_type"])
         where = " and ".join(path(u) for u in claim["urls"])
         reason = (claim.get("checker_reason") or "no reason given").rstrip(".")
         if result == "proven":
@@ -534,7 +608,7 @@ class Scout(Agent):
 
     def __init__(self, swarm, agent_id, identity, specialty, rng, start=0, pages=60):
         super().__init__(swarm, agent_id, identity, f"{specialty}-scout", rng, start)
-        self.finders = SCOUT_FINDERS[specialty]
+        self.finders = SCOUT_FINDERS.get(specialty, ALL_FINDERS)  # AI scouts observe all
         self.hasty = specialty == "hasty"
         self.crawl = Crawl(swarm.site, swarm.site_url, pages, rng)
         self.ask = rng.choice([2500, 3000, 3500, 4000])
@@ -593,22 +667,31 @@ class Scout(Agent):
     async def answer(self, tip: Tip, hunter: str, share: int) -> bool:
         """Accept or refuse a hunter's counter-offer."""
         previous, self.state = self.state, "negotiating"
-        await self.think(0.2, 0.8)
-        floor = self.floors[tip.id]
-        accepted = scout_accepts(share, floor)
+        accepted, reason = await self.weigh(tip, hunter, share)
         if accepted:
-            self.log(f"{self.id} accepted {percent(share)} from {hunter}.")
-        else:
             self.log(
-                f"{self.id} refused {percent(share)} from {hunter}: its floor is {percent(floor)}."
+                f"{self.id} accepted {percent(share)} from {hunter}"
+                + (f": {reason}." if reason else ".")
             )
+        else:
+            self.log(f"{self.id} refused {percent(share)} from {hunter}: {reason}.")
             if tip.finding.key not in self.relisted:
                 # Offer it once more, half way between the old ask and the floor.
                 self.relisted.add(tip.finding.key)
+                floor = self.floors[tip.id]
                 lower = (tip.ask_share_bps + floor) // 2 // STEP_BPS * STEP_BPS
                 self.relist.append((tip.finding, lower))
-        self.state = previous if previous != "negotiating" else "waiting"
+        if self.state == "negotiating":  # the scout may have finished meanwhile
+            self.state = previous if previous != "negotiating" else "waiting"
         return accepted
+
+    async def weigh(self, tip: Tip, hunter: str, share: int) -> tuple[bool, str]:
+        """(accepted, reason): the scripted scout accepts any counter at or above its floor."""
+        await self.think(0.2, 0.8)
+        floor = self.floors[tip.id]
+        if scout_accepts(share, floor):
+            return True, ""
+        return False, f"its floor is {percent(floor)}"
 
     async def sync(self):
         if not self.feed_changed():

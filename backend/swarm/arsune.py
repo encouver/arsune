@@ -55,6 +55,13 @@ class ArsuneApi:
     async def bounty(self, bounty_id: str) -> dict:
         return await self._call("GET", f"/api/bounties/{bounty_id}")
 
+    async def bond_quote(self, bounty_id: str, hunter: str) -> dict:
+        """The bond this hunter must sign now: it depends on the hunter's claim record."""
+        response = await self.http.get(f"/api/bounties/{bounty_id}/bond", params={"hunter": hunter})
+        if response.status_code != 200:
+            raise ApiError(response.status_code, _detail(response))
+        return response.json()
+
     async def close(self):
         await self.http.aclose()
 
@@ -89,6 +96,7 @@ class BountyFeed:
         self.version = 0
         self._claims_by: dict[str, list[dict]] = {}
         self._rows_for: dict[str, list[dict]] = {}
+        self._hunters: dict[str, dict] = {}  # account -> the public row with tier and bond
         self.proven: dict[str, dict] = {}  # fingerprint -> the claim that proved it
         # fingerprint -> first claim that is proven or still being checked
         self.claimed: dict[str, dict] = {}
@@ -106,6 +114,7 @@ class BountyFeed:
         for row in data.get("ledger", []):
             rows_for.setdefault(row["account"], []).append(row)
         self.bounty, self._claims_by, self._rows_for = data, claims_by, rows_for
+        self._hunters = {row["account"]: row for row in data.get("hunters") or []}
         self.proven, self.claimed = proven, claimed
         self.version += 1
         changed, self._changed = self._changed, asyncio.Event()
@@ -142,3 +151,6 @@ class BountyFeed:
 
     def rows_for(self, account: str) -> list[dict]:
         return self._rows_for.get(account, [])
+
+    def hunter(self, account: str) -> dict:
+        return self._hunters.get(account, {})
