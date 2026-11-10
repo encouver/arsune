@@ -472,15 +472,25 @@ class AiHunter(Hunter):
             if item:
                 await self.claim(*item)
                 return True
-        offers = self.fresh_offers()[:MAX_OFFERS] if self.can_claim() else []
-        waiting = self.notebook.unreviewed
-        if offers or len(waiting) >= BATCH or (waiting and self.crawl.done):
-            await self.consult(offers)
+        if self.worth_a_call():
+            await self.consult(self.fresh_offers()[:MAX_OFFERS] if self.can_claim() else [])
             return True
         if self.can_search():
             await self.search()
             return True
         return False
+
+    def worth_a_call(self) -> bool:
+        """A full batch of new pages, or the last ones. Tips on offer wait for that call; once
+        the crawl is over they get their own call when a full set is on offer or no scout is
+        still searching."""
+        waiting = self.notebook.unreviewed
+        if len(waiting) >= BATCH or (waiting and self.crawl.done):
+            return True
+        if not self.crawl.done or not self.can_claim():
+            return False
+        offers = self.fresh_offers()
+        return bool(offers) and (len(offers) >= MAX_OFFERS or not self.swarm.scouts_searching())
 
     async def search(self):
         if self.scripted:

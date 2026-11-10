@@ -1050,6 +1050,8 @@ async def test_a_spent_budget_turns_the_agent_scripted_without_a_call():
 
 
 class CounterScout(FakeScout):
+    role, state = "scout", "waiting"
+
     def counts(self):
         return 0, 0
 
@@ -1089,6 +1091,36 @@ async def test_an_ai_hunter_counters_with_the_models_share_and_reason():
     assert (tip.status, tip.final_share_bps, claimed) == ("sold", 2000, [tip])
     assert any("because scout-01 has no proven tips yet" in line for line in log)
     assert hunter.fresh_offers() == []
+    await swarm.ai.close()
+
+
+async def test_tips_wait_for_the_next_page_review_instead_of_a_call_of_their_own():
+    reply = {"claims": [], "tips": [{"tip": "T1", "action": "walk", "why": "no evidence"}]}
+    model = FakeModel(lambda system, user: json.dumps(reply))
+    swarm, hunter, log = ai_hunter(model)
+    scout = CounterScout(floor=1500)
+    scout.id, scout.state = "scout-01", "searching"
+    swarm.agents.append(scout)
+    first = swarm.board.post("scout-01", "scout.near", overflow(PLAN, 900), 3000)
+    assert not hunter.worth_a_call()  # 2 new pages and more to crawl: the tip waits
+    for n in range(4):
+        hunter.notebook.add(seen(ORIGIN + f"/site/info/{n}"))
+    assert hunter.worth_a_call() and await hunter.act()
+    [request] = model.requests
+    user = request["messages"][1]["content"]
+    assert "New pages:" in user and "Tips on offer:\nT1 from scout-01" in user
+    assert first.status == "offered" and hunter.fresh_offers() == []
+    assert "hunter-ai-01 walked away from scout-01's mobile overflow tip: no evidence." in log
+    # After the crawl, a lone tip waits while a scout still searches for more.
+    hunter.crawl.frontier.clear()
+    swarm.board.post("scout-01", "scout.near", overflow(LISTING, 900), 3000)
+    assert not hunter.worth_a_call()
+    scout.state = "waiting"
+    assert hunter.worth_a_call()
+    scout.state = "searching"
+    for n in range(3):
+        swarm.board.post("scout-01", "scout.near", overflow(ORIGIN + f"/site/x/{n}", 900), 3000)
+    assert hunter.worth_a_call()  # a full set of offers is worth a call of its own
     await swarm.ai.close()
 
 
