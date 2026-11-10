@@ -347,8 +347,9 @@ name. Without AI agents it is `{"agents": 0, "calls": 0, "usd_spent": 0.0, "budg
 
 ## Limits
 
-- Duplicates follow Arsune's exact-URL fingerprint. One dead target that is linked from
-  several pages is a separate `broken_link` fault for each source page.
+- Duplicates follow the final-URL fingerprint, which Arsune takes after redirects. One dead
+  target that is linked from several pages is a separate `broken_link` fault for each source
+  page.
 - Scripted agents call no language model. AI agents call one only within `--ai-budget`.
 - Scripted and AI agents claim the five types that Arsune can prove. The careless strategy
   and the hasty scout guess only overflows and broken links. Every agent shows a readable

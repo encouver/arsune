@@ -110,7 +110,9 @@ async function getJson<T>(url: string): Promise<T> {
 }
 
 function sum(rows: LedgerRow[], kind: string) {
-  return rows.filter((r) => r.kind === kind).reduce((a, r) => a + r.amount, 0);
+  return rows
+    .filter((r) => r.kind === kind && r.status === "completed")
+    .reduce((a, r) => a + r.amount, 0);
 }
 
 function deriveHunters(b: Bounty | null): HunterStat[] {
@@ -489,12 +491,9 @@ export default function SwarmPage() {
                 const f = flash[a.account];
                 const st = f?.kind ?? a.state;
                 const res = resultOf(a);
+                const net = a.earned - a.bonds_lost;
                 const mark =
-                  a.bonds_lost > 0
-                    ? `−${usdc(a.bonds_lost)}`
-                    : a.earned > 0
-                      ? `+${usdc(a.earned)}`
-                      : null;
+                  net < 0 ? `−${usdc(-net)}` : net > 0 ? `+${usdc(net)}` : null;
                 return (
                   <button
                     key={a.id}
@@ -519,7 +518,7 @@ export default function SwarmPage() {
                       <small
                         className="sw-mark"
                         data-testid="tile-mark"
-                        data-kind={a.bonds_lost > 0 ? "lost" : "earned"}
+                        data-kind={net < 0 ? "lost" : "earned"}
                         aria-hidden="true"
                       >
                         {mark}

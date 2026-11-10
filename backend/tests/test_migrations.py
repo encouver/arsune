@@ -168,3 +168,34 @@ def test_migration_0008_marks_closed_bounties_as_closed_by_a_spent_budget():
     finally:
         with engine.begin() as connection:
             connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def test_migration_0006_downgrade_survives_an_unfunded_and_a_paid_claim_for_one_fault():
+    schema = f"arsune_final_fingerprint_test_{uuid4().hex}"
+    config = Config("alembic.ini")
+    insert = text("""INSERT INTO claims (id, bounty_id, hunter_account, claim_type, urls, details,
+        explanation, reproduction_steps, fingerprint, final_fingerprint, status, outcome,
+        evidence, created_at, updated_at) VALUES (:id, 'b1', :id, 'broken_link', '[]', '{}', 'x',
+        '[]', 'same-fault', :final, :status, 'proven', '[]', now(), now())""")
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+            connection.exec_driver_sql(f'SET LOCAL search_path TO "{schema}"')
+            config.attributes["connection"] = connection
+            command.upgrade(config, "head")
+            connection.execute(
+                text("""INSERT INTO bounties (id, url, origin, owner_account, proof_token, status,
+                    reward_amount, bond_amount, fee_bps, budget_amount, budget_target,
+                    created_at, updated_at) VALUES ('b1', 'https://site.test/',
+                    'https://site.test:443', 'owner.near', 'token', 'open', 1, 1, 0, 0, 1,
+                    now(), now())""")
+            )
+            # An unfunded claim holds no final fingerprint; a later paid claim holds it.
+            connection.execute(insert, {"id": "unfunded", "final": None, "status": "unfunded"})
+            connection.execute(insert, {"id": "paid", "final": "same-fault", "status": "paid"})
+            command.downgrade(config, "0005")
+            rows = connection.execute(text("SELECT id, outcome FROM claims ORDER BY id"))
+            assert list(rows) == [("paid", "proven"), ("unfunded", "unfunded")]
+    finally:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

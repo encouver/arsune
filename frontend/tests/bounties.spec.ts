@@ -472,3 +472,32 @@ test("an unknown bounty says so", async ({ page }) => {
     page.getByRole("link", { name: "Start a new bounty" }),
   ).toBeVisible();
 });
+
+test("a failed signed transfer gets a new fund_id and memo, a 422 keeps them", async ({
+  page,
+}) => {
+  const api = await mockApi(page, "dry", "https://shop.example.com/");
+  api.bounty.status = "open";
+  const replies = [504, 422];
+  await page.route(`**/api/bounties/${ID}/fund`, (route) => {
+    const status = replies.shift() ?? 200;
+    return route.fulfill({ status, json: { detail: "no" } });
+  });
+  await page.goto(`/bounties/${ID}`);
+  await page.getByText("Signed transfer instructions").click();
+  await page.getByLabel("Signer account").fill("alice.near");
+  await page.getByLabel("Signed transfer (JSON)").fill("{}");
+  const memo = page.getByTestId("fund-memo");
+  const first = await memo.innerText();
+  await page.getByRole("button", { name: "Submit signed transfer" }).click();
+  await expect(
+    page.getByRole("button", { name: "Submit signed transfer" }),
+  ).toBeEnabled();
+  const second = await memo.innerText();
+  expect(second).not.toBe(first);
+  await page.getByRole("button", { name: "Submit signed transfer" }).click();
+  await expect(
+    page.getByRole("button", { name: "Submit signed transfer" }),
+  ).toBeEnabled();
+  await expect(memo).toHaveText(second);
+});

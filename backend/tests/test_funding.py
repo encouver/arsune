@@ -515,6 +515,21 @@ def test_deadline_expiry(live, oneclick):
     assert len(oneclick.status_calls()) == calls
 
 
+def test_address_that_1click_does_not_know_expires_after_it_closes(live, oneclick):
+    bounty_id = add_bounty(live)
+    view = request_address(live, bounty_id).json()
+    closes = crosschain.parse_time(view["address_closes_at"])
+    # The fake has no status for the address, so /v0/status answers 404.
+    assert crosschain.refresh(view["id"], now=closes + timedelta(minutes=1), force=True)
+    with Session() as session:
+        assert session.get(FundingRequest, view["id"]).status == "pending_deposit"
+    assert crosschain.refresh(view["id"], now=closes + timedelta(hours=24), force=True)
+    with Session() as session:
+        row = session.get(FundingRequest, view["id"])
+        assert row.status == "expired"
+        assert row.oneclick_status is None
+
+
 def test_open_address_is_watched_after_send_before_until_it_closes(live, oneclick):
     oneclick.address_lifetime = timedelta(days=3)
     bounty_id = add_bounty(live)

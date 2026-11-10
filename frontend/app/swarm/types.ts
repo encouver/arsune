@@ -68,6 +68,7 @@ export type LedgerRow = {
   account: string;
   tx_id?: string | null;
   settlement_mode?: string | null;
+  status?: string;
   explorer_url?: string | null;
   created_at?: string;
 };

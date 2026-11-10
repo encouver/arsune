@@ -899,6 +899,8 @@ function DirectOption({
       await onChange();
     } catch (err) {
       setError(errorText(err));
+      // Only a 422 refused the request before the fund_id was spent.
+      if ((err as { status?: number }).status !== 422) setFundId(newId());
     } finally {
       setBusy(null);
     }

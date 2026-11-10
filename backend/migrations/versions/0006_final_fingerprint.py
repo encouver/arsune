@@ -24,6 +24,12 @@ def upgrade():
 
 
 def downgrade():
+    # An unfunded claim holds no final fingerprint. The old index would see it as a second
+    # proven claim for the same fault, so it goes back to the outcome it had before 0006.
+    op.execute(
+        "UPDATE claims SET outcome = 'unfunded' "
+        "WHERE outcome = 'proven' AND final_fingerprint IS NULL"
+    )
     op.drop_index("uq_claims_proven_final_fingerprint", table_name="claims")
     op.create_index(
         "uq_claims_proven_fingerprint",

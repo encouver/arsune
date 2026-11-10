@@ -119,6 +119,7 @@ function bounty(mode: "dry" | "near_intents") {
         account: "owner.testnet",
         tx_id: "tx1",
         settlement_mode: mode,
+        status: "completed",
         explorer_url: real ? "https://nearblocks.io/txns/AAA" : null,
       },
       {
@@ -128,6 +129,7 @@ function bounty(mode: "dry" | "near_intents") {
         account: "hunter1.testnet",
         tx_id: "tx2",
         settlement_mode: mode,
+        status: "completed",
         explorer_url: real ? "https://nearblocks.io/txns/BBB" : null,
       },
       {
@@ -137,6 +139,7 @@ function bounty(mode: "dry" | "near_intents") {
         account: "scout-a.testnet",
         tx_id: "tx3",
         settlement_mode: mode,
+        status: "completed",
         explorer_url: real ? "https://nearblocks.io/txns/CCC" : null,
       },
       {
@@ -146,6 +149,7 @@ function bounty(mode: "dry" | "near_intents") {
         account: "arsune.testnet",
         tx_id: "tx4",
         settlement_mode: mode,
+        status: "completed",
         explorer_url: null,
       },
       {
@@ -155,6 +159,27 @@ function bounty(mode: "dry" | "near_intents") {
         account: "hunter2.testnet",
         tx_id: "tx5",
         settlement_mode: mode,
+        status: "completed",
+        explorer_url: null,
+      },
+      {
+        id: "l6",
+        kind: "fund",
+        amount: 7_000_000,
+        account: "owner.testnet",
+        tx_id: null,
+        settlement_mode: mode,
+        status: "failed",
+        explorer_url: null,
+      },
+      {
+        id: "l7",
+        kind: "reward_out",
+        amount: 3_000_000,
+        account: "hunter2.testnet",
+        tx_id: null,
+        settlement_mode: mode,
+        status: "pending",
         explorer_url: null,
       },
     ],
@@ -226,6 +251,7 @@ test("dry mode labels money as simulation and has no NearBlocks links", async ({
   await expect(page.getByTestId("total-paid-to-hunters")).toContainText(
     "2.125",
   );
+  await expect(page.getByTestId("total-pool-funded")).toHaveText(/50\.00/);
   await expect(page.getByTestId("total-paid-to-scouts")).toContainText("0.375");
   await expect(page.getByTestId("total-bonds-forfeited")).toContainText("0.1");
   await expect(page.getByTestId("total-proven-bugs")).toContainText("1");
@@ -358,6 +384,10 @@ test("mid-race tiles keep persistent red marks for lost bonds and broke", async 
     "data-kind",
     "earned",
   );
+  // Earned 2.00 and lost 0.30: the tile shows the net gain.
+  const net = tiles.nth(4).getByTestId("tile-mark");
+  await expect(net).toHaveText("+1.70");
+  await expect(net).toHaveAttribute("data-kind", "earned");
   await expect(page.getByTestId("race-results")).toHaveCount(0);
   await expect(page.getByTestId("biggest-losers")).toContainText("0.9");
   await page.screenshot({

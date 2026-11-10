@@ -338,14 +338,13 @@ def apply_status(request_id: str, data: dict, now: datetime) -> None:
         if row is None or row.status in FINAL:
             return
         row.checked_at = now
-        if not isinstance(raw, str):
-            return
         before = row.status
-        row.oneclick_status = raw[:30]
-        if raw == "SUCCESS":
-            credit(session, row, data, now)
-        elif raw in STATUSES:
-            row.status = STATUSES[raw]
+        if isinstance(raw, str):
+            row.oneclick_status = raw[:30]
+            if raw == "SUCCESS":
+                credit(session, row, data, now)
+            elif raw in STATUSES:
+                row.status = STATUSES[raw]
         if row.status == "pending_deposit" and now > closes_at(row) + EXPIRY_GRACE:
             row.status = "expired"
             row.note = (
