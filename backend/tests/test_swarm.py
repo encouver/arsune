@@ -1254,8 +1254,13 @@ async def test_an_ai_hunter_claims_a_broken_image_and_a_page_error():
     user = model.requests[0]["messages"][1]["content"]
     assert "images that do not load: I1 /site/img/dashboard.png HTTP 404 shown" in user
     assert "I2 /site/img/old-banner.png HTTP 404 hidden" in user
-    assert 'E1 "Error: Gallery lightbox could not find its images"' in user
+    # Both origins are named, so a model need not guess whether an error is the site's own.
+    assert 'E1 "Error: Gallery lightbox could not find its images" from the site\'s own script' in (
+        user
+    )
     assert 'E2 "Error: Chat widget failed to start" from another origin\'s script' in user
+    system = model.requests[0]["messages"][0]["content"]
+    assert '"from the site\'s own script" is a fault' in " ".join(system.split())
     assert [(f.claim_type, f.details) for f, _ in hunter.queue] == [
         ("broken_image", {"page": GALLERY, "image": IMG}),
         (
