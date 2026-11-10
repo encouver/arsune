@@ -323,7 +323,7 @@ async def run(
             state.log(
                 "swarm",
                 f"{config.ai_hunters} AI hunters and {config.ai_scouts} AI scouts think with "
-                f"{ai.settings.name}; the AI budget is {config.ai_budget:.2f} USD.",
+                f"{ai.settings.name} ({ai.settings.provider}); the AI budget is {config.ai_budget:.2f} USD.",
             )
         started = time.monotonic()
         feed_task = asyncio.create_task(feed.run(swarm.stop))

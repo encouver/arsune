@@ -7,7 +7,9 @@ import random
 import re
 from collections import Counter
 from dataclasses import replace
+from types import SimpleNamespace
 
+import anthropic
 import httpx
 import pytest
 from app.bounty.claims import fingerprint as arsune_fingerprint
@@ -1239,3 +1241,174 @@ def test_scripted_checks_skip_hidden_images_and_other_origins_errors():
             {"page": GALLERY, "message": "error: gallery lightbox could not find its images"},
         ),
     ]
+
+
+# ---------------------------------------------------------------- Claude provider
+
+CLAUDE = ModelSettings("", "", "claude-haiku-5-5", 0.1, 0.5, provider="anthropic")
+
+
+def claude_reply(text='{"claims": []}', stop="end_turn", usage=(1000, 300), category=None):
+    blocks = [
+        SimpleNamespace(type="thinking", thinking="hmm"),
+        SimpleNamespace(type="text", text=text),
+    ]
+    details = SimpleNamespace(category=category) if category else None
+    return SimpleNamespace(
+        content=blocks,
+        stop_reason=stop,
+        stop_details=details,
+        usage=SimpleNamespace(input_tokens=usage[0], output_tokens=usage[1]),
+    )
+
+
+class FakeClaude:
+    """A stand-in for anthropic.AsyncAnthropic. `outcome` is a reply or an exception to raise."""
+
+    def __init__(self, outcome=None):
+        self.outcome, self.calls = outcome or claude_reply(), []
+        self.messages = SimpleNamespace(create=self._create("plain"))
+        self.beta = SimpleNamespace(messages=SimpleNamespace(create=self._create("beta")))
+
+    def _create(self, route):
+        async def create(**kwargs):
+            self.calls.append((route, kwargs))
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return self.outcome
+
+        return create
+
+    async def close(self):
+        pass
+
+
+def claude_client(fake, settings=CLAUDE, limit=0.5):
+    budget = AiBudget(limit, settings.input_usd_per_million, settings.output_usd_per_million)
+    return ModelClient(settings, budget, claude=fake)
+
+
+def api_error(cls, status):
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    return cls("x", response=httpx.Response(status, request=request), body=None)
+
+
+async def test_claude_request_has_no_sampling_thinking_or_prefill():
+    fake = FakeClaude()
+    client = claude_client(
+        fake, ModelSettings("", "", "claude-haiku-5-5", 0.1, 0.5, 300, 0.7, "anthropic")
+    )
+    assert await client.ask("the system", "the user", 1200) == {"claims": []}
+    [(route, kwargs)] = fake.calls
+    assert route == "plain" and kwargs == {
+        "model": "claude-haiku-5-5",
+        "max_tokens": 4000,
+        "system": "the system",
+        "messages": [{"role": "user", "content": "the user"}],
+        "output_config": {"effort": "low"},
+    }
+    await client.ask("s", "u", 9000)
+    assert fake.calls[1][1]["max_tokens"] == 9000  # a larger request is kept
+
+
+async def test_claude_usage_is_charged_and_the_budget_stops_the_run():
+    client = claude_client(FakeClaude())
+    await client.ask("s", "u", 1200)
+    assert client.budget.spent == pytest.approx((1000 * 0.1 + 300 * 0.5) / 1e6)
+    tight = claude_client(FakeClaude(), limit=0.001)  # worst case: 4000 output tokens = 0.002
+    with pytest.raises(BudgetSpent):
+        await tight.ask("s", "u", 1200)
+    assert tight.claude.calls == [] and tight.budget.exhausted
+
+
+@pytest.mark.parametrize(
+    "name,route",
+    [
+        ("claude-opus-5-5", "beta"),
+        ("claude-sonnet-5-5", "beta"),
+        ("claude-haiku-5-5", "plain"),
+    ],
+)
+async def test_server_side_fallbacks_only_for_opus_and_sonnet(name, route):
+    fake = FakeClaude()
+    await claude_client(fake, ModelSettings("", "", name, 1.0, 5.0, provider="anthropic")).ask(
+        "s", "u", 10
+    )
+    [(got, kwargs)] = fake.calls
+    assert got == route
+    assert ("fallbacks" in kwargs) == (route == "beta")
+    if route == "beta":
+        assert (
+            kwargs["betas"] == ["server-side-fallback-2026-07-01"]
+            and kwargs["fallbacks"] == "default"
+        )
+    assert "temperature" not in kwargs and "thinking" not in kwargs
+
+
+async def test_claude_refusal_and_cut_off_answers_are_failures_that_are_still_billed():
+    refused = claude_client(FakeClaude(claude_reply(stop="refusal", category="cyber")))
+    with pytest.raises(ModelFailure, match="refused.*cyber"):
+        await refused.ask("s", "u", 10)
+    assert refused.budget.spent > 0
+    cut = claude_client(FakeClaude(claude_reply(stop="max_tokens")))
+    with pytest.raises(ModelFailure, match="cut off"):
+        await cut.ask("s", "u", 10)
+    bad = claude_client(FakeClaude(claude_reply(text="not json")))
+    with pytest.raises(ModelFailure, match="not valid JSON"):
+        await bad.ask("s", "u", 10)
+
+
+async def test_claude_sdk_errors_become_model_failures():
+    cases = [
+        (api_error(anthropic.RateLimitError, 429), "rate limiting", 0),
+        (api_error(anthropic.InternalServerError, 503), "HTTP 503.; try again", 0),
+        (api_error(anthropic.BadRequestError, 400), "refused the request .HTTP 400", 0),
+        (
+            anthropic.APITimeoutError(httpx.Request("POST", "https://x.test")),
+            "APITimeoutError",
+            None,
+        ),
+        (
+            anthropic.APIConnectionError(request=httpx.Request("POST", "https://x.test")),
+            "APIConnectionError",
+            None,
+        ),
+    ]
+    for error, message, billed in cases:
+        client = claude_client(FakeClaude(error))
+        with pytest.raises(ModelFailure, match=message):
+            await client.ask("s", "u", 10)
+        assert client.budget.held == 0
+        assert (client.budget.spent == 0) == (
+            billed == 0
+        )  # no answer: only a lost connection is held
+
+
+def test_provider_comes_from_settings_and_claude_never_borrows_another_providers_key(monkeypatch):
+    monkeypatch.setenv("ARSUNE_MODEL_API_KEY", "near-key")
+    monkeypatch.setenv("ARSUNE_MODEL_NAME", "near-model")
+    monkeypatch.setenv("ARSUNE_SWARM_MODEL_PROVIDER", "anthropic")
+    monkeypatch.setenv("ARSUNE_SWARM_MODEL_NAME", "claude-haiku-5-5")
+    monkeypatch.setenv("ARSUNE_SWARM_MODEL_INPUT_USD_PER_MILLION", "0.1")
+    monkeypatch.setenv("ARSUNE_SWARM_MODEL_OUTPUT_USD_PER_MILLION", "0.5")
+    monkeypatch.delenv("ARSUNE_SWARM_MODEL_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    settings = model_settings(env_file=None)
+    assert (settings.provider, settings.name, settings.api_key) == (
+        "anthropic",
+        "claude-haiku-5-5",
+        "",
+    )
+    assert "ANTHROPIC_API_KEY" in settings.problem()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    assert settings.problem() is None and "sk-ant-test" not in repr(settings)
+    monkeypatch.delenv("ARSUNE_SWARM_MODEL_PROVIDER")
+    assert model_settings(env_file=None).provider == "openai_compatible"
+    with pytest.raises(SwarmError, match="ANTHROPIC_API_KEY"):
+        monkeypatch.delenv("ANTHROPIC_API_KEY")
+        start_ai(Config(ai_hunters=1, ai_model=CLAUDE))
+
+
+@pytest.fixture(autouse=True)
+def no_anthropic_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)

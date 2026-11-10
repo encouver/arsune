@@ -209,6 +209,39 @@ A price of 0 means a free model: its calls never spend the AI budget. To go back
 
 ![Swarm board with AI agents](docs/img/swarm-ai.png)
 
+### Run AI agents on Claude
+
+The AI agents can call Claude through the official Anthropic SDK. Set the provider, the model and its prices. The key comes from the environment (`ANTHROPIC_API_KEY`) or from `ARSUNE_SWARM_MODEL_API_KEY`; no base URL is needed. With this provider the swarm reads only `ARSUNE_SWARM_MODEL_*`, never the shared `ARSUNE_MODEL_*` settings, so it cannot send another provider's key to Anthropic.
+
+```sh
+export ARSUNE_SWARM_MODEL_PROVIDER=anthropic
+export ARSUNE_SWARM_MODEL_NAME=claude-haiku-5-5
+export ARSUNE_SWARM_MODEL_INPUT_USD_PER_MILLION=0.10
+export ARSUNE_SWARM_MODEL_OUTPUT_USD_PER_MILLION=0.50
+# ANTHROPIC_API_KEY must be set in the environment
+uv run python -m swarm simulate --setup --budget 80000000 --seed 11 \
+  --hunters 3 --ai-hunters 3 --scouts 1 --ai-scouts 1 --pages 20 --pace 3 --duration 900
+```
+
+Prices per million tokens (prompts up to 100K tokens):
+
+| Model | Input | Output |
+| --- | --- | --- |
+| `claude-opus-5-5` | $4 | $20 |
+| `claude-sonnet-5-5` | $2 | $10 |
+| `claude-haiku-5-5` | $0.10 | $0.50 |
+
+Notes:
+
+- Each call asks for low effort. The swarm sends no temperature, top-p or thinking setting (current models reject them), so `ARSUNE_SWARM_MODEL_TEMPERATURE` has no effect here.
+- Claude thinks before it answers, and the thinking tokens count in `max_tokens` and in the output bill. Each call therefore allows at least 4,000 output tokens, and the budget holds that worst case before the call. A small `--ai-budget` with Opus can stop the run after a few calls.
+- For `claude-opus-5-5` and `claude-sonnet-5-5`, a policy refusal is retried on the server (`server-side-fallback-2026-07-01`). That retry bills at the fallback model's rates, which the swarm budget does not know. Use `claude-haiku-5-5` for a strict budget.
+- The SDK retries a failed call twice. A refusal, a cut-off answer or an API error is "no action" for the agent. The swarm does not use structured outputs; the strict JSON parser checks each answer.
+
+Result of a run on Claude:
+
+{{CLAUDE_RACE_RESULT}}
+
 ## Escrow contract
 
 `contracts/escrow/` is a NEAR contract that holds bounty money and bonds inside `intents.near`. Arsune stays the judge, but the contract fixes every amount and every receiver, and each ruling is a public record with the hash of Arsune's evidence bundle. The bounty flow uses it with `ARSUNE_SETTLEMENT_MODE=escrow` (opt-in; the default stays `dry`): Arsune creates the bounty on the escrow, relays the signed deposits, and sends one `rule` transaction for each decided claim ([docs/SETTLEMENT.md](docs/SETTLEMENT.md#escrow-mode)). It is tested on a local NEAR sandbox with the real `intents.near` wasm (read from mainnet and checked against its code hash), also end to end with the Arsune API and worker, and with mocked RPC. It is not deployed on mainnet. All Rust runs in Docker:
