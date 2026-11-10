@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: arsune
+          POSTGRES_PASSWORD: arsune
+          POSTGRES_DB: arsune
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U arsune"
+          --health-interval 2s
+          --health-retries 30
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-retries 30
+    env:
+      ARSUNE_DATABASE_URL: postgresql+psycopg://arsune:arsune@127.0.0.1:5432/arsune
+      ARSUNE_REDIS_URL: redis://127.0.0.1:6379/0
+      ARSUNE_SETTLEMENT_MODE: dry
+      ARSUNE_NEAR_RPC_URL: http://127.0.0.1:9/
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - run: uv sync --frozen
+      - run: uv run playwright install --with-deps chromium
+      - run: uv run alembic upgrade head
+      - run: uv run ruff check backend scripts
+      - run: uv run ruff format --check backend scripts
+      - run: uv run pytest -q -m "not network"
+
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: frontend
+    env:
+      ARSUNE_UI_URL: http://127.0.0.1:3599
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: Mocked swarm and owner page specs
+        run: |
+          npx next start --hostname 127.0.0.1 --port 3599 &
+          npx --yes wait-on@8 -t 60000 http-get://127.0.0.1:3599/
+          npx playwright test tests/swarm.spec.ts tests/bounties.spec.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-results
+          path: frontend/test-results
+          if-no-files-found: ignore
