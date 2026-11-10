@@ -1,13 +1,17 @@
+import os
 from pathlib import Path
 from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# The tests set ARSUNE_ENV_FILE to an empty value, so a developer's .env cannot change them.
+ENV_FILE = os.environ.get("ARSUNE_ENV_FILE", ".env") or None
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_prefix="ARSUNE_", env_file=".env", extra="ignore", env_ignore_empty=True
+        env_prefix="ARSUNE_", env_file=ENV_FILE, extra="ignore", env_ignore_empty=True
     )
 
     database_url: str = "postgresql+psycopg://arsune:arsune@127.0.0.1:55432/arsune"
