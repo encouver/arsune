@@ -249,6 +249,8 @@ def describe(seen: Seen, notebook: Notebook, claimed: tuple[set, set]) -> str:
     keys, prices = claimed
     url = seen.url
     width = "not measured" if seen.width is None else f"{seen.width} px"
+    if seen.width is not None:  # the agent's own reading, so a small model need not compare
+        width += " (too wide)" if overflow(url, seen.width) else " (fits)"
     if fingerprint("horizontal_overflow", [url], {"url": url}) in keys:
         width += " (overflow claimed)"
     lines = [f'{notebook.id("p", url)} {path(url)} "{seen.title}" phone width {width}']

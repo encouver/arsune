@@ -906,7 +906,8 @@ async def test_a_valid_answer_becomes_a_claim_with_the_models_reason():
     assert f"hunter-ai-01: {why}; claiming price_mismatch" in log
     system, user = (m["content"] for m in model.requests[0]["messages"])
     assert "p2 /site/p/hosting" in user and 'links that fail: L1 /site/gone "" HTTP 404' in user
-    assert "phone width 640 px" in user and "also seen: p1 /site/c/hosting USD 19" in user
+    assert "phone width 640 px (too wide)" in user and "width 390 px (fits)" in user
+    assert "also seen: p1 /site/c/hosting USD 19" in user
     # The system prompt is the same for every AI hunter; the agent's name is in the user text.
     assert user.startswith("You are hunter-ai-01.") and "hunter-ai-01" not in system
     assert hunter.identity.private_key not in json.dumps(model.requests)
