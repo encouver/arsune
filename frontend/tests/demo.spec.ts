@@ -186,9 +186,12 @@ test("every page shows the same brand and task links", async ({ page }) => {
   const tasks = [
     ["/", "Website checks"],
     ["/incidents", "Incident investigation"],
+    ["/bounties/new", "Start a bounty"],
+    ["/swarm", "Swarm"],
     ["/demo", "Local demo"],
   ];
-  for (const [path, current] of tasks) {
+  // /swarm renders its header inside <main>, so it has no banner landmark to check here.
+  for (const [path, current] of tasks.filter(([p]) => p !== "/swarm")) {
     await page.goto(path);
     await expect(
       page.getByRole("banner").getByRole("link", { name: "Arsune home" }),

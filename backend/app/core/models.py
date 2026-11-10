@@ -97,6 +97,8 @@ class Bounty(Base):
     owner_account: Mapped[str] = mapped_column(String(64))
     proof_token: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), default="pending_proof", index=True)
+    # Why a closed bounty closed (app.bounty.budget); None while it is open.
+    closed_reason: Mapped[str | None] = mapped_column(String(20))
     # Amounts are integers in the token's smallest unit (USDC has 6 decimals).
     reward_amount: Mapped[int] = mapped_column(BigInteger)
     bond_amount: Mapped[int] = mapped_column(BigInteger)
@@ -161,5 +163,44 @@ class LedgerEntry(Base):
     tx_id: Mapped[str | None] = mapped_column(String(200))
     settlement_mode: Mapped[str] = mapped_column(String(20))
     status: Mapped[str] = mapped_column(String(20))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class FundingRequest(Base):
+    """A 1Click deposit address that turns a payment on another chain into bounty funds."""
+
+    __tablename__ = "funding_requests"
+    # 1Click gives each quote its own address; memo chains can share an address with a memo.
+    __table_args__ = (
+        UniqueConstraint("deposit_address", "deposit_memo", name="uq_funding_requests_deposit"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    bounty_id: Mapped[str] = mapped_column(ForeignKey("bounties.id"), index=True)
+    status: Mapped[str] = mapped_column(String(30), index=True)
+    oneclick_status: Mapped[str | None] = mapped_column(String(30))
+    # The bounty-token amount (smallest unit) that the quote delivers to Arsune.
+    amount: Mapped[int] = mapped_column(BigInteger)
+    origin_asset: Mapped[str] = mapped_column(String(200))
+    origin_symbol: Mapped[str] = mapped_column(String(40))
+    origin_chain: Mapped[str] = mapped_column(String(40))
+    origin_decimals: Mapped[int] = mapped_column(Integer)
+    deposit_address: Mapped[str] = mapped_column(String(160))
+    deposit_memo: Mapped[str] = mapped_column(String(100), default="")
+    # Origin-asset amounts can exceed 64 bits (24-decimal tokens), so they stay text.
+    amount_in: Mapped[str] = mapped_column(String(80))
+    amount_in_formatted: Mapped[str] = mapped_column(String(80))
+    min_amount_in: Mapped[str] = mapped_column(String(80))
+    refund_to: Mapped[str] = mapped_column(String(200))
+    deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # The whole signed quote response, kept to resolve disputes with 1Click.
+    quote: Mapped[dict] = mapped_column(JSON)
+    delivered_amount: Mapped[int | None] = mapped_column(BigInteger)
+    ledger_entry_id: Mapped[str | None] = mapped_column(
+        ForeignKey("ledger_entries.id"), unique=True
+    )
+    note: Mapped[str | None] = mapped_column(Text)
+    settlement_mode: Mapped[str] = mapped_column(String(20))
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

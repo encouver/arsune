@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from app.bounty import proof, settlement, worker
+from app.bounty import budget, proof, reputation, settlement, worker
 from app.bounty.claims import ClaimError, fingerprint, scoped_claim
 from app.bounty.recovery import recover_stuck_claims
 from app.bounty.worker import settle_claim
@@ -451,6 +451,9 @@ def test_real_browser_claims_are_paid_rejected_and_deduplicated(client, site):
         "earned": REWARD,
         "bonds_lost": 0,
         "scout_earned": 0,
+        "reputation_score": 0.6667,  # (1 proven + 1) / (1 decided + 2)
+        "tier": "new",
+        "required_bond": BOND,
     }
     assert hunters["hunter-b.testnet"]["rejected"] == 1
     assert hunters["hunter-b.testnet"]["bonds_lost"] == BOND
@@ -976,3 +979,299 @@ def test_proven_claim_after_the_budget_is_spent_is_refunded_as_unfunded(client, 
         f"/api/bounties/{bounty['id']}/claims", json=broken_link(site, "hunter-c.testnet")
     )
     assert rejected.status_code == 409 and "closed" in rejected.json()["detail"]
+
+
+def test_a_top_up_reopens_a_bounty_whose_budget_ran_out(client, site):
+    bounty = open_bounty(client, site, amount=REWARD + FEE)
+    assert bounty["closed_reason"] is None
+    paid = submit(client, bounty, broken_link(site, "hunter-a.testnet"))
+    seed_result(paid["job_id"])
+    scan.run(paid["job_id"])
+    detail = client.get(f"/api/bounties/{bounty['id']}").json()
+    assert (detail["status"], detail["closed_reason"]) == ("closed", "budget_spent")
+
+    # A top-up that cannot pay one reward and its fee adds money but leaves the bounty closed.
+    small = fund(client, bounty, amount=REWARD)
+    assert small.status_code == 200, small.text
+    assert (small.json()["status"], small.json()["budget_amount"]) == ("closed", REWARD)
+    reopened = fund(client, bounty, amount=FEE).json()
+    assert (reopened["status"], reopened["closed_reason"]) == ("open", None)
+    assert reopened["budget_amount"] == REWARD + FEE
+
+    later = submit(client, bounty, overflow(site, "hunter-b.testnet"))
+    seed_result(later["job_id"])
+    scan.run(later["job_id"])
+    assert claim_view(client, bounty, later)["status"] == "paid"
+    detail = client.get(f"/api/bounties/{bounty['id']}").json()
+    assert (detail["status"], detail["closed_reason"]) == ("closed", "budget_spent")
+    assert len(paid_rewards(bounty["id"])) == 2
+
+    # A bounty that closed for any other reason takes no more money.
+    with Session.begin() as session:
+        session.get(Bounty, bounty["id"]).closed_reason = "owner_closed"
+    refused = fund(client, bounty, amount=FUND)
+    assert refused.status_code == 409 and "budget ran out" in refused.json()["detail"]
+    assert client.get(f"/api/bounties/{bounty['id']}").json()["budget_amount"] == 0
+
+
+def test_a_close_keeps_its_first_reason_and_only_a_spent_budget_reopens():
+    bounty = Bounty(status="open", reward_amount=REWARD, fee_bps=1000, budget_amount=0)
+    now = utcnow()
+    budget.close_for_budget(bounty, now)
+    assert (bounty.status, bounty.closed_reason) == ("closed", "budget_spent")
+    assert budget.takes_funds(bounty)
+    bounty.closed_reason = "owner_closed"  # a later unfunded claim does not change the reason
+    budget.close_for_budget(bounty, now)
+    assert bounty.closed_reason == "owner_closed" and not budget.takes_funds(bounty)
+    assert budget.add_funds(bounty, REWARD + FEE, now) is False
+    assert (bounty.status, bounty.budget_amount) == ("closed", REWARD + FEE)
+
+
+def test_an_unfunded_claim_closes_the_bounty_until_a_top_up(client, site):
+    bounty = open_bounty(client, site, amount=REWARD + FEE)
+    paid = submit(client, bounty, broken_link(site, "hunter-a.testnet"))
+    late = submit(client, bounty, overflow(site, "hunter-b.testnet"))
+    with Session.begin() as session:  # money left the budget before either claim was decided
+        session.get(Bounty, bounty["id"]).budget_amount = 0
+    seed_result(late["job_id"])
+    scan.run(late["job_id"])
+    assert claim_view(client, bounty, late)["status"] == "unfunded"
+    detail = client.get(f"/api/bounties/{bounty['id']}").json()
+    assert (detail["status"], detail["closed_reason"]) == ("closed", "budget_spent")
+
+    assert fund(client, bounty, amount=REWARD + FEE).json()["status"] == "open"
+    seed_result(paid["job_id"])
+    scan.run(paid["job_id"])  # a claim made before the bounty closed is paid after the top-up
+    assert claim_view(client, bounty, paid)["status"] == "paid"
+
+
+def history(proven=0, rejected=0, duplicate=0, unverified=0, unfunded=0):
+    return {
+        "proven": proven,
+        "rejected": rejected,
+        "duplicate": duplicate,
+        "unverified": unverified,
+        "unfunded": unfunded,
+    }
+
+
+@pytest.mark.parametrize(
+    ("counts", "tier", "bps"),
+    [
+        (history(), "new", 10_000),
+        (history(proven=1, rejected=1), "new", 10_000),
+        (history(rejected=2, duplicate=9, unverified=9), "new", 10_000),
+        (history(proven=3), "trusted", 5_000),  # 4/5
+        (history(proven=2, unfunded=1), "trusted", 5_000),  # unfunded counts as correct
+        (history(proven=5, rejected=1), "trusted", 5_000),  # exactly 3/4
+        (history(proven=4, rejected=1), "standard", 10_000),  # 5/7
+        (history(proven=2, rejected=1, duplicate=20), "standard", 10_000),  # 3/5
+        (history(proven=1, rejected=2), "poor", 20_000),  # 2/5
+        (history(proven=2, rejected=6), "poor", 20_000),  # exactly 3/10
+        (history(rejected=3), "very_poor", 30_000),  # 1/5
+        (history(proven=2, rejected=8, unverified=5), "very_poor", 30_000),  # 1/4
+    ],
+)
+def test_reputation_tier_follows_decided_claims_only(counts, tier, bps):
+    assert reputation.tier_for(counts) == (tier, bps)
+
+
+def test_required_bond_is_rounded_up_and_capped_in_near_intents_mode(monkeypatch):
+    assert reputation.reputation_view(history()) == {"score": 0.5, **history()}
+    assert reputation.reputation_view(history(proven=4, rejected=1))["score"] == 0.7143
+    monkeypatch.setattr(settings, "settlement_mode", "dry")
+    required = reputation.required_bond
+    assert required(REWARD, BOND, 5_000) == BOND // 2
+    assert required(REWARD, BOND, 30_000) == 3 * BOND
+    assert required(REWARD, 3, 5_000) == 2  # 1.5 rounds up to a whole token unit
+    assert required(REWARD, 33_333, 5_000) == 16_667
+    assert required(REWARD, 1, 5_000) == 1
+    monkeypatch.setattr(settings, "settlement_mode", "near_intents")
+    monkeypatch.setattr(settings, "max_payment_amount", REWARD + 150_000)
+    # One transfer returns the reward and the bond, so the bond stays under the payment limit.
+    assert required(REWARD, BOND, 30_000) == 150_000
+    assert required(REWARD, BOND, 20_000) == 150_000
+    assert required(REWARD, BOND, 5_000) == BOND // 2
+    monkeypatch.setattr(settings, "max_payment_amount", REWARD)
+    assert required(REWARD, BOND, 10_000) == 1  # never below one token unit
+
+
+def new_hunter():
+    return f"rep-{uuid4().hex[:12]}.testnet"
+
+
+def seed_history(bounty_id, hunter, outcome, count):
+    """Write decided claims directly, so reputation tests need no browser."""
+    with Session.begin() as session:
+        for _ in range(count):
+            url = f"https://seed.invalid/{uuid4()}"
+            mark = fingerprint("horizontal_overflow", [url], {"url": url})
+            session.add(
+                Claim(
+                    id=str(uuid4()),
+                    bounty_id=bounty_id,
+                    hunter_account=hunter,
+                    claim_type="horizontal_overflow",
+                    urls=[url],
+                    details={"url": url},
+                    explanation="Seeded history.",
+                    reproduction_steps=["Seeded."],
+                    fingerprint=mark,
+                    final_fingerprint=mark if outcome == "proven" else None,
+                    status="paid" if outcome == "proven" else outcome,
+                    outcome=outcome,
+                    evidence=[],
+                    settled_at=utcnow(),
+                )
+            )
+
+
+def bond_quote(client, bounty, hunter):
+    response = client.get(f"/api/bounties/{bounty['id']}/bond", params={"hunter": hunter})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_reputation_across_bounties_sets_the_bond_and_settlement_uses_it(client, site, monkeypatch):
+    port = CountingSettlement()
+    monkeypatch.setattr(settlement, "get_settlement", lambda: port)
+    hunter = new_hunter()
+    first, second = open_bounty(client, site), open_bounty(client, site)
+    assert bond_quote(client, first, hunter) == {
+        "hunter": hunter,
+        "base_bond": BOND,
+        "required_bond": BOND,
+        "multiplier": 1.0,
+        "tier": "new",
+        "reputation": {"score": 0.5, **history()},
+    }
+    bond_url = f"/api/bounties/{first['id']}/bond"
+    assert client.get(bond_url, params={"hunter": "Not An Account"}).status_code == 422
+    assert client.get(bond_url).status_code == 422
+    assert client.get(f"/api/bounties/{uuid4()}/bond", params={"hunter": hunter}).status_code == 404
+    assert client.get("/api/hunters/Not An Account").status_code == 422
+
+    # Three proven claims on two bounties make the hunter trusted on both.
+    for bounty, target in ((first, "missing-1"), (second, "missing-2"), (first, "missing-3")):
+        assert bond_quote(client, bounty, hunter)["required_bond"] == BOND
+        claim = submit(client, bounty, broken_link(site, hunter, target))
+        seed_result(claim["job_id"])
+        scan.run(claim["job_id"])
+        assert claim_view(client, bounty, claim)["status"] == "paid"
+    trusted = {"score": 0.8, **history(proven=3)}
+    assert client.get(f"/api/hunters/{hunter}").json() == {
+        "account": hunter,
+        "tier": "trusted",
+        "multiplier": 0.5,
+        "reputation": trusted,
+    }
+    quote = bond_quote(client, second, hunter)
+    assert quote["tier"] == "trusted" and quote["multiplier"] == 0.5
+    assert quote["required_bond"] == BOND // 2 and quote["reputation"] == trusted
+    row = {h["account"]: h for h in client.get(f"/api/bounties/{second['id']}").json()["hunters"]}
+    assert row[hunter]["claims"] == 1 and row[hunter]["proven"] == 1
+    assert (row[hunter]["reputation_score"], row[hunter]["tier"]) == (0.8, "trusted")
+    assert row[hunter]["required_bond"] == BOND // 2
+
+    # The base bond is now wrong for this hunter; nothing is saved or collected.
+    wrong = broken_link(site, hunter, "missing-4")
+    response = client.post(f"/api/bounties/{second['id']}/claims", json=wrong)
+    assert response.status_code == 422, response.text
+    assert f"exactly {BOND // 2} token units" in response.json()["detail"]
+    assert "trusted tier" in response.json()["detail"]
+    with Session() as session:
+        assert session.get(Claim, wrong["claim_id"]) is None
+
+    # Refund, reward, and forfeit each use the bond collected for the claim.
+    half = BOND // 2
+    claims = {
+        name: submit(client, second, broken_link(site, hunter, f"missing-{name}", bond=half))
+        for name in ("unverified", "proven", "rejected")
+    }
+    for name, claim in claims.items():
+        [bond_in] = [r for r in claim["ledger"] if r["kind"] == "bond_in"]
+        assert bond_in["amount"] == half
+        status = "confirmed" if name == "proven" else name
+        seed_result(claim["job_id"], {"status": status, "checker_reason": name})
+        scan.run(claim["job_id"])
+    views = {name: claim_view(client, second, claim) for name, claim in claims.items()}
+    assert [v["status"] for v in views.values()] == ["unverified", "paid", "rejected"]
+    rows = {name: {r["kind"]: r for r in view["ledger"]} for name, view in views.items()}
+    assert rows["unverified"]["bond_refund"]["amount"] == half
+    assert rows["proven"]["bond_refund"]["amount"] == half
+    assert rows["rejected"]["bond_forfeit"]["amount"] == half
+    proven_id = claims["proven"]["id"]
+    assert (hunter, REWARD + half, f"arsune:reward:{proven_id}") in port.payments
+    unverified_id = claims["unverified"]["id"]
+    assert (hunter, half, f"arsune:refund:{unverified_id}") in port.payments
+    detail = client.get(f"/api/bounties/{second['id']}").json()
+    assert detail["budget_amount"] == FUND - 2 * (REWARD + FEE) + half
+    assert {h["account"]: h for h in detail["hunters"]}[hunter]["bonds_lost"] == half
+    assert client.get(f"/api/hunters/{hunter}").json()["reputation"] == {
+        "score": 0.7143,  # (4 + 1) / (5 + 2): standard
+        **history(proven=4, rejected=1, unverified=1),
+    }
+    assert bond_quote(client, first, hunter)["required_bond"] == BOND
+
+
+def test_reputation_that_changes_during_intake_is_charged_at_the_locked_check(
+    client, site, monkeypatch
+):
+    bounty, elsewhere = open_bounty(client, site), open_bounty(client, site)
+    hunter = new_hunter()
+    seed_history(elsewhere["id"], hunter, "rejected", 2)
+    payload = broken_link(site, hunter)
+    check = settlement.check_transfer
+
+    def decided_meanwhile(*args, **kwargs):
+        # Another bounty rejects a claim after the quote and before the bounty lock.
+        seed_history(elsewhere["id"], hunter, "rejected", 1)
+        return check(*args, **kwargs)
+
+    monkeypatch.setattr(settlement, "check_transfer", decided_meanwhile)
+    response = client.post(f"/api/bounties/{bounty['id']}/claims", json=payload)
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert "reputation changed" in detail and f"exactly {3 * BOND} token units" in detail
+    assert "very_poor tier" in detail
+    with Session() as session:
+        assert session.get(Claim, payload["claim_id"]) is None
+    assert [row.kind for row in ledger(bounty["id"])] == ["fund"]
+    monkeypatch.setattr(settlement, "check_transfer", check)
+    accepted = submit(client, bounty, broken_link(site, hunter, bond=3 * BOND))
+    assert [r["amount"] for r in accepted["ledger"] if r["kind"] == "bond_in"] == [3 * BOND]
+
+
+def test_concurrent_intake_for_one_hunter_charges_the_required_bond(client, site):
+    hunter = new_hunter()
+    bounties = [open_bounty(client, site), open_bounty(client, site)]
+    seed_history(bounties[0]["id"], hunter, "rejected", 3)  # very poor: three times the base
+    required = 3 * BOND
+    assert all(bond_quote(client, b, hunter)["required_bond"] == required for b in bounties)
+    requests = [
+        (bounty, broken_link(site, hunter, f"race-{n}", bond=required if n < 4 else BOND))
+        for bounty in bounties
+        for n in range(5)
+    ]
+    barrier = threading.Barrier(len(requests))
+    results = {}
+
+    def post(index, bounty, payload):
+        barrier.wait()
+        response = client.post(f"/api/bounties/{bounty['id']}/claims", json=payload)
+        results[index] = (bounty["id"], response.status_code)
+
+    threads = [
+        threading.Thread(target=post, args=(i, bounty, payload))
+        for i, (bounty, payload) in enumerate(requests)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=60)
+    assert len(results) == len(requests)
+    for bounty in bounties:
+        codes = sorted(code for bounty_id, code in results.values() if bounty_id == bounty["id"])
+        assert codes == [202, 202, 202, 422, 429], codes
+        bonds = [row.amount for row in ledger(bounty["id"]) if row.kind == "bond_in"]
+        assert bonds == [required] * 3

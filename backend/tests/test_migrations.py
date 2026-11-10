@@ -128,3 +128,33 @@ def test_bounty_migration_enforces_first_proven_claim_and_downgrades():
     finally:
         with engine.begin() as connection:
             connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def test_migration_0008_marks_closed_bounties_as_closed_by_a_spent_budget():
+    schema = f"arsune_closed_reason_test_{uuid4().hex}"
+    config = Config("alembic.ini")
+    insert = text("""INSERT INTO bounties (id, url, origin, owner_account, proof_token, status,
+        reward_amount, bond_amount, fee_bps, budget_amount, budget_target, created_at,
+        updated_at) VALUES (:id, 'https://site.test/', 'https://site.test:443', 'owner.near',
+        'token', :status, 1000000, 100000, 1000, 0, 5000000, now(), now())""")
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+            connection.exec_driver_sql(f'SET LOCAL search_path TO "{schema}"')
+            config.attributes["connection"] = connection
+            command.upgrade(config, "0007")
+            for bounty_id, status in [("b1", "closed"), ("b2", "open"), ("b3", "pending_proof")]:
+                connection.execute(insert, {"id": bounty_id, "status": status})
+            command.upgrade(config, "0008")
+            reasons = connection.execute(text("SELECT id, closed_reason FROM bounties ORDER BY id"))
+            # Before 0008 a spent budget was the only reason for which a bounty closed.
+            assert list(reasons) == [("b1", "budget_spent"), ("b2", None), ("b3", None)]
+            assert not compare_metadata(MigrationContext.configure(connection), Base.metadata)
+            command.downgrade(config, "0007")
+            columns = {
+                c["name"] for c in inspect(connection).get_columns("bounties", schema=schema)
+            }
+            assert "closed_reason" not in columns
+    finally:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

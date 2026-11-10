@@ -1,5 +1,6 @@
 """Owner-funded bounties: owner proof, funding, hunter claims, and read views."""
 
+import re
 import secrets
 from uuid import uuid4
 
@@ -8,7 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.bounty import settlement
+from app.bounty import budget, reputation, settlement
 from app.bounty.claims import (
     ACCOUNT,
     MAX_UNRESOLVED_CLAIMS,
@@ -30,6 +31,11 @@ from app.settlement.near_tx import OutcomeUnknown
 from app.v1.services.jobs import JOB_ID
 
 OUTCOME_COUNTS = ("proven", "unfunded", "rejected", "duplicate", "unverified")
+FUNDS_RULE = (
+    "Only an open bounty, or one that closed because its budget ran out, can receive funds."
+)
+# An Ethereum address in any letter case. NEAR account IDs, and so intents.near, are lowercase.
+ANY_CASE_EVM_ADDRESS = re.compile(r"0x[0-9a-fA-F]{40}")
 
 
 def find_bounty(session, bounty_id, lock=False):
@@ -54,16 +60,30 @@ def find_claim(session, bounty_id, claim_id):
 
 def require_account(value, role="account"):
     if not ACCOUNT.fullmatch(value):
+        if ANY_CASE_EVM_ADDRESS.fullmatch(value):
+            raise HTTPException(
+                422,
+                f"Use the lowercase 0x address for the {role}: {value.lower()}. "
+                "NEAR account IDs have no capital letters, so a checksummed address is not one.",
+            )
         raise HTTPException(422, f"Use a valid NEAR account ID for the {role}.")
     if value == settlement.arsune_account():
         raise HTTPException(422, f"The {role} cannot be Arsune's settlement account.")
 
 
-def check_intent(signed, *, sender, amount, memo):
+def check_intent(signed, *, sender, amount, memo, note=""):
     try:
         settlement.check_transfer(signed, sender=sender, amount=amount, memo=memo)
     except SettlementError as exc:
-        raise HTTPException(422, f"The signed transfer is not valid: {exc}") from None
+        raise HTTPException(422, f"The signed transfer is not valid: {exc}{note}") from None
+
+
+def bond_rule(quote):
+    return (
+        f"The bond for {quote['hunter']} on this bounty must be exactly "
+        f"{quote['required_bond']} token units: the {quote['tier']} tier pays "
+        f"{quote['multiplier']}x the base bond of {quote['base_bond']}."
+    )
 
 
 def fee_amount(bounty):
@@ -84,6 +104,7 @@ def bounty_summary(bounty, mode):
         "origin": bounty.origin,
         "owner_account": bounty.owner_account,
         "status": bounty.status,
+        "closed_reason": bounty.closed_reason,
         "reward_amount": bounty.reward_amount,
         "bond_amount": bounty.bond_amount,
         "fee_bps": bounty.fee_bps,
@@ -174,13 +195,19 @@ def bounty_detail(session, bounty):
         select(Claim).where(Claim.bounty_id == bounty.id).order_by(Claim.created_at, Claim.id)
     ).all()
     ledger = ledger_rows(session, bounty.id)
+    hunters = hunter_summary(claims, ledger)
+    quotes = reputation.bond_quotes(session, bounty, [row["account"] for row in hunters])
+    for row in hunters:
+        quote = quotes[row["account"]]
+        row["reputation_score"] = quote["reputation"]["score"]
+        row["tier"], row["required_bond"] = quote["tier"], quote["required_bond"]
     return {
         **bounty_summary(bounty, settlement.settlement_mode()),
         "proof_token": bounty.proof_token,
         "proof_url": proof_url(bounty.url),
         "claims": [claim_summary(c) for c in claims],
         "ledger": [ledger_view(e) for e in ledger],
-        "hunters": hunter_summary(claims, ledger),
+        "hunters": hunters,
     }
 
 
@@ -258,6 +285,29 @@ def get_claim(bounty_id, claim_id):
         return claim_detail(session, find_claim(session, bounty_id, claim_id))
 
 
+def bond_quote(session, bounty, hunter):
+    return reputation.bond_quotes(session, bounty, [hunter])[hunter]
+
+
+def get_bond(bounty_id, hunter):
+    require_account(hunter, "hunter")
+    with Session() as session:
+        return bond_quote(session, find_bounty(session, bounty_id), hunter)
+
+
+def get_hunter(account):
+    require_account(account, "hunter")
+    with Session() as session:
+        counts = reputation.history(session, [account])[account]
+    tier, bps = reputation.tier_for(counts)
+    return {
+        "account": account,
+        "tier": tier,
+        "multiplier": bps / 10_000,
+        "reputation": reputation.reputation_view(counts),
+    }
+
+
 async def verify_bounty(bounty_id):
     with Session() as session:
         bounty = find_bounty(session, bounty_id)
@@ -296,8 +346,8 @@ async def fund_bounty(bounty_id, request: FundBounty):
     check_intent(request.signed_intent, sender=request.sender, amount=request.amount, memo=memo)
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
-        if bounty.status != "open":
-            raise HTTPException(409, "Only an open bounty can receive funds.")
+        if not budget.takes_funds(bounty):
+            raise HTTPException(409, FUNDS_RULE)
         # The row exists before the transfer, so an interrupted request is visible as pending.
         session.add(
             LedgerEntry(
@@ -330,8 +380,7 @@ async def fund_bounty(bounty_id, request: FundBounty):
         bounty = find_bounty(session, bounty_id, lock=True)
         entry = session.get(LedgerEntry, entry_id)
         entry.tx_id, entry.status, entry.updated_at = tx_id, "completed", utcnow()
-        bounty.budget_amount += request.amount
-        bounty.updated_at = utcnow()
+        budget.add_funds(bounty, request.amount, entry.updated_at)
         return bounty_detail(session, bounty)
 
 
@@ -346,14 +395,22 @@ async def create_claim(bounty_id, request: CreateClaim):
             raise HTTPException(409, "This claim_id is already used.")
         if bounty.status == "closed":
             raise HTTPException(409, "The bounty is closed.")
-        site_origin, bond = bounty.origin, bounty.bond_amount
+        site_origin = bounty.origin
+        quote = bond_quote(session, bounty, request.hunter_account)
     try:
         urls, details = await scoped_claim(
             site_origin, request.claim_type, request.urls, request.details
         )
     except (ClaimError, TargetPolicyError) as exc:
         raise HTTPException(422, str(exc)) from exc
-    check_intent(request.bond_intent, sender=request.hunter_account, amount=bond, memo=memo)
+    bond = quote["required_bond"]
+    check_intent(
+        request.bond_intent,
+        sender=request.hunter_account,
+        amount=bond,
+        memo=memo,
+        note=". " + bond_rule(quote),
+    )
     entry_id = str(uuid4())
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
@@ -372,6 +429,10 @@ async def create_claim(bounty_id, request: CreateClaim):
         )
         if unresolved >= MAX_UNRESOLVED_CLAIMS:
             raise HTTPException(429, "This hunter has too many unresolved claims on this bounty.")
+        # A claim decided after the signature check can change the bond; charge the current one.
+        quote = bond_quote(session, bounty, request.hunter_account)
+        if quote["required_bond"] != bond:
+            raise HTTPException(422, "The hunter's reputation changed. " + bond_rule(quote))
         session.add(
             Claim(
                 id=claim_id,

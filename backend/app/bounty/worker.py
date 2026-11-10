@@ -12,7 +12,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.bounty import settlement
+from app.bounty import budget, settlement
 from app.bounty.claims import fee_for, final_fingerprint
 from app.browser.checker import check_candidate
 from app.browser.observations import observe_page
@@ -192,7 +192,7 @@ def hold_fault(session, bounty, claim, result):
         )
         return "duplicate", False
     fee = fee_for(bounty.reward_amount, bounty.fee_bps)
-    if bounty.budget_amount < bounty.reward_amount + fee:
+    if not budget.pays_one_reward(bounty):
         return "proven", True
     try:
         with session.begin_nested():
@@ -201,6 +201,15 @@ def hold_fault(session, bounty, claim, result):
         return "duplicate", False
     reserve_reward(session, bounty, claim, settlement.settlement_mode(), fee)
     return "proven", False
+
+
+def charged_bond(session, claim):
+    """The bond collected at intake. It depends on the hunter's reputation, not only the bounty."""
+    return session.scalar(
+        select(LedgerEntry.amount).where(
+            LedgerEntry.claim_id == claim.id, LedgerEntry.kind == "bond_in"
+        )
+    )
 
 
 def decide(job_id, generation, result, mode):
@@ -219,24 +228,25 @@ def decide(job_id, generation, result, mode):
         if unfunded:
             claim.status = "unfunded"
             claim.settlement_note = "The budget could not pay the reward. The bond is refunded."
-            bounty.status, bounty.updated_at = "closed", now
+            budget.close_for_budget(bounty, now)
         claim.checker_reason = result.get("checker_reason")
         claim.evidence = evidence_summary(result)
         claim.updated_at = now
         if outcome == "rejected":
+            bond = charged_bond(session, claim)
             session.add(
                 entry(
                     bounty,
                     claim,
                     "bond_forfeit",
-                    bounty.bond_amount,
+                    bond,
                     f"arsune:forfeit:{claim.id}",
                     mode,
                     "completed",
                     account=claim.hunter_account,
                 )
             )
-            bounty.budget_amount += bounty.bond_amount
+            bounty.budget_amount += bond
             bounty.updated_at = now
             claim.settlement_note = "The bond was added to the bounty budget."
             claim.settled_at = now
@@ -251,9 +261,8 @@ def is_funded_win(claim):
     return claim.outcome == "proven" and claim.final_fingerprint is not None
 
 
-def payment_plan(bounty, claim):
+def payment_plan(bounty, claim, bond):
     """Transfers for a decided claim, in order: (kind, receiver, sent, recorded, memo)."""
-    bond = bounty.bond_amount
     if claim.outcome == "rejected":
         return []
     if not is_funded_win(claim):
@@ -296,9 +305,9 @@ def claim_rows(session, claim):
 def reserve_reward(session, bounty, claim, mode, fee):
     """Take the reward and fee from the budget, once, when the claim becomes proven."""
     bounty.budget_amount -= bounty.reward_amount + fee
-    if bounty.budget_amount < bounty.reward_amount + fee:
-        bounty.status = "closed"
     bounty.updated_at = utcnow()
+    if not budget.pays_one_reward(bounty):
+        budget.close_for_budget(bounty, bounty.updated_at)
     if fee:
         session.add(
             entry(
@@ -322,7 +331,8 @@ def next_payment(job_id, generation, mode):
         if claim.settled_at or claim.status == "needs_review":
             return None
         rows = claim_rows(session, claim)
-        for kind, receiver, amount, recorded, memo in payment_plan(bounty, claim):
+        plan = payment_plan(bounty, claim, rows["bond_in"].amount)
+        for kind, receiver, amount, recorded, memo in plan:
             row = rows.get(kind)
             if row and row.tx_id:
                 continue
@@ -353,13 +363,14 @@ def record_payment(entry_id, tx_id):
     with Session.begin() as session:
         bounty, claim, payment = locked_payment(session, entry_id)
         payment.tx_id, payment.status, payment.updated_at = tx_id, "completed", utcnow()
+        bond = charged_bond(session, claim)
         if payment.kind == "reward_out":
             session.add(
                 entry(
                     bounty,
                     claim,
                     "bond_refund",
-                    bounty.bond_amount,
+                    bond,
                     payment.memo,
                     payment.settlement_mode,
                     "completed",
@@ -368,7 +379,8 @@ def record_payment(entry_id, tx_id):
                 )
             )
         rows = claim_rows(session, claim)
-        if all(rows.get(kind) and rows[kind].tx_id for kind, *_ in payment_plan(bounty, claim)):
+        plan = payment_plan(bounty, claim, bond)
+        if all(rows.get(kind) and rows[kind].tx_id for kind, *_ in plan):
             finish_claim(claim)
 
 

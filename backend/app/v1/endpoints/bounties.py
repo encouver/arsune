@@ -44,3 +44,13 @@ async def create_claim(bounty_id: str, request: CreateClaim):
 @router.get("/bounties/{bounty_id}/claims/{claim_id}")
 def get_claim(bounty_id: str, claim_id: str):
     return bounties.get_claim(bounty_id, claim_id)
+
+
+@router.get("/bounties/{bounty_id}/bond")
+def get_bond(bounty_id: str, hunter: str):
+    return bounties.get_bond(bounty_id, hunter)
+
+
+@router.get("/hunters/{account}")
+def get_hunter(account: str):
+    return bounties.get_hunter(account)
