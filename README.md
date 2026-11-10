@@ -120,6 +120,43 @@ An owner creates, proves, and funds a bounty at `/bounties/new` (header link "St
 
 A bounty that closed because its budget was spent opens again when a top-up (a signed transfer or a 1Click deposit) brings the budget to one reward and its fee. See [RULES.md](RULES.md#closing-and-top-ups) and [docs/RUNNING.md](docs/RUNNING.md#funding-a-bounty).
 
+## Anyone can verify a ruling
+
+Every decided claim has a public evidence bundle: the claim, its URLs and viewports, the checker's fresh observations, its status and reason, and the ruling. Screenshots are named by their sha256, and the bundle holds no secret and no host path. The claim publishes `evidence_hash`, the SHA-256 of the bundle bytes. In escrow mode the escrow contract stores the same hash with its ruling.
+
+```sh
+curl -s http://127.0.0.1:8540/api/claims/<claim_id>/evidence | sha256sum   # equals evidence_hash
+uv run python -m app.verify http://127.0.0.1:8540 <claim_id>
+```
+
+`app.verify` does not take Arsune's word for the verdict. It recomputes the hash, checks each screenshot against its sha256, reads the escrow's record of the claim (a read-only RPC view) when the bounty uses the escrow, applies the checker rules to the published observations, and runs the same check again in a fresh local browser. It exits with 1 on any mismatch. Options: `--no-browser` (record checks only), `--local-site` (a bounty site on a private address, such as the local demo), `--rpc-url`, and `--escrow-contract`.
+
+In the Compose stack, the bounty site is `http://demo:8541`, and only the containers can reach it. Run the full check in the API container, `docker compose exec api python -m app.verify http://127.0.0.1:8540 <claim_id>`, or use `--no-browser` from the host.
+
+Real output for a proven claim with a 25% scout share, in escrow mode on a local NEAR sandbox (9 Nov 2026, [docs/ESCROW.md](docs/ESCROW.md#end-to-end-run-on-a-local-sandbox-2026-11-09)):
+
+```text
+$ uv run python -m app.verify http://127.0.0.1:8803 79d2072b-9fc1-4008-baf5-beee29969ab5 --local-site --rpc-url http://127.0.0.1:8830
+Claim:                      79d2072b-9fc1-4008-baf5-beee29969ab5 (broken_link, hunter 3e72e51105e31ec2a44dd58f8556d6bfe7d55874b0b562a8d608bcec8a0914e4)
+Site:                       http://127.0.0.1:8802/faulty/
+Published ruling:           proven (claim status paid)
+Published evidence_hash:    0f3b861f7fafa9dc4d2434ee62904b89b9a38847082247da8861ef3d6577f228
+sha256 of the bundle:       0f3b861f7fafa9dc4d2434ee62904b89b9a38847082247da8861ef3d6577f228  MATCH
+Bundle is canonical JSON:   yes  MATCH
+Bundle names this ruling:   79d2072b-9fc1-4008-baf5-beee29969ab5, proven  MATCH
+Screenshots:                2 of 2 have the sha256 in the bundle  MATCH
+Escrow record:              escrow.test.near: proven, evidence_hash 0f3b861f7fafa9dc4d2434ee62904b89b9a38847082247da8861ef3d6577f228
+Escrow hash = bundle hash:  0f3b861f7fafa9dc4d2434ee62904b89b9a38847082247da8861ef3d6577f228  MATCH
+Escrow outcome = ruling:    proven = proven  MATCH
+Rules on the observations:  confirmed (published confirmed)  MATCH
+Fresh browser check:        confirmed (a proven ruling needs confirmed)  MATCH
+Fresh reason:               A fresh source-page read found the link. A fresh target request returned HTTP 404.
+
+Verdict: OK. The hash matches; the ruling is reproduced.
+```
+
+In dry mode the escrow lines read `Escrow record: none (settlement dry); only Arsune publishes the hash`. A changed bundle fails the hash. A false ruling with a matching hash fails the fresh check (`backend/tests/test_evidence.py`). A site that changed after the ruling also gives a different fresh result, so a mismatch is a reason to look, not a proof by itself.
+
 ## AI agents (optional)
 
 AI hunters and AI scouts send a short summary of the pages that they crawled to a model on NEAR AI Cloud (`https://cloud-api.near.ai/v1`, an OpenAI-compatible API). The model decides which faults to claim or sell, which tips to buy, and how to negotiate. The agent builds every claim from its own observations, and Arsune checks it like any other claim. The model never sees a key.
@@ -146,13 +183,13 @@ When the budget is spent, each AI agent goes on as a scripted agent. The board s
 
 ## Escrow contract
 
-`contracts/escrow/` is a NEAR contract that holds bounty money and bonds inside `intents.near`. Arsune stays the judge, but the contract fixes every amount and every receiver, and each ruling is a public record with a hash of Arsune's evidence. It is built and tested on a local NEAR sandbox with the real `intents.near` wasm (read from mainnet and checked against its code hash). Mainnet deployment is pending, and the bounty flow does not use the contract yet. All Rust runs in Docker:
+`contracts/escrow/` is a NEAR contract that holds bounty money and bonds inside `intents.near`. Arsune stays the judge, but the contract fixes every amount and every receiver, and each ruling is a public record with the hash of Arsune's evidence bundle. The bounty flow uses it with `ARSUNE_SETTLEMENT_MODE=escrow` (opt-in; the default stays `dry`): Arsune creates the bounty on the escrow, relays the signed deposits, and sends one `rule` transaction for each decided claim ([docs/SETTLEMENT.md](docs/SETTLEMENT.md#escrow-mode)). It is tested on a local NEAR sandbox with the real `intents.near` wasm (read from mainnet and checked against its code hash), also end to end with the Arsune API and worker, and with mocked RPC. It is not deployed on mainnet. All Rust runs in Docker:
 
 ```sh
 contracts/escrow/test.sh
 ```
 
-Last run (9 Nov 2026): 66 unit tests and 10 sandbox tests pass. The sandbox tests run the escrow against the real `intents.near` wasm (defuse 0.4.5). The built wasm is 223,323 bytes, sha256 `3bdd66f6dc1848e64d811ee966b130db10fd24398aef49e693275f854546e2da`. See [docs/ESCROW.md](docs/ESCROW.md).
+Last run (9 Nov 2026): 72 unit tests and 11 sandbox tests pass. The sandbox tests run the escrow against the real `intents.near` wasm (defuse 0.4.5). The built wasm is 224,153 bytes, sha256 `e556b06aed47fd4a26bb86932c4c7869aa62f33e57c9e170a043e3411f954b18`. See [docs/ESCROW.md](docs/ESCROW.md).
 
 ## Dry and live mode
 
@@ -162,6 +199,8 @@ Last run (9 Nov 2026): 66 unit tests and 10 sandbox tests pass. The sandbox test
 | Needs | Docker only | A funded NEAR account (NEAR for gas, USDC in `intents.near`) and host processes with `ARSUNE_SETTLEMENT_MODE=near_intents` |
 | Agents | Fresh implicit accounts per run | Named sub-accounts, one per agent, made by `scripts/near_swarm_accounts.py` |
 | Funding from another chain | Not available | 1Click deposit addresses |
+
+A third mode, `escrow`, keeps the money in the escrow contract instead of Arsune's account (see "Escrow contract"). It is tested on a local sandbox only.
 
 Live mode is optional. It refuses to start without an explicit `--i-approve-mainnet` flag, and every transfer is capped at 1 USDC by default. The setup and the helper scripts (`scripts/near_intents_payment.py`, `scripts/near_deposit_usdc.py`, `scripts/near_swarm_accounts.py`) are described in [docs/SETTLEMENT.md](docs/SETTLEMENT.md). The live swarm is described in [docs/SWARM.md](docs/SWARM.md#live).
 
@@ -194,7 +233,7 @@ Live mode is optional. It refuses to start without an explicit `--i-approve-main
          ▼                                │   4 checks at a time, each in   │
   ┌──────────────────────────────┐ check  │   a fresh Chromium              │
   │ demo shop: 66 bugs, 26 decoys│◀───────┤ settlement: dry | NEAR Intents  │
-  └──────────────────────────────┘        │   (USDC on intents.near)        │
+  └──────────────────────────────┘        │   or escrow (intents.near USDC) │
                                           └───────────────┬─────────────────┘
   board: Next.js /swarm ◀── polls the API and swarm /state┘
 ```
@@ -209,7 +248,7 @@ Live mode is optional. It refuses to start without an explicit `--i-approve-main
 
 | Where | What |
 | --- | --- |
-| `backend/tests/` | API, database, bounty and ledger rules, reputation bonds, 1Click funding, NEP-413 and ERC-191 signing against published vectors, the escrow client, swarm agents |
+| `backend/tests/` | API, database, bounty and ledger rules, reputation bonds, 1Click funding, NEP-413 and ERC-191 signing against published vectors, the escrow client and escrow mode, evidence bundles and `app.verify`, swarm agents |
 | `backend/tests/engine/` | Real Chromium checks against controlled sites; `test_demo_shop.py` checks all 66 shop bugs and 26 decoys, and that the swarm's image and error hunters find their 16 bugs |
 | `frontend/tests/` | Playwright tests of the interface; `swarm.spec.ts` and `bounties.spec.ts` use mocked APIs |
 | `contracts/escrow/` | Rust unit tests and NEAR sandbox tests (`test.sh`) |
@@ -243,6 +282,6 @@ npm --prefix frontend run build
 - In the simulation, all 110 agents run in one process on one machine. Each has its own key and wallet, but they share one HTTP pool and one Chromium.
 - One relayer key: in live mode, payments are sent one at a time, about 2 to 5 seconds each.
 - NEAR Intents (`intents.near`) is on mainnet only. There is no testnet run.
-- The escrow contract is not deployed and not audited, and the bounty flow does not use it yet.
+- The escrow contract is not deployed on mainnet and not audited. Escrow mode is tested on a local NEAR sandbox and with mocked RPC only.
 - A site that serves the same page at many paths without redirects can get the same fault paid more than once.
 - This is a local operator tool: no user accounts and no public access control.

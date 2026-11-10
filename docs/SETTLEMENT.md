@@ -10,18 +10,23 @@ sign with NEP-413 or, with only an Ethereum key, with ERC-191 (see "Ethereum wal
   transactions) and `erc191.py` (Ethereum keys and signatures).
 - Interface: `backend/app/settlement/base.py` (`Settlement.collect` / `Settlement.pay`).
 - `ARSUNE_SETTLEMENT_MODE=dry` (the default) moves no money. `near_intents` moves real USDC.
+  `escrow` (opt-in) keeps the money in the escrow contract instead of Arsune's account (see
+  "Escrow mode").
 
 ## Settings
 
 | Variable | Default | Meaning |
 | - | - | - |
-| `ARSUNE_SETTLEMENT_MODE` | `dry` | `dry` or `near_intents` |
+| `ARSUNE_SETTLEMENT_MODE` | `dry` | `dry`, `near_intents` or `escrow` |
 | `ARSUNE_NEAR_ACCOUNT_ID` | empty | Arsune account. It holds the USDC and pays the gas. |
 | `ARSUNE_NEAR_PRIVATE_KEY` | empty | `ed25519:<base58>`. It signs the intents and the relayer transactions. Kept as a `SecretStr`. |
 | `ARSUNE_NEAR_RPC_URL` | `https://free.rpc.fastnear.com` | Mainnet JSON-RPC |
 | `ARSUNE_INTENTS_CONTRACT` | `intents.near` | Verifier contract |
 | `ARSUNE_BOUNTY_TOKEN` | `nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1` | Native USDC, 6 decimals |
-| `ARSUNE_MAX_PAYMENT_AMOUNT` | `1000000` (1 USDC) | `pay` and `collect` refuse larger amounts |
+| `ARSUNE_MAX_PAYMENT_AMOUNT` | `1000000` (1 USDC) | `pay` and `collect` refuse larger amounts (`near_intents` only) |
+| `ARSUNE_ESCROW_CONTRACT` | empty | Escrow account (`escrow` mode) |
+| `ARSUNE_ESCROW_CLAIMS` | `50` | Claim records that Arsune prepays for each escrow bounty (0.006 NEAR each) |
+| `ARSUNE_ESCROW_BOUNTY_DAYS` | `30` | Escrow deadline: the bounty's creation time plus this many days |
 
 ## Signed transfer format (confirmed on mainnet)
 
@@ -368,6 +373,37 @@ gas burns.
 
 Total USDC is 0.62 (0.5 to the owner and 6 × 0.02 to the hunters). The expected real cost is
 about 0.09 NEAR, mostly 11 × 0.007 NEAR for account creation.
+
+## Escrow mode
+
+`ARSUNE_SETTLEMENT_MODE=escrow` uses the escrow contract (`contracts/escrow`, [ESCROW.md](ESCROW.md))
+through `EscrowSettlement` in `backend/app/settlement/escrow.py`. Arsune is the judge, the fee
+account and the relayer. It never holds bounty money or bonds: the escrow holds them as its own
+balance on `intents.near`, and the contract sends every payout. Tested in a local sandbox and
+with an in-memory chain; not deployed on mainnet.
+
+| Step | What Arsune does |
+| - | - |
+| `POST /api/bounties/{id}/verify` | After the owner's proof, `create_bounty` with the owner, judge = fee account = `ARSUNE_NEAR_ACCOUNT_ID`, the reward, base bond, fee (at most 2000 bps), deadline and storage for `ARSUNE_ESCROW_CLAIMS` claims. A bounty that already exists with the same terms is accepted; other terms stop the opening (502). Ledger row `escrow_open`. |
+| `POST /api/bounties/{id}/fund` | Checks a signed `transfer` to the escrow with `msg` `{"fund":"<bounty_id>"}` and memo `arsune:fund:{fund_id}` (`escrow.verify_deposit`), then relays it with `execute_intents`. A deposit that the escrow refunds is a failed transfer (402). |
+| `POST /api/bounties/{id}/claims` | The same for the bond: `msg` `{"bond":{"bounty_id":...,"claim_id":...,"scout":{"account_id":...,"share_bps":...}}}` (the scout only if the claim names one), memo `arsune:bond:{claim_id}`. |
+| Worker | Decides the claim and publishes the evidence bundle, saves the ledger row of the ruling (`reward_out`, `bond_forfeit` or `bond_refund`) as `pending`, then sends `rule(claim_id, outcome, evidence_hash)`. On success the rule transaction ID goes on that row and on the `bond_refund`, `scout_share` and `fee` rows of the same payout. A forfeited bond enters Arsune's budget only then. |
+| `POST /api/bounties/{id}/withdraw` | `withdraw_remaining` (anyone may call it; the receivers are fixed): after the owner's `close_bounty` or the deadline, the rest goes to the owner. Ledger row `withdraw`; the bounty closes with `closed_reason` `withdrawn` and takes no more top-ups. |
+
+- Clients read `GET /api/settlement`. In escrow mode it adds `escrow_contract`, the receiver of
+  every deposit. The salt is the Verifier's current salt, as in `near_intents` mode. Swarm
+  agents sign escrow deposits with `escrow.sign_deposit` (`swarm/identity.py`).
+- Outcomes sent to `rule`: `proven`, `rejected`, `duplicate`, `unverified`, and `unfunded` for a
+  proven claim that Arsune's budget cannot pay. The `rule` event must give the same outcome and
+  the same evidence hash; otherwise the claim goes to `needs_review`.
+- Safety on retry is the same as in `near_intents` mode: the ruling's ledger row exists before
+  the transaction, and a repeated run that finds it without a transaction ID sends nothing and
+  holds the claim for review. The contract also refuses a second ruling for a claim.
+- The `near_intents` limits do not apply: no `ARSUNE_MAX_PAYMENT_AMOUNT` check, and no bond cap
+  (the cap could put a bond below the escrow's minimum of half the base bond).
+- 1Click funding needs `near_intents` mode.
+- Escrow ledger rows link to nearblocks like `near_intents` rows. On a local sandbox these
+  links do not resolve.
 
 ## Known limits
 

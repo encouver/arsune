@@ -8,9 +8,11 @@ evidence.
 
 - Contract: `contracts/escrow/` (Rust, near-sdk 5.30.1).
 - Sandbox tests: `contracts/escrow/integration-tests/` (near-workspaces 0.24, real `intents.near` code).
-- Python client: `backend/app/settlement/escrow.py`. It is not wired into the bounty flow yet.
+- Python client: `backend/app/settlement/escrow.py`. The bounty flow uses it in
+  `ARSUNE_SETTLEMENT_MODE=escrow` (opt-in; see [SETTLEMENT.md](SETTLEMENT.md#escrow-mode)).
 - Deploy script: `scripts/near_escrow_deploy.py`.
-- Status: tested in a local sandbox only. Not deployed. Not audited.
+- Status: tested in a local sandbox only, also end to end with the Arsune API and worker (see
+  "End-to-end run on a local sandbox"). Not deployed on mainnet. Not audited.
 
 ## Where the money is
 
@@ -135,6 +137,10 @@ evidence bundle. The contract stores it and puts it in the `rule` event.
 - After a paid claim, if the balance cannot pay one more reward and fee, the bounty closes
   (`budget_spent`). An unfunded claim closes the bounty (`unfunded`). This is the rule in
   RULES.md.
+- A `fund` deposit to a bounty that closed for `budget_spent` or `unfunded` is kept. When the
+  balance then pays one reward and its fee, the bounty opens again (`reopen` event). This is
+  RULES.md "Closing and top-ups". A close by the owner or by the deadline is final: a deposit
+  after it is refunded (`bounty_closed`).
 - Payout memos are `arsune:reward:<claim>`, `arsune:scout:<claim>`, `arsune:fee:<claim>` and
   `arsune:refund:<claim>`.
 
@@ -143,8 +149,12 @@ evidence bundle. The contract stores it and puts it in the `rule` event.
 | Call | Who | When | Money |
 | --- | --- | --- | --- |
 | `reclaim_bond(claim_id)` | Anyone | The claim is open and `rule_timeout_ns` has passed since the bond | The bond goes to the hunter. The outcome is `expired`. |
-| `close_bounty(bounty_id)` | The owner, with 1 yoctoNEAR | The bounty is open | None. New funds and bonds are refunded. Open claims are still ruled. |
-| `withdraw_remaining(bounty_id)` | Anyone | The bounty is closed or past its deadline, and no claim is open | The balance goes to the owner. The unused storage NEAR goes to the creator. |
+| `close_bounty(bounty_id)` | The owner, with 1 yoctoNEAR | The bounty is open, or closed for `budget_spent` or `unfunded` | None. The close is final: new funds and bonds are refunded. Open claims are still ruled. |
+| `withdraw_remaining(bounty_id)` | Anyone | The owner closed the bounty or the deadline passed, and no claim is open | The balance goes to the owner. The unused storage NEAR goes to the creator. |
+
+A close for `budget_spent` or `unfunded` does not allow `withdraw_remaining` before the
+deadline. A top-up can still open such a bounty, and it then needs its storage pool. The owner
+calls `close_bounty` to make the close final and take the rest early.
 | `retry_payout(account_id)` | Anyone | Money is owed to the account | The owed amount goes to that account. |
 
 A call that anyone can make has a fixed receiver. This lets a hunter or an owner that has only
@@ -209,6 +219,7 @@ NEP-297 logs: `EVENT_JSON:{"standard":"arsune-escrow","version":"1.0.0","event":
 | `payout_failed` | `receiver_id`, `amount`, `memo`, `owed` |
 | `refund` | `sender_id`, `token_ids`, `amounts`, `reason` (a deposit was returned) |
 | `close` | `bounty_id`, `reason` (`owner`, `budget_spent`, `unfunded`, `deadline`) |
+| `reopen` | `bounty_id`, `balance` (a top-up opened a bounty that closed for a spent budget) |
 | `withdraw` | `bounty_id`, `owner`, `amount`, `storage_refund` |
 
 Amounts are decimal strings (U128). Views: `get_config`, `get_bounty`, `get_claim`,
@@ -219,13 +230,20 @@ Amounts are decimal strings (U128). Views: `get_config`, `get_bounty`, `get_clai
 
 1. Read the ruling: `get_claim(claim_id)` or the `rule` event of the transaction. It gives the
    outcome and `evidence_hash`.
-2. Get Arsune's evidence bundle for the claim (an Arsune endpoint for this is later work).
-3. Hash it: `escrow.evidence_hash(bundle)` is SHA-256 of compact JSON with sorted keys in UTF-8
-   (`json.dumps(bundle, separators=(",", ":"), sort_keys=True, ensure_ascii=False)`), or of the
-   raw bytes. The hash must equal `evidence_hash`.
-4. Run the check again: the bundle has the claim, the URLs, the viewports and the observations.
-   Any browser can open the same pages. A different result shows a wrong ruling, and the chain
-   shows who made it and when.
+2. Get Arsune's evidence bundle for the claim: `GET /api/claims/{claim_id}/evidence`. The API
+   serves the stored bytes unchanged. `GET /api/claims/{claim_id}` gives the claim with the
+   same `evidence_hash`.
+3. Hash it: the SHA-256 of the response body must equal `evidence_hash`
+   (`curl -s <api>/api/claims/<id>/evidence | sha256sum`). The body is canonical JSON: compact,
+   sorted keys, UTF-8 (`escrow.canonical_json`), so `escrow.evidence_hash(bundle)` of the parsed
+   bundle gives the same hash.
+4. Run the check again: the bundle has the claim, the URLs, the viewports, the observations and
+   the checker's result. Screenshots are named by their sha256. Any browser can open the same
+   pages. A different result shows a wrong ruling, and the chain shows who made it and when.
+
+`uv run python -m app.verify <api_url> <claim_id>` does all four steps (README, "Anyone can
+verify a ruling"). It reads the escrow with read-only RPC views only. A site that changed after
+the ruling also gives a different fresh result, so a mismatch is a reason to look, not a proof.
 
 ## Build
 
@@ -243,26 +261,28 @@ contracts/escrow/test.sh     # fmt, clippy, unit tests, build, sandbox tests
   `cargo near build reproducible-wasm` in `contracts/escrow`. `Cargo.toml` has the
   `reproducible_build` section. That build also embeds the commit, so its hash differs.
 
-Result on 2026-11-09:
+Result on 2026-11-09 (after the top-up change):
 
 | | |
 | --- | --- |
 | wasm | `contracts/escrow/target/near/arsune_escrow.wasm` |
-| size | 223,323 bytes (ABI embedded, 2.7 KB of it; `opt-level = "z"` was the smallest) |
-| sha256 | `3bdd66f6dc1848e64d811ee966b130db10fd24398aef49e693275f854546e2da` |
-| code hash | `52gs5UeqMZpbfXayfGpKF1khDexBGsTNSgqjZWaoorTb` |
-| Reproducible | A second build from an empty cache gave the same bytes. |
+| size | 224,153 bytes (ABI embedded, 2.7 KB of it; `opt-level = "z"` was the smallest) |
+| sha256 | `e556b06aed47fd4a26bb86932c4c7869aa62f33e57c9e170a043e3411f954b18` |
+| code hash | `GSF2obxd3HuyheiNTE69wB3yDTh7Z9vREmDFi24Yr14s` |
+| Reproducible | The first build (223,323 bytes, before the top-up change) gave the same bytes again from an empty cache. The current build was not built twice. |
 
 ## Test evidence
 
-**Unit tests (66, `src/tests.rs`):** every limit of `create_bounty`; funding; every refund
+**Unit tests (72, `src/tests.rs`):** every limit of `create_bounty`; funding; every refund
 reason; the bond range; one bond per claim ID; the budget check; the storage pool; the storage
 bound of one claim; each outcome with exact amounts and memos; scout rounding; unfunded and the
-close reasons; judge-only and once-only rulings; `expired` and bad hashes refused; reclaim
-before and after the timeout; close and withdraw rules; the withdrawal receivers; failed payouts
-to `owed` and the retry; paging; and the liabilities invariant.
+close reasons; top-ups that open a bounty after `budget_spent` and `unfunded`, a smaller top-up
+that keeps it closed, and the final owner close; judge-only and once-only rulings; `expired`
+and bad hashes refused; reclaim before and after the timeout; close and withdraw rules; the
+withdrawal receivers; failed payouts to `owed` and the retry; paging; and the liabilities
+invariant.
 
-**Sandbox tests (10, `integration-tests/tests/sandbox.rs`).** They use near-workspaces 0.24 and
+**Sandbox tests (11, `integration-tests/tests/sandbox.rs`).** They use near-workspaces 0.24 and
 nearcore sandbox 2.14.0, the mainnet version. They run the real `intents.near` wasm, read from
 mainnet with `view_code` and checked against its code hash. The test USDC is the near/intents
 `fungible-token.wasm`, deposited into the Verifier with `ft_transfer_call`. The escrow is
@@ -274,6 +294,7 @@ locked: its access key is deleted before the tests.
 | `signed_transfer_intent_with_msg_posts_a_bond` | A NEP-413 signed `transfer` with `msg`, relayed with `execute_intents`, calls `mt_on_transfer` with the signer as the hunter. A bad `msg` is refunded in full. |
 | `rejected_duplicate_and_unverified_settle_bonds` | Forfeit into the balance; refunds. |
 | `proven_without_budget_becomes_unfunded` | Bond refund, no fee, bounty closed, new bonds refunded. |
+| `top_up_reopens_a_bounty_whose_budget_ran_out` | After `budget_spent`, a small top-up is kept and bonds are still refunded; a top-up to one reward and fee opens the bounty (`reopen`) and the next claim is paid. No withdrawal before the owner's close; after it, a top-up is refunded and the withdrawal works. |
 | `only_the_judge_rules_and_only_once` | Owner, hunter, scout and others are refused. A second ruling is refused. No balance changes. |
 | `hunter_reclaims_bond_after_judge_timeout` | Refused before the timeout; after it, any caller returns the bond to the hunter. |
 | `remaining_money_goes_only_to_the_owner_after_deadline` | Refused before the deadline for the judge and the owner. After it, the judge starts the withdrawal, but the money goes to the owner and the judge's balance does not change. Storage NEAR is refunded. |
@@ -289,6 +310,37 @@ messages, NEP-413 and ERC-191 signed deposits and their checks, the refusal of `
 existing Arsune transfer check, evidence hashing, call arguments, gas and deposits, refund and
 event handling, and the deploy script offline (plan, refusals, one locked transaction).
 
+**Escrow mode (6, `backend/tests/test_settlement_escrow_mode.py`, in-memory chain):** the bounty
+is created once with Arsune's terms; deposits need the escrow `msg`; bonds name the scout; the
+rule transaction is recorded on the reward, bond, scout and fee rows; a forfeit enters the
+budget only after the rule; an unknown rule result is never sent again; an escrow outcome that
+differs goes to review; no near_intents bond cap; withdraw closes for good; other terms on the
+escrow stop the opening; `app.verify` compares the bundle with the escrow record; swarm agents
+sign escrow deposits.
+
+## End-to-end run on a local sandbox (2026-11-09)
+
+A local nearcore sandbox node (2.14.0, the binary that near-workspaces uses) ran the test
+USDC, the real `intents.near` wasm (defuse 0.4.5) and this escrow wasm, locked with no access
+key. The Arsune API, coordinator and worker ran in `escrow` mode against it, on the controlled
+demo site, with a real browser check for each claim. Owner and hunters were implicit accounts
+that signed NEP-413 deposits; Arsune relayed them.
+
+1. `POST /verify` created the bounty on the escrow (judge and fee account Arsune, 10 claims of
+   storage).
+2. The owner's signed deposit with `{"fund":...}` funded 5 USDC.
+3. A broken link with a 25% scout: `rule proven`. A link that works: `rule rejected`. The
+   same broken link again: duplicate at arrival, `rule duplicate`.
+4. The owner signed `close_bounty`; `POST /withdraw` sent the rest to the owner.
+
+USDC changes inside `intents.near`: owner -5.00 then +4.00; first hunter +0.75 (reward 1.00
+minus scout 0.25; bond back); scout +0.25; Arsune +0.10 (fee); false hunter -0.10 (bond);
+duplicate hunter 0. Before the withdrawal, the escrow held 4.00 USDC, equal to its
+`liabilities` and to Arsune's budget for the bounty; after it, 0. Each claim's escrow record had
+the outcome and the `evidence_hash` that Arsune published, and `app.verify` reproduced all three
+rulings (the README shows one output). `scripts/sandbox_escrow_e2e.py` repeats this run; its
+docstring gives the steps. It refuses any node whose validator is not the sandbox `test.near`.
+
 ## Deployment cost
 
 `scripts/near_escrow_deploy.py` makes one transaction: `CreateAccount escrow.arsune-swarm.near`,
@@ -300,22 +352,24 @@ the wasm exports differ from the expected list, the total is above `--max-near` 
 Arsune holds too little NEAR. After the deploy it checks the code hash, that the account has no
 keys, and the config.
 
-Costs with the 223,323-byte wasm, the live runtime config (protocol 88) and a gas price of
-1e8 yoctoNEAR:
+Costs with the 224,153-byte wasm, the live runtime config (protocol 88) and a gas price of
+1e8 yoctoNEAR (computed with the script's own cost functions, offline):
 
 | Item | NEAR |
 | --- | --- |
-| Storage of the code (100 KB = 1 NEAR) | 2.233230 |
+| Storage of the code (100 KB = 1 NEAR) | 2.241530 |
 | Storage of the account record and state (500 bytes, upper bound) | 0.005000 |
 | Spare NEAR in the escrow (1 yoctoNEAR per payout, owed records) | 0.050000 |
 | Account creation charge | 0.007000 |
-| Gas, upper bound (60.8 Tgas) | 0.006083 |
-| **Total spent by Arsune** | **2.301313** |
-| Held up front for gas, refunded down to use | 0.060830 |
-| **Arsune must hold** | **2.362143** |
+| Gas, upper bound (61.0 Tgas) | 0.006096 |
+| **Total spent by Arsune** | **2.309626** |
+| Held up front for gas, refunded down to use | 0.060963 |
+| **Arsune must hold** | **2.370589** |
 
 Each bounty then costs its creator 0.006 NEAR for each claim record (0.907 NEAR is attached for
-150 claims; the unused part comes back at `withdraw_remaining`). The judge must hold 0.11 NEAR
+150 claims; the unused part comes back at `withdraw_remaining`). In escrow mode Arsune creates
+each bounty when the owner's proof is checked, and attaches storage for
+`ARSUNE_ESCROW_CLAIMS` claims (default 50: 0.307 NEAR). The judge must hold 0.11 NEAR
 while it sends `rule` (110 Tgas attached), and the real cost of one ruling is about 0.002 NEAR.
 
 ## Differences from the first design, and why
@@ -331,15 +385,15 @@ while it sends `rule` (110 Tgas attached), and the real cost of one ruling is ab
 
 ## Open gaps
 
-- **Not integrated.** The backend still settles through Arsune's own account. Later work:
-  create bounties on the escrow, relay signed bonds with `relay_deposit`, call `rule` from the
-  worker, record events in the ledger, and publish evidence bundles. The `near_intents` cap
-  "bond at most `ARSUNE_MAX_PAYMENT_AMOUNT - reward`" must not be used with the escrow, because
-  it can put the bond under `ceil(base/2)`.
-- **Top-ups.** Arsune's backend opens a bounty again when a top-up follows a close for
-  `budget_spent` (RULES.md, "Closing and top-ups"). The contract refunds every deposit to a
-  closed bounty (`bounty_closed`), also after `budget_spent` and `unfunded`. The integration
-  must make the two rules the same.
+- **Funding outside Arsune.** Anyone can fund an escrow bounty with `mt_transfer_call` and the
+  `fund` msg. The escrow accepts it, but Arsune's budget does not see it, so the escrow balance
+  is then above Arsune's budget. Arsune never pays more than its budget, but a claim that Arsune
+  rules `unfunded` while the escrow can pay is refused by the contract and goes to review.
+- **No automatic retry of a ruling.** A `rule` transaction with an unknown or failed result
+  sends the claim to review, as in `near_intents` mode. The contract refuses a second ruling,
+  so a retry cannot pay twice, but an operator starts it.
+- **1Click funding** is not available in escrow mode: 1Click delivers to Arsune's own account,
+  not to the escrow with a `msg`.
 - **Funds without `msg`.** A plain transfer to the escrow belongs to no bounty and stays in the
   escrow. There is no sweep, because any sweep needs an admin.
 - **Storage spam.** Bonds of the minimum size can use up a bounty's storage pool. The per-hunter

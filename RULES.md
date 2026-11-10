@@ -100,6 +100,7 @@ A site owner pays for proven functional faults on the owner's own site. Independ
 - Each transfer into Arsune is a signed `transfer` intent of the exact amount of the bounty token to Arsune's account. The signature is NEP-413 (a NEAR key) or ERC-191 (an Ethereum key, `personal_sign`). The memo must be exact: `arsune:fund:{fund_id}` for funding and `arsune:bond:{claim_id}` for a bond. The client makes each ID as a lowercase UUID v4 and can use it only once.
 - An ERC-191 transfer comes from the signer's implicit account: its `0x` address. The address must be lowercase, because NEAR account IDs have no capital letters. A checksummed (EIP-55) address as hunter, sender, owner, or scout gets 422 with the message "Use the lowercase 0x address". Arsune pays a `0x` account like any other account.
 - Arsune checks the signature, sender, receiver, token, amount, memo, contract, and deadline before it saves the claim or the funding row. An invalid transfer creates no claim.
+- In `escrow` mode the transfer goes to the escrow contract, not to Arsune, and it also carries a `msg` that names the bounty (`{"fund":"<bounty_id>"}`) or the claim (`{"bond":{"bounty_id":...,"claim_id":...}}`, with the scout and its share if the claim names one). Arsune checks the `msg` too, and relays the transfer. See [docs/SETTLEMENT.md](docs/SETTLEMENT.md#escrow-mode).
 - In `near_intents` mode, an owner can also fund a bounty from another chain through NEAR Intents 1Click. Arsune adds the amount that 1Click reports as delivered to Arsune's account, once for each deposit address. The ledger row has the memo `arsune:fund:1click:{deposit address}`.
 - A claim is accepted only when the bounty is open and its budget covers one reward and its fee. A closed bounty rejects new claims with 409.
 
@@ -146,17 +147,18 @@ Examples, as correct and rejected claims: 3 and 0 give 0.8 (`trusted`). 2 and 1 
 
 ### Fees and shares
 
-- The fee is `reward * fee_bps / 10000`, rounded down. The default is 1000 basis points (10%). The budget pays the fee for each proven claim, in addition to the reward.
+- The fee is `reward * fee_bps / 10000`, rounded down. The default is 1000 basis points (10%). The budget pays the fee for each proven claim, in addition to the reward. In `escrow` mode the fee is at most 2000 basis points (the contract's limit).
 - A hunter can name one scout for a claim, with a share of 1 to 5000 basis points (0.01% to 50%) of the reward. The scout share comes from the reward, not from the budget.
 - The bounty closes when its budget is less than one reward and its fee. The budget is reserved for a proven claim when the checker decides it, so two claims cannot be paid from the same money.
 
 ### Closing and top-ups
 
-- Arsune records why a bounty closed (`closed_reason`). Today a spent budget (`budget_spent`) is the only reason.
+- Arsune records why a bounty closed (`closed_reason`): `budget_spent` (the budget cannot pay one reward and its fee, also after an unfunded claim), or `withdrawn` (`escrow` mode: the rest of the budget went back to the owner).
 - An owner can add money to an open bounty, or to a bounty that closed only because its budget was spent. This applies to a signed funding transfer and to a 1Click deposit.
 - A top-up opens such a bounty again when the new budget can pay one reward and its fee. A smaller top-up is added to the budget, and the bounty stays closed.
 - A bounty that closed for another reason (for example a deadline or an owner close) does not open again. It refuses a signed funding transfer and a new 1Click deposit address with 409. Money from a 1Click deposit that arrives after such a close is added to the budget, and the bounty stays closed.
 - A bond that a rejected claim forfeits is added to the budget, but it is not a top-up: it does not open a closed bounty.
+- The escrow contract applies the same rule: a funding deposit to a bounty that closed for a spent budget is kept, and it opens the bounty again when the balance pays one reward and its fee. The owner's `close_bounty` and the deadline are final. After them, the escrow refunds new deposits, and anyone can start the withdrawal of the rest to the owner.
 
 ### Payment safety
 
@@ -164,10 +166,18 @@ Examples, as correct and rejected claims: 3 and 0 give 0.8 (`trusted`). 2 and 1 
 - If a payment result is unknown or the payment fails, the claim goes to `needs_review` and the money stays held. There is no automatic retry. An operator checks the settlement account before any further action.
 - Every ledger row records the settlement mode and the transaction ID.
 
+### Public evidence
+
+- When Arsune decides a claim, it saves an evidence bundle: the claim, its URLs, the viewports, the fresh observations, the checker's status and reason, and the ruling. Screenshots are named by their own sha256. The bundle holds no secret and no host file path.
+- The claim's `evidence_hash` is the SHA-256 of the bundle as canonical JSON (compact, sorted keys, UTF-8). `GET /api/claims/{claim_id}/evidence` serves exactly these bytes, so their SHA-256 is the published hash.
+- In `escrow` mode the same hash is part of the ruling on the escrow contract.
+- `python -m app.verify <api_url> <claim_id>` checks the hash, the screenshots, the escrow record, and the ruling again in a fresh local browser. A site that changed after the ruling also gives a different fresh result.
+
 ### Settlement modes
 
 - `dry` is the default. No money moves. Signed transfers are still checked, and payouts get IDs like `dry-<hex>`. Every bounty response states the mode. Do not describe dry results as real payments.
 - `near_intents` moves real USDC inside the NEAR Intents Verifier contract on mainnet. Each transfer is limited by `ARSUNE_MAX_PAYMENT_AMOUNT`. Ledger rows link to the transaction on nearblocks.
+- `escrow` (opt-in) keeps bounty money and bonds in the escrow contract. Arsune creates the bounty on the escrow, relays the signed deposits, and sends one `rule` transaction for each decided claim; the contract makes the payouts. A ruling with an unknown or different result goes to `needs_review`, as a payment does. `ARSUNE_MAX_PAYMENT_AMOUNT` and the bond cap do not apply. Escrow mode is tested on a local NEAR sandbox and with mocks. The escrow is not deployed on mainnet.
 
 ## Completion checks
 
