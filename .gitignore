@@ -12,3 +12,6 @@ frontend/*.tsbuildinfo
 frontend/playwright-report/
 .coverage
 htmlcov/
+
+# Contract build outputs and fetched test fixtures (contracts/escrow/build.sh, test.sh)
+contracts/**/target/
