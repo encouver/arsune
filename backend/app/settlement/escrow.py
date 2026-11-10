@@ -13,7 +13,7 @@ call `mt_transfer_call` itself; a hunter signs a `transfer` intent with `msg` (N
 ERC-191) that Arsune relays with `execute_intents`.
 
 Only the judge calls `rule`; amounts and receivers follow from the on-chain terms.
-This module only builds and sends the calls. It is not wired into the bounty flow yet.
+`EscrowSettlement` is the bounty flow's settlement in `ARSUNE_SETTLEMENT_MODE=escrow`.
 """
 
 import base64
@@ -21,15 +21,15 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from nacl.signing import SigningKey
 from pydantic import SecretStr
 
-from app.core.config import settings
+from app.core.config import Settings, settings
 from app.settlement import near_intents as ni
 from app.settlement.base import SettlementError
-from app.settlement.near_tx import TGAS, NearRpc, outcome_logs
+from app.settlement.near_tx import TGAS, NearRpc, OutcomeUnknown, outcome_logs
 
 EVENT_STANDARD = "arsune-escrow"
 MAX_FEE_BPS = 2_000
@@ -471,3 +471,83 @@ class EscrowClient:
         if not any(e["event"] in accepted for e in call.events):
             raise SettlementError(f"transaction {tx_hash} has no escrow deposit event")
         return call
+
+
+class EscrowSettlement:
+    """Settlement through the escrow. Arsune is the judge and the relayer: it creates each
+    bounty, relays signed deposits, and sends `rule`. The contract moves every token."""
+
+    mode = "escrow"
+
+    def __init__(self, config: Settings | None = None, rpc: NearRpc | None = None):
+        config = config or settings
+        if not (
+            config.near_account_id
+            and config.near_private_key.get_secret_value()
+            and config.escrow_contract
+        ):
+            raise SettlementError(
+                "escrow settlement needs ARSUNE_NEAR_ACCOUNT_ID, ARSUNE_NEAR_PRIVATE_KEY "
+                "and ARSUNE_ESCROW_CONTRACT"
+            )
+        self.account_id = config.near_account_id
+        self._private_key = config.near_private_key
+        self._key = ni.load_signing_key(config.near_private_key)
+        self.claims = config.escrow_claims
+        self.days = config.escrow_bounty_days
+        self.client = EscrowClient(
+            config.escrow_contract,
+            rpc=rpc or NearRpc(config.near_rpc_url),
+            intents_contract=config.intents_contract,
+            token_id=config.bounty_token,
+        )
+
+    def terms(self, bounty) -> BountyTerms:
+        """Arsune judges and takes the fee; the bounty owner gets what is left."""
+        return BountyTerms(
+            bounty_id=bounty.id,
+            owner=bounty.owner_account,
+            judge=self.account_id,
+            fee_account=self.account_id,
+            reward=bounty.reward_amount,
+            base_bond=bounty.bond_amount,
+            fee_bps=bounty.fee_bps,
+            deadline_ns=deadline_ns(bounty.created_at + timedelta(days=self.days)),
+        )
+
+    def open_bounty(self, terms: BountyTerms) -> str | None:
+        """Create the bounty once. Return the tx hash, or None if it exists with these terms."""
+        tx_hash, error = None, None
+        if self.client.get_bounty(terms.bounty_id) is None:
+            try:
+                created = self.client.create_bounty(self.account_id, self._key, terms, self.claims)
+                tx_hash = created.tx_hash
+            except OutcomeUnknown:
+                raise
+            except SettlementError as exc:
+                error = exc  # another request may have created it first
+        if error and self.client.get_bounty(terms.bounty_id) is None:
+            raise error
+        self.client.check_terms(terms)
+        return tx_hash
+
+    def collect(self, signed: dict, *, sender: str, amount: int, memo: str, msg: str) -> str:
+        call = self.client.relay_deposit(
+            signed,
+            sender=sender,
+            amount=amount,
+            msg=msg,
+            memo=memo,
+            relayer_id=self.account_id,
+            private_key=self._private_key,
+        )
+        return call.tx_hash
+
+    def rule(self, claim_id: str, outcome: str, evidence: str) -> EscrowCall:
+        return self.client.rule(self.account_id, self._key, claim_id, outcome, evidence)
+
+    def withdraw(self, bounty_id: str) -> EscrowCall:
+        return self.client.withdraw_remaining(self.account_id, self._key, bounty_id)
+
+    def pay(self, receiver: str, amount: int, memo: str) -> str:
+        raise SettlementError("the escrow pays only through rule")

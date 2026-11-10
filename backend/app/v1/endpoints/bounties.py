@@ -1,4 +1,5 @@
 from fastapi import APIRouter
+from fastapi.responses import Response
 
 from app.core.schemas.bounties import CreateBounty, CreateClaim, FundBounty
 from app.v1.services import bounties
@@ -44,6 +45,23 @@ async def create_claim(bounty_id: str, request: CreateClaim):
 @router.get("/bounties/{bounty_id}/claims/{claim_id}")
 def get_claim(bounty_id: str, claim_id: str):
     return bounties.get_claim(bounty_id, claim_id)
+
+
+@router.post("/bounties/{bounty_id}/withdraw")
+def withdraw_bounty(bounty_id: str):
+    return bounties.withdraw_bounty(bounty_id)
+
+
+@router.get("/claims/{claim_id}")
+def get_claim_by_id(claim_id: str):
+    return bounties.get_claim_by_id(claim_id)
+
+
+@router.get("/claims/{claim_id}/evidence")
+def claim_evidence(claim_id: str):
+    # The stored bytes, unchanged: their sha256 is the claim's evidence_hash.
+    data, digest = bounties.claim_evidence(claim_id)
+    return Response(data, media_type="application/json", headers={"X-Evidence-Hash": digest})
 
 
 @router.get("/bounties/{bounty_id}/bond")

@@ -12,11 +12,12 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.bounty import budget, settlement
+from app.bounty import budget, evidence, settlement
 from app.bounty.claims import fee_for, final_fingerprint
 from app.browser.checker import check_candidate
 from app.browser.observations import observe_page
 from app.browser.session import inspection_browser
+from app.core.config import settings
 from app.core.db import Session
 from app.core.models import Bounty, Claim, LedgerEntry, utcnow
 from app.settlement.base import SettlementError
@@ -114,8 +115,6 @@ async def check_claim(job_id, generation, checkpoint, save_checkpoint, output_di
 
 
 async def browser_check(job_id, item, site_url, output_dir):
-    from app.core.config import settings
-
     state = {"selected": list(item["urls"])}
 
     async def keep():
@@ -212,12 +211,40 @@ def charged_bond(session, claim):
     )
 
 
+def publish_evidence(bounty, claim, result, now):
+    evidence.publish(bounty, claim, result, settings.evidence_dir / claim.job_id, now)
+
+
+def forfeit_bond(session, bounty, claim, mode, now):
+    """Add a rejected claim's bond to the budget. It is not a top-up: it opens nothing."""
+    bond = charged_bond(session, claim)
+    session.add(
+        entry(
+            bounty,
+            claim,
+            "bond_forfeit",
+            bond,
+            f"arsune:forfeit:{claim.id}",
+            mode,
+            "completed",
+            account=claim.hunter_account,
+        )
+    )
+    bounty.budget_amount += bond
+    bounty.updated_at = now
+    claim.settlement_note = "The bond was added to the bounty budget."
+    claim.settled_at = claim.updated_at = now
+
+
 def decide(job_id, generation, result, mode):
     """Save the outcome once. The partial unique index lets only one claim hold proven."""
     with Session.begin() as session:
         store.require_claim(store.locked_job(session, job_id), generation)
         bounty, claim = lock_bounty_then_claim(session, job_id)
         if claim.outcome:
+            if not claim.evidence_hash:
+                # A duplicate known at arrival is decided without a browser check.
+                publish_evidence(bounty, claim, result, utcnow())
             return
         outcome = OUTCOMES.get(result.get("status"), "unverified")
         unfunded = False
@@ -232,24 +259,10 @@ def decide(job_id, generation, result, mode):
         claim.checker_reason = result.get("checker_reason")
         claim.evidence = evidence_summary(result)
         claim.updated_at = now
-        if outcome == "rejected":
-            bond = charged_bond(session, claim)
-            session.add(
-                entry(
-                    bounty,
-                    claim,
-                    "bond_forfeit",
-                    bond,
-                    f"arsune:forfeit:{claim.id}",
-                    mode,
-                    "completed",
-                    account=claim.hunter_account,
-                )
-            )
-            bounty.budget_amount += bond
-            bounty.updated_at = now
-            claim.settlement_note = "The bond was added to the bounty budget."
-            claim.settled_at = now
+        publish_evidence(bounty, claim, result, now)
+        # The escrow moves the bond only when it records the ruling (rule_on_escrow).
+        if outcome == "rejected" and mode != "escrow":
+            forfeit_bond(session, bounty, claim, mode, now)
 
 
 def scout_part(bounty, claim):
@@ -394,25 +407,127 @@ def record_failure(entry_id, unknown_tx=None):
             review(claim, "The settlement reported a payment failure. No automatic retry is made.")
 
 
-def settle_claim(job_id, generation, result):
-    mode = settlement.settlement_mode()
-    decide(job_id, generation, result, mode)
+def pay_claim(job_id, generation, mode):
     while payment := next_payment(job_id, generation, mode):
         try:
             tx_id = settlement.pay(payment["receiver"], payment["amount"], payment["memo"])
         except OutcomeUnknown as exc:
             logger.warning("Settlement outcome unknown for job %s", job_id)
             record_failure(payment["entry_id"], exc.tx_hash)
-            break
+            return
         except SettlementError:
             logger.warning("Settlement payment failed for job %s", job_id)
             record_failure(payment["entry_id"])
-            break
+            return
         if not isinstance(tx_id, str) or not tx_id:
             # A transfer without a transaction ID cannot be proven sent or unsent.
             record_failure(payment["entry_id"], "not returned")
-            break
+            return
         record_payment(payment["entry_id"], tx_id)
+
+
+def rule_entry(bounty, claim, bond):
+    """The ledger row saved before `rule`: (kind, account, amount, memo)."""
+    if claim.outcome == "rejected":
+        return "bond_forfeit", claim.hunter_account, bond, f"arsune:forfeit:{claim.id}"
+    kind, receiver, _, recorded, memo = payment_plan(bounty, claim, bond)[0]
+    return kind, receiver, recorded, memo
+
+
+def next_rule(job_id, generation, mode):
+    """Commit the ruling's ledger row before the rule transaction; return the call to send."""
+    with Session.begin() as session:
+        store.require_claim(store.locked_job(session, job_id), generation)
+        bounty, claim = lock_bounty_then_claim(session, job_id)
+        if claim.settled_at or claim.status == "needs_review":
+            return None
+        kind, account, amount, memo = rule_entry(bounty, claim, charged_bond(session, claim))
+        row = claim_rows(session, claim).get(kind)
+        if row:
+            # A row without a transaction ID means a rule transaction may have been sent.
+            if not row.tx_id:
+                review(claim, UNKNOWN_PAYMENT)
+            return None
+        row = entry(bounty, claim, kind, amount, memo, mode, "pending", account=account)
+        session.add(row)
+        return {
+            "entry_id": row.id,
+            "claim_id": claim.id,
+            "ruling": evidence.ruling(claim),
+            "evidence_hash": claim.evidence_hash,
+        }
+
+
+def record_rule(entry_id, call):
+    """Save a rule transaction and the transfers that the escrow made in it."""
+    with Session.begin() as session:
+        bounty, claim, row = locked_payment(session, entry_id)
+        now = utcnow()
+        event = next((e for e in call.events if e["event"] == "rule"), {})
+        expected = (evidence.ruling(claim), claim.evidence_hash)
+        if (event.get("outcome"), event.get("evidence_hash")) != expected:
+            row.status, row.updated_at = "failed", now
+            review(
+                claim,
+                f"The escrow ruled {event.get('outcome')} in tx {call.tx_hash}, not "
+                f"{expected[0]} with this evidence hash. Check the escrow before any action.",
+            )
+            return
+        row.tx_id, row.status, row.updated_at = call.tx_hash, "completed", now
+        if row.kind == "bond_forfeit":
+            bounty.budget_amount += row.amount
+            bounty.updated_at = now
+            claim.settlement_note = "The bond was added to the bounty budget."
+            claim.settled_at = claim.updated_at = now
+            return
+        if row.kind == "reward_out":
+            paid = [("bond_refund", claim.hunter_account, charged_bond(session, claim), row.memo)]
+            if claim.scout:
+                scout, share = claim.scout["account"], scout_part(bounty, claim)
+                paid.append(("scout_share", scout, share, f"arsune:scout:{claim.id}"))
+            for kind, account, amount, memo in paid:
+                session.add(
+                    entry(
+                        bounty,
+                        claim,
+                        kind,
+                        amount,
+                        memo,
+                        row.settlement_mode,
+                        "completed",
+                        account=account,
+                        tx_id=call.tx_hash,
+                    )
+                )
+            if fee := claim_rows(session, claim).get("fee"):
+                fee.tx_id = call.tx_hash
+        finish_claim(claim)
+
+
+def rule_on_escrow(job_id, generation, mode):
+    step = next_rule(job_id, generation, mode)
+    if not step:
+        return
+    try:
+        call = settlement.rule(step["claim_id"], step["ruling"], step["evidence_hash"])
+    except OutcomeUnknown as exc:
+        logger.warning("Escrow rule outcome unknown for job %s", job_id)
+        record_failure(step["entry_id"], exc.tx_hash)
+        return
+    except SettlementError:
+        logger.warning("Escrow rule failed for job %s", job_id)
+        record_failure(step["entry_id"])
+        return
+    record_rule(step["entry_id"], call)
+
+
+def settle_claim(job_id, generation, result):
+    mode = settlement.settlement_mode()
+    decide(job_id, generation, result, mode)
+    if mode == "escrow":
+        rule_on_escrow(job_id, generation, mode)
+    else:
+        pay_claim(job_id, generation, mode)
     with Session() as session:
         claim = session.scalar(select(Claim).where(Claim.job_id == job_id))
         return {
@@ -421,6 +536,7 @@ def settle_claim(job_id, generation, result):
             "status": claim.status,
             "outcome": claim.outcome,
             "checker_reason": claim.checker_reason,
+            "evidence_hash": claim.evidence_hash,
             "settlement_mode": mode,
             "findings": [result],
             "observations": result.get("evidence", []),

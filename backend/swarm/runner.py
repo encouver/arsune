@@ -12,7 +12,7 @@ import httpx
 from swarm.agents import Careless, Copycat, Hunter, Scout, Swarm
 from swarm.ai import AiHunter, AiScout
 from swarm.arsune import ArsuneApi, BountyFeed, resolved
-from swarm.identity import Identity, fund_memo, load_accounts, sign_payment
+from swarm.identity import Identity, escrow_fund_msg, fund_memo, load_accounts, sign_payment
 from swarm.llm import AiBudget, ModelClient, ModelSettings, model_settings
 from swarm.market import TipBoard
 from swarm.site import BrowserPool, SiteReader, origin
@@ -104,8 +104,10 @@ def check_mode(config: Config, settlement: dict):
     if config.live:
         if not config.approve_mainnet:
             raise SwarmError("Live mode moves real USDC. Add --i-approve-mainnet to start it.")
-        if mode != "near_intents":
-            raise SwarmError(f"Live mode needs Arsune in near_intents mode; it reports {mode!r}.")
+        if mode not in ("near_intents", "escrow"):
+            raise SwarmError(
+                f"Live mode needs Arsune in near_intents or escrow mode; it reports {mode!r}."
+            )
         if config.setup and (config.budget > LIVE_CAP or config.reward + config.bond > LIVE_CAP):
             raise SwarmError("Live budgets are capped at 1 USDC, and reward plus bond at 1 USDC.")
 
@@ -170,7 +172,13 @@ async def setup_bounty(config, api, site, owner, settlement, log) -> str:
             "fund_id": fund_id,
             "sender": owner.account_id,
             "amount": config.budget,
-            "signed_intent": sign_payment(owner, settlement, config.budget, fund_memo(fund_id)),
+            "signed_intent": sign_payment(
+                owner,
+                settlement,
+                config.budget,
+                fund_memo(fund_id),
+                msg=escrow_fund_msg(settlement, bounty["id"]),
+            ),
         },
     )
     log(

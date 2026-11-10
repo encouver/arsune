@@ -667,11 +667,13 @@ def test_migration_0007_adds_and_removes_funding_requests():
             assert "funding_requests" not in inspect(connection).get_table_names(schema=schema)
             command.upgrade(config, "0007")
             assert "funding_requests" in inspect(connection).get_table_names(schema=schema)
-            # Only the later bounties.closed_reason column (0008) differs from the models.
-            [(change, _, table, column)] = compare_metadata(
-                MigrationContext.configure(connection), Base.metadata
-            )
-            assert (change, table, column.name) == ("add_column", "bounties", "closed_reason")
+            # Only the columns of later revisions (0008, 0009) differ from the models.
+            later = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+            assert {(change, table, column.name) for change, _, table, column in later} == {
+                ("add_column", "bounties", "closed_reason"),
+                ("add_column", "claims", "evidence_hash"),
+                ("add_column", "claims", "evidence_bundle"),
+            }
             connection.execute(
                 text("""INSERT INTO bounties (id, url, origin, owner_account, proof_token, status,
                     reward_amount, bond_amount, fee_bps, budget_amount, budget_target,

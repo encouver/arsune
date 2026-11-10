@@ -140,6 +140,9 @@ class Claim(Base):
     outcome: Mapped[str | None] = mapped_column(String(20))
     checker_reason: Mapped[str | None] = mapped_column(Text)
     evidence: Mapped[list] = mapped_column(JSON, default=list)
+    # The public evidence bundle as the exact canonical JSON text, and its sha256 (hex).
+    evidence_hash: Mapped[str | None] = mapped_column(String(64))
+    evidence_bundle: Mapped[str | None] = mapped_column(Text)
     settlement_note: Mapped[str | None] = mapped_column(Text)
     settled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

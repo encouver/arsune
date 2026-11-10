@@ -23,7 +23,7 @@ from swarm.findings import (
     path,
     price_mismatches,
 )
-from swarm.identity import Identity, bond_memo, sign_payment
+from swarm.identity import Identity, bond_memo, escrow_bond_msg, sign_payment
 from swarm.market import (
     MIN_COUNTER_BPS,
     STEP_BPS,
@@ -437,18 +437,22 @@ class Hunter(Agent):
     async def submit(self, claim_id: str, finding: Finding, tip: Tip | None) -> dict:
         swarm, bond = self.swarm, self.bond
         settlement = await swarm.api.settlement() if swarm.live else swarm.settlement
+        scout = tip and {
+            "account": tip.scout_account,
+            "share_bps": tip.final_share_bps,
+            "tip_id": tip.id,
+        }
+        msg = escrow_bond_msg(settlement, swarm.bounty_id, claim_id, scout)
         body = {
             "claim_id": claim_id,
             "hunter_account": self.account,
             **finding.body(),
-            "bond_intent": sign_payment(self.identity, settlement, bond, bond_memo(claim_id)),
+            "bond_intent": sign_payment(
+                self.identity, settlement, bond, bond_memo(claim_id), msg=msg
+            ),
         }
-        if tip:
-            body["scout"] = {
-                "account": tip.scout_account,
-                "share_bps": tip.final_share_bps,
-                "tip_id": tip.id,
-            }
+        if scout:
+            body["scout"] = scout
         self.known.add(finding.key)
         self.wallet.reserved += bond
         try:

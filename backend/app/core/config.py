@@ -30,13 +30,17 @@ class Settings(BaseSettings):
     model_input_usd_per_million: float | None = None
     model_output_usd_per_million: float | None = None
     model_cost_ceiling_usd: float = Field(default=0.25, gt=0, le=10)
-    settlement_mode: Literal["dry", "near_intents"] = "dry"
+    settlement_mode: Literal["dry", "near_intents", "escrow"] = "dry"
     near_account_id: str = ""
     near_private_key: SecretStr = SecretStr("")
     near_rpc_url: str = "https://free.rpc.fastnear.com"
     intents_contract: str = "intents.near"
     bounty_token: str = "nep141:17208628f84f5d6ad33f0da3bbbeb27ffcb398eac501a31bd6ad2011e36133a1"
     max_payment_amount: int = Field(default=1_000_000, gt=0)
+    # Escrow mode (docs/ESCROW.md): the contract account, and the terms Arsune gives each bounty.
+    escrow_contract: str = ""
+    escrow_claims: int = Field(default=50, ge=1, le=1000)  # storage prepaid by Arsune
+    escrow_bounty_days: int = Field(default=30, ge=1, le=365)
     swarm_accounts_file: Path = Path(".data/swarm-accounts.json")
 
     @property

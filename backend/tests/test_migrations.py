@@ -149,7 +149,17 @@ def test_migration_0008_marks_closed_bounties_as_closed_by_a_spent_budget():
             reasons = connection.execute(text("SELECT id, closed_reason FROM bounties ORDER BY id"))
             # Before 0008 a spent budget was the only reason for which a bounty closed.
             assert list(reasons) == [("b1", "budget_spent"), ("b2", None), ("b3", None)]
+            # Only the evidence columns of 0009 differ from the models.
+            later = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+            assert {(change, table, column.name) for change, _, table, column in later} == {
+                ("add_column", "claims", "evidence_hash"),
+                ("add_column", "claims", "evidence_bundle"),
+            }
+            command.upgrade(config, "0009")
             assert not compare_metadata(MigrationContext.configure(connection), Base.metadata)
+            command.downgrade(config, "0008")
+            claim_columns = inspect(connection).get_columns("claims", schema=schema)
+            assert not {"evidence_hash", "evidence_bundle"} & {c["name"] for c in claim_columns}
             command.downgrade(config, "0007")
             columns = {
                 c["name"] for c in inspect(connection).get_columns("bounties", schema=schema)

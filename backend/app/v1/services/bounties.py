@@ -31,6 +31,9 @@ from app.settlement.near_tx import OutcomeUnknown
 from app.v1.services.jobs import JOB_ID
 
 OUTCOME_COUNTS = ("proven", "unfunded", "rejected", "duplicate", "unverified")
+MAX_ESCROW_FEE_BPS = 2_000
+# A withdrawn escrow bounty is final: no top-up opens it again.
+WITHDRAWN = "withdrawn"
 FUNDS_RULE = (
     "Only an open bounty, or one that closed because its budget ran out, can receive funds."
 )
@@ -71,9 +74,9 @@ def require_account(value, role="account"):
         raise HTTPException(422, f"The {role} cannot be Arsune's settlement account.")
 
 
-def check_intent(signed, *, sender, amount, memo, note=""):
+def check_intent(signed, *, sender, amount, memo, msg=None, note=""):
     try:
-        settlement.check_transfer(signed, sender=sender, amount=amount, memo=memo)
+        settlement.check_transfer(signed, sender=sender, amount=amount, memo=memo, msg=msg)
     except SettlementError as exc:
         raise HTTPException(422, f"The signed transfer is not valid: {exc}{note}") from None
 
@@ -147,6 +150,8 @@ def claim_summary(claim):
         "status": claim.status,
         "outcome": claim.outcome,
         "checker_reason": claim.checker_reason,
+        "evidence_hash": claim.evidence_hash,
+        "evidence_url": f"/api/claims/{claim.id}/evidence" if claim.evidence_hash else None,
         "settlement_note": claim.settlement_note,
         "job_id": claim.job_id,
         "created_at": claim.created_at,
@@ -246,6 +251,8 @@ async def create_bounty(request: CreateBounty):
         and request.reward_amount + request.bond_amount > settings.max_payment_amount
     ):
         raise HTTPException(422, "The reward and bond exceed the largest permitted payment.")
+    if settings.settlement_mode == "escrow" and request.fee_bps > MAX_ESCROW_FEE_BPS:
+        raise HTTPException(422, f"The escrow permits a fee of at most {MAX_ESCROW_FEE_BPS} bps.")
     with Session.begin() as session:
         bounty = Bounty(
             id=str(uuid4()),
@@ -285,6 +292,27 @@ def get_claim(bounty_id, claim_id):
         return claim_detail(session, find_claim(session, bounty_id, claim_id))
 
 
+def any_claim(session, claim_id):
+    claim = session.get(Claim, claim_id) if JOB_ID.fullmatch(claim_id) else None
+    if not claim:
+        raise HTTPException(404, "Claim not found")
+    return claim
+
+
+def get_claim_by_id(claim_id):
+    with Session() as session:
+        return claim_detail(session, any_claim(session, claim_id))
+
+
+def claim_evidence(claim_id):
+    """The stored bundle bytes, so that their sha256 is the published evidence_hash."""
+    with Session() as session:
+        claim = any_claim(session, claim_id)
+        if not claim.evidence_bundle:
+            raise HTTPException(404, "The claim has no evidence bundle yet.")
+        return claim.evidence_bundle.encode(), claim.evidence_hash
+
+
 def bond_quote(session, bounty, hunter):
     return reputation.bond_quotes(session, bounty, [hunter])[hunter]
 
@@ -322,17 +350,71 @@ async def verify_bounty(bounty_id):
         raise HTTPException(409, str(exc)) from exc
     if not matches:
         raise HTTPException(409, "The proof file does not contain this bounty's token.")
+    escrow = settings.settlement_mode == "escrow"
+    tx_id = await open_on_escrow(bounty) if escrow else None
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
         if bounty.status == "pending_proof":
             bounty.status, bounty.updated_at = "open", utcnow()
+            if escrow:
+                session.add(escrow_row(bounty, "escrow_open", 0, settings.escrow_contract, tx_id))
         return bounty_detail(session, bounty)
 
 
-async def transfer_in(signed, *, sender, amount, memo):
+async def open_on_escrow(bounty):
+    """Create the bounty on the escrow before it takes funds. Arsune pays the storage NEAR."""
+    try:
+        return await run_in_threadpool(settlement.open_on_escrow, bounty)
+    except OutcomeUnknown:
+        raise HTTPException(504, "The escrow result is unknown. Verify again later.") from None
+    except SettlementError as exc:
+        raise HTTPException(502, f"The escrow did not open the bounty: {exc}") from None
+
+
+def escrow_row(bounty, kind, amount, account, tx_id):
+    """A ledger row for an escrow call that is not a claim payment."""
+    return LedgerEntry(
+        id=str(uuid4()),
+        bounty_id=bounty.id,
+        kind=kind,
+        amount=amount,
+        account=account,
+        memo=f"arsune:{kind}:{bounty.id}",
+        tx_id=tx_id,
+        settlement_mode="escrow",
+        status="completed",
+    )
+
+
+def withdraw_bounty(bounty_id):
+    """Send what is left on the escrow to the owner, and unused storage NEAR back to Arsune.
+
+    The escrow allows it after the owner's close or after the deadline, once no claim is open.
+    """
+    if settings.settlement_mode != "escrow":
+        raise HTTPException(409, "Only an escrow bounty is withdrawn on chain.")
+    with Session() as session:
+        find_bounty(session, bounty_id)
+    try:
+        call = settlement.withdraw(bounty_id)
+    except OutcomeUnknown:
+        raise HTTPException(504, "The withdrawal result is unknown.") from None
+    except SettlementError as exc:
+        raise HTTPException(409, f"The escrow refused the withdrawal: {exc}") from None
+    event = next((e for e in call.events if e["event"] == "withdraw"), {})
+    with Session.begin() as session:
+        bounty = find_bounty(session, bounty_id, lock=True)
+        amount = int(event.get("amount", 0))
+        session.add(escrow_row(bounty, "withdraw", amount, bounty.owner_account, call.tx_hash))
+        bounty.status, bounty.closed_reason = "closed", WITHDRAWN
+        bounty.budget_amount, bounty.updated_at = 0, utcnow()
+        return bounty_detail(session, bounty)
+
+
+async def transfer_in(signed, *, sender, amount, memo, msg=None):
     """Collect a signed transfer. Return the transaction ID, or the unknown-result error."""
     return await run_in_threadpool(
-        settlement.collect, signed, sender=sender, amount=amount, memo=memo
+        settlement.collect, signed, sender=sender, amount=amount, memo=memo, msg=msg
     )
 
 
@@ -343,7 +425,10 @@ async def fund_bounty(bounty_id, request: FundBounty):
         find_bounty(session, bounty_id)
         if session.get(LedgerEntry, entry_id):
             raise HTTPException(409, "This fund_id is already used.")
-    check_intent(request.signed_intent, sender=request.sender, amount=request.amount, memo=memo)
+    msg = settlement.fund_msg(bounty_id)
+    check_intent(
+        request.signed_intent, sender=request.sender, amount=request.amount, memo=memo, msg=msg
+    )
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
         if not budget.takes_funds(bounty):
@@ -367,7 +452,7 @@ async def fund_bounty(bounty_id, request: FundBounty):
             raise HTTPException(409, "This fund_id is already used.") from None
     try:
         tx_id = await transfer_in(
-            request.signed_intent, sender=request.sender, amount=request.amount, memo=memo
+            request.signed_intent, sender=request.sender, amount=request.amount, memo=memo, msg=msg
         )
     except SettlementError as exc:
         unknown = isinstance(exc, OutcomeUnknown)
@@ -404,11 +489,14 @@ async def create_claim(bounty_id, request: CreateClaim):
     except (ClaimError, TargetPolicyError) as exc:
         raise HTTPException(422, str(exc)) from exc
     bond = quote["required_bond"]
+    scout = request.scout.model_dump() if request.scout else None
+    msg = settlement.bond_msg(bounty_id, claim_id, scout)
     check_intent(
         request.bond_intent,
         sender=request.hunter_account,
         amount=bond,
         memo=memo,
+        msg=msg,
         note=". " + bond_rule(quote),
     )
     entry_id = str(uuid4())
@@ -438,7 +526,7 @@ async def create_claim(bounty_id, request: CreateClaim):
                 id=claim_id,
                 bounty_id=bounty.id,
                 hunter_account=request.hunter_account,
-                scout=request.scout.model_dump() if request.scout else None,
+                scout=scout,
                 claim_type=request.claim_type,
                 urls=urls,
                 details=details,
@@ -469,7 +557,7 @@ async def create_claim(bounty_id, request: CreateClaim):
         site_url = bounty.url
     try:
         tx_id = await transfer_in(
-            request.bond_intent, sender=request.hunter_account, amount=bond, memo=memo
+            request.bond_intent, sender=request.hunter_account, amount=bond, memo=memo, msg=msg
         )
     except OutcomeUnknown as exc:
         with Session.begin() as session:

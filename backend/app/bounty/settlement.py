@@ -23,6 +23,10 @@ def get_settlement() -> Settlement:
         from app.settlement.near_intents import NearIntentsSettlement
 
         return NearIntentsSettlement()
+    if settings.settlement_mode == "escrow":
+        from app.settlement.escrow import EscrowSettlement
+
+        return EscrowSettlement()
     return DrySettlement()
 
 
@@ -36,7 +40,7 @@ def arsune_account() -> str:
 
 
 def current_salt() -> str:
-    if settings.settlement_mode != "near_intents":
+    if settings.settlement_mode == "dry":
         return DRY_SALT
     from app.settlement import near_intents
 
@@ -49,23 +53,60 @@ def current_salt() -> str:
 
 
 def settlement_info() -> dict:
-    return {
+    info = {
         "mode": settlement_mode(),
         "arsune_account": arsune_account(),
         "token": settings.bounty_token,
         "intents_contract": settings.intents_contract,
         "salt": current_salt(),
     }
+    if settlement_mode() == "escrow":
+        # Deposits go to the escrow with a `msg` (fund_msg, bond_msg); Arsune is the judge.
+        info["escrow_contract"] = settings.escrow_contract
+    return info
 
 
 def explorer_url(mode: str, tx_id: str | None) -> str | None:
-    return EXPLORER_TX.format(tx_id) if mode == "near_intents" and tx_id else None
+    return EXPLORER_TX.format(tx_id) if mode != "dry" and tx_id else None
 
 
-def check_transfer(signed: dict, *, sender: str, amount: int, memo: str):
-    """Reject a signed transfer that does not pay exactly this amount to Arsune with this memo."""
+def fund_msg(bounty_id: str) -> str | None:
+    """The `msg` a funding deposit must carry, or None when deposits have no `msg`."""
+    if settings.settlement_mode != "escrow":
+        return None
+    from app.settlement import escrow
+
+    return escrow.fund_msg(bounty_id)
+
+
+def bond_msg(bounty_id: str, claim_id: str, scout: dict | None) -> str | None:
+    if settings.settlement_mode != "escrow":
+        return None
+    from app.settlement import escrow
+
+    share = (scout["account"], scout["share_bps"]) if scout else None
+    return escrow.bond_msg(bounty_id, claim_id, share)
+
+
+def check_transfer(signed: dict, *, sender: str, amount: int, memo: str, msg: str | None = None):
+    """Reject a signed transfer that does not pay exactly this amount to Arsune with this memo
+    (in escrow mode: to the escrow, with this `msg`)."""
     from app.settlement.near_intents import verify_signed_transfer
 
+    if settings.settlement_mode == "escrow":
+        from app.settlement.escrow import verify_deposit
+
+        verify_deposit(
+            signed,
+            sender=sender,
+            escrow=settings.escrow_contract,
+            token_id=settings.bounty_token,
+            amount=amount,
+            msg=msg,
+            memo=memo,
+            contract=settings.intents_contract,
+        )
+        return
     verify_signed_transfer(
         signed,
         sender=sender,
@@ -83,7 +124,7 @@ def relayer_lock(mode: str):
 
     One key has one access-key nonce sequence; parallel senders would reject each other.
     """
-    if mode != "near_intents":
+    if mode == "dry":
         yield
         return
     from app.core.db import engine
@@ -97,13 +138,33 @@ def relayer_lock(mode: str):
             connection.commit()
 
 
-def collect(signed: dict, *, sender: str, amount: int, memo: str) -> str:
+def collect(signed: dict, *, sender: str, amount: int, memo: str, msg: str | None = None) -> str:
     port = get_settlement()
+    extra = {"msg": msg} if msg is not None else {}
     with relayer_lock(port.mode):
-        return port.collect(signed, sender=sender, amount=amount, memo=memo)
+        return port.collect(signed, sender=sender, amount=amount, memo=memo, **extra)
 
 
 def pay(receiver: str, amount: int, memo: str) -> str:
     port = get_settlement()
     with relayer_lock(port.mode):
         return port.pay(receiver, amount, memo)
+
+
+def open_on_escrow(bounty) -> str | None:
+    """Create the bounty on the escrow once; return the transaction ID if this call made it."""
+    port = get_settlement()
+    with relayer_lock(port.mode):
+        return port.open_bounty(port.terms(bounty))
+
+
+def rule(claim_id: str, outcome: str, evidence_hash: str):
+    port = get_settlement()
+    with relayer_lock(port.mode):
+        return port.rule(claim_id, outcome, evidence_hash)
+
+
+def withdraw(bounty_id: str):
+    port = get_settlement()
+    with relayer_lock(port.mode):
+        return port.withdraw(bounty_id)

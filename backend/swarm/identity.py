@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from app.settlement import escrow
 from app.settlement.near_intents import sign_transfer
 from app.settlement.near_tx import generate_key, implicit_account_id, load_signing_key
 
@@ -55,13 +56,44 @@ def fund_memo(fund_id: str) -> str:
     return f"arsune:fund:{fund_id}"
 
 
+def escrow_fund_msg(settlement: dict, bounty_id: str) -> str | None:
+    """The escrow `msg` of a funding deposit; None when Arsune does not use the escrow."""
+    return escrow.fund_msg(bounty_id) if settlement.get("mode") == "escrow" else None
+
+
+def escrow_bond_msg(settlement: dict, bounty_id: str, claim_id: str, scout: dict | None):
+    if settlement.get("mode") != "escrow":
+        return None
+    return escrow.bond_msg(bounty_id, claim_id, scout and (scout["account"], scout["share_bps"]))
+
+
 def sign_payment(
-    identity: Identity, settlement: dict, amount: int, memo: str, now: datetime | None = None
+    identity: Identity,
+    settlement: dict,
+    amount: int,
+    memo: str,
+    now: datetime | None = None,
+    msg: str | None = None,
 ) -> dict:
-    """Sign a transfer of exactly `amount` of the bounty token to Arsune with `memo`."""
+    """Sign a transfer of exactly `amount` of the bounty token to Arsune with `memo`. In escrow
+    mode it is a deposit to the escrow, and `msg` names the bounty or the claim."""
     salt = settlement.get("salt")
     if not salt:
         raise ValueError("Arsune did not publish a Verifier salt; refusing to fetch it from RPC.")
+    deadline = (now or datetime.now(UTC)) + INTENT_LIFETIME
+    if settlement.get("mode") == "escrow":
+        return escrow.sign_deposit(
+            identity.account_id,
+            identity.private_key,
+            settlement["escrow_contract"],
+            settlement["token"],
+            amount,
+            msg,
+            memo,
+            deadline,
+            salt=bytes.fromhex(salt),
+            contract=settlement["intents_contract"],
+        )
     return sign_transfer(
         identity.account_id,
         identity.private_key,
@@ -69,7 +101,7 @@ def sign_payment(
         settlement["token"],
         amount,
         memo,
-        (now or datetime.now(UTC)) + INTENT_LIFETIME,
+        deadline,
         salt=bytes.fromhex(salt),
         contract=settlement["intents_contract"],
     )
