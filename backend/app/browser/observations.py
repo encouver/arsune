@@ -4,9 +4,75 @@ from urllib.parse import urljoin, urlsplit
 
 from playwright.async_api import Error as BrowserError
 
-from app.browser.policy import document_scope
+from app.browser.policy import document_scope, origin
 from app.browser.prices import PRICE_BLOCKS_JS, extract_prices
-from app.browser.session import RESOURCE_READY_TIMEOUT_MS
+from app.browser.session import MAX_PAGE_ERRORS, RESOURCE_READY_TIMEOUT_MS
+
+# An image that already failed rejects decode(); a decoded one with no intrinsic size resolves.
+IMAGES_JS = """async () => {
+    const images = Array.from(document.images);
+    const read = async image => {
+        let decoded = null;
+        if (image.complete && (image.currentSrc || image.src)) {
+            decoded = image.naturalWidth > 0 || await Promise.race([
+                image.decode().then(() => true, () => false),
+                new Promise(resolve => setTimeout(() => resolve(null), 500)),
+            ]);
+        }
+        return {
+            src: (image.currentSrc || image.src).split('#')[0],
+            decoded,
+            rendered: image.checkVisibility({checkOpacity: true, checkVisibilityCSS: true}),
+        };
+    };
+    const read60 = await Promise.all(images.slice(0, 60).map(read));
+    return {images: read60, truncated: images.length > 60};
+}"""
+
+
+def image_results(images, requests):
+    """Join each image element with the request the browser made for it."""
+    results = []
+    for image in images:
+        src = image["src"]
+        if urlsplit(src).scheme not in {"http", "https"} or len(src) > 2048:
+            continue
+        request = requests.get(src, {})
+        results.append(
+            {
+                "src": src,
+                "final_url": request.get("final_url", src),
+                "status": request.get("status"),
+                "failure": request.get("failure"),
+                "decoded": image["decoded"],
+                "rendered": image["rendered"],
+            }
+        )
+    return results
+
+
+def page_errors(page, site_url):
+    """Uncaught errors that were not revoked, marked by whether the site's script raised them."""
+    errors, revoked = page._arsune_errors
+    results = []
+    for error in errors:
+        if error["id"] in revoked:
+            continue
+        script, source, first_party = error["script_url"], "", False
+        try:
+            if urlsplit(script).scheme in {"http", "https"}:
+                source, first_party = origin(script), document_scope(site_url, script)
+        except ValueError:
+            pass
+        results.append(
+            {
+                "message": error["message"],
+                "kind": error["kind"],
+                "source": source,
+                "first_party": first_party,
+            }
+        )
+    return results[:MAX_PAGE_ERRORS], len(errors) > MAX_PAGE_ERRORS
 
 
 async def observe_page(context, target, viewport, output_dir, site_url):
@@ -59,6 +125,9 @@ async def observe_page(context, target, viewport, output_dir, site_url):
             }))
         })""")
         )
+        read = await page.evaluate(IMAGES_JS)
+        observation["images"] = image_results(read["images"], page._arsune_images)
+        observation["images_truncated"] = read["truncated"]
         pricing_blocks = await page.evaluate(PRICE_BLOCKS_JS)
         pricing = extract_prices(pricing_blocks["blocks"])
         observation["facts"].extend(pricing["facts"])
@@ -90,6 +159,9 @@ async def observe_page(context, target, viewport, output_dir, site_url):
     except BrowserError:
         observation["error"] = "The browser could not complete this page request."
     finally:
+        observation["page_errors"], observation["page_errors_truncated"] = page_errors(
+            page, site_url
+        )
         observation["resource_issues"] = list(page._arsune_resource_issues)
         for issue in observation["resource_issues"]:
             issue["viewport"] = viewport

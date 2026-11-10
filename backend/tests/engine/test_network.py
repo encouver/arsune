@@ -14,6 +14,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import httpx
 import pytest
 from app.browser import session
+from app.browser.checker import check_candidate
+from app.browser.observations import observe_page
 from app.browser.session import inspection_browser
 from app.workers.workflow import run_scan
 
@@ -294,3 +296,34 @@ async def test_failed_font_marks_layout_incomplete_and_persists_reason(public_ne
     resumed = await run_scan(url, tmp_path, checkpoint=checkpoint)
     assert resumed["coverage"]["resource_issues"] == report["coverage"]["resource_issues"]
     assert resumed["coverage"]["incomplete_layout_pages"]
+
+
+async def test_errors_from_another_origins_script_do_not_count(public_network, tmp_path):
+    base, calls = public_network
+    url = f"{base}/script-errors"
+    state = {"selected": [url]}
+
+    async def save():
+        pass
+
+    results = {}
+    async with inspection_browser(url, "http://127.0.0.1:8541", state, save) as (context, _):
+
+        async def observe(target, viewport):
+            return await observe_page(context, target, viewport, tmp_path, url)
+
+        for message in ("Partner widget crashed on load", "Site menu failed on load"):
+            item = {
+                "claim_type": "page_error",
+                "urls": [url],
+                "details": {"page": url, "message": message},
+            }
+            results[message] = await check_candidate(item, observe)
+    assert any("/network/throw.js" in request for _, request in calls)
+    errors = results["Site menu failed on load"]["evidence"][0]["page_errors"]
+    assert sorted((e["message"], e["first_party"], e["source"].split(":")[1]) for e in errors) == [
+        ("Error: Partner widget crashed on load", False, "//cdn.test"),
+        ("Error: Site menu failed on load", True, "//site.test"),
+    ]
+    assert results["Partner widget crashed on load"]["status"] == "unverified"
+    assert results["Site menu failed on load"]["status"] == "confirmed"

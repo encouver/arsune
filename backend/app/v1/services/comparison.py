@@ -15,7 +15,7 @@ def mapped_claim(finding, mapping):
         return url
 
     claim["urls"] = [mapped(url) for url in claim["urls"]]
-    for key in ("source", "target", "url"):
+    for key in ("source", "target", "url", "page", "image"):
         if key in claim.get("details", {}):
             claim["details"][key] = mapped(claim["details"][key])
     return claim

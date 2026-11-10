@@ -33,6 +33,11 @@ INFO = {
     "returns": "Cancellations and refunds",
 }
 CAT = {slug: (name, unit) for slug, name, unit in CATEGORIES}
+# Pages with pictures, linked from the home page.
+MEDIA = {
+    "gallery": ("Product gallery", "Screens from each product, updated with every release."),
+    "team": ("Our team", "The people who build and support Northwind Supply."),
+}
 
 
 def _build_plans():
@@ -220,6 +225,158 @@ _p = PLANS[21]  # discounted card
 _DETAIL_CARDS[_p["slug"]] = f"USD {_p['price'] - 3} per month, per {_p['unit']} with a 20% discount"
 
 
+# ------------------------------------------------------- images and page errors
+
+IMG = f"{SHOP}/img"
+# Image files that load, by name under IMG, with the label drawn on the picture.
+_PICTURES = {
+    "logo.svg": "Northwind Supply",
+    "gallery/billing.svg": "Billing overview",
+    "gallery/archive.svg": "Earlier release",
+    "team/engineer.svg": "Platform team",
+}
+_IMAGE_REDIRECTS = {
+    "old-logo.png": "logo.svg",
+    "gallery/mobile-app.png": "gallery/mobile-app-v2.png",
+}
+# HTTP 200 answers that a browser cannot decode as an image.
+_UNDECODABLE = {
+    "storage-hero.jpg": ("text/html", b"<html><body>Image not found</body></html>"),
+    "analytics-plus-chart.png": ("image/png", b"\x89PNG\r\n\x1a\nnot an image"),
+    "refund-steps.webp": ("image/webp", b""),
+}
+# Other image names answer 404 unless listed here.
+_IMAGE_STATUS = {"gallery/reports.png": 410, "team/ceo.jpg": 403, "team/support-lead.jpg": 500}
+
+# (page, image name, HTTP status of the final answer, alt text). An image that answers an
+# HTTP error makes its page's layout incomplete, so those sit on pages without layout faults.
+BROKEN_IMAGES = [
+    (f"{SHOP}/", "partner-badge.png", 404, "Partner of the year badge"),
+    (plan_path("payments-scale"), "payments-scale-flow.png", 404, "Payment flow diagram"),
+    (info_path("gallery"), "gallery/dashboard.png", 404, "Hosting dashboard"),
+    (info_path("gallery"), "gallery/reports.png", 410, "Analytics reports"),
+    (info_path("gallery"), "gallery/mobile-app.png", 404, "Mobile app"),
+    (info_path("team"), "team/ceo.jpg", 403, "Dana Whitfield, chief executive"),
+    (info_path("team"), "team/support-lead.jpg", 500, "Ravi Menon, support lead"),
+    (cat_path("storage"), "storage-hero.jpg", 200, "Storage racks"),
+    (plan_path("analytics-plus"), "analytics-plus-chart.png", 200, "Usage chart"),
+    (info_path("returns"), "refund-steps.webp", 200, "Refund steps"),
+]
+
+FAQ_SEARCH_JS = (
+    "document.getElementById('faq-search').addEventListener('input', event => {\n"
+    "  document.body.dataset.query = event.target.value;\n});\n"
+)
+# (page, script, the part of the error message that a claim quotes)
+PAGE_ERRORS = [
+    (
+        cat_path("hosting"),
+        "<script>(() => { const cart = window.northwindCart; "
+        + "document.title += ' (' + cart.items.length + ')'; })()</script>",
+        "Cannot read properties of undefined (reading 'items')",
+    ),
+    (
+        plan_path("security-plus"),
+        "<script>initPlanCarousel(document.querySelector('.plan'))</script>",
+        "initPlanCarousel is not defined",
+    ),
+    (
+        info_path("faq"),
+        f'<script src="{SHOP}/assets/faq-search.js"></script>',
+        "Cannot read properties of null (reading 'addEventListener')",
+    ),
+    (
+        plan_path("email-basic"),
+        "<script>(async () => { "
+        + "throw new Error('Recommendation feed returned no plans') })()</script>",
+        "Recommendation feed returned no plans",
+    ),
+    (
+        info_path("gallery"),
+        "<script>addEventListener('load', () => { "
+        + "throw new Error('Gallery lightbox could not find its images') })</script>",
+        "Gallery lightbox could not find its images",
+    ),
+    (
+        info_path("contact"),
+        "<script>setTimeout(() => { throw 'Contact form widget failed to start' })</script>",
+        "Contact form widget failed to start",
+    ),
+]
+
+
+def _figure(name, alt, attrs=""):
+    return (
+        f'<figure><img src="{IMG}/{name}" alt="{escape(alt)}" width="240" height="150"{attrs}>'
+        f"<figcaption>{escape(alt)}</figcaption></figure>"
+    )
+
+
+for _slug in MEDIA:
+    _link(f"{SHOP}/", info_path(_slug), MEDIA[_slug][0])
+_EXTRA_HTML.setdefault(info_path("gallery"), []).append(
+    _figure("gallery/billing.svg", "Billing overview")
+)
+_EXTRA_HTML.setdefault(info_path("team"), []).append(_figure("team/engineer.svg", "Platform team"))
+for _page, _name, _status, _alt in BROKEN_IMAGES:
+    _EXTRA_HTML.setdefault(_page, []).append(_figure(_name, _alt))
+for _page, _script, _message in PAGE_ERRORS:
+    _EXTRA_HTML.setdefault(_page, []).append(_script)
+
+# Decoy images: never requested, hidden, redirected to a file that loads, lazy and not yet loaded
+_EXTRA_HTML[cat_path("hosting")].append(
+    f'<noscript><img src="{IMG}/noscript-banner.png" alt="Turn on JavaScript to compare plans"'
+    ' width="240" height="60"></noscript>'
+)
+_EXTRA_HTML[info_path("gallery")].append(
+    f'<img src="{IMG}/gallery/old-banner.png" alt="" width="240" height="60" style="display:none">'
+)
+_EXTRA_HTML[f"{SHOP}/"].append(_figure("old-logo.png", "Northwind Supply logo"))
+# Chromium loads a lazy image only within about 3000 pixels of the viewport.
+_EXTRA_HTML[info_path("gallery")].append(
+    '<div style="min-height:6000px">Photo archive. Earlier release screens follow.</div>'
+    + _figure("gallery/archive.svg", "Earlier release", ' loading="lazy"')
+)
+
+# Decoy errors: console output, a caught error, another origin's script, a late handler
+_EXTRA_HTML.setdefault(cat_path("analytics"), []).append(
+    "<script>console.error('Newsletter signup is not configured')</script>"
+)
+_EXTRA_HTML.setdefault(plan_path("backup-basic"), []).append(
+    "<script>try { throw new Error('Saved cart could not be restored') }"
+    " catch (error) { console.warn(error.message) }</script>"
+)
+_EXTRA_HTML.setdefault(plan_path("storage-plus"), []).append(
+    "<script>(function startChat() { throw new Error('Chat widget failed to start') })()\n"
+    "//# sourceURL=https://widgets.partner-chat.example/loader.js\n</script>"
+)
+_EXTRA_HTML.setdefault(info_path("about"), []).append(
+    "<script>(() => { const points = Promise.reject("
+    "new Error('Loyalty points are temporarily unavailable'));"
+    " setTimeout(() => points.catch(() => {})); })()</script>"
+)
+
+
+def _svg(label):
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="150" viewBox="0 0 240 150">'
+        '<rect width="240" height="150" fill="#cde3f5"/><text x="16" y="82"'
+        f' font-family="sans-serif" font-size="18" fill="#12355b">{escape(label)}</text></svg>'
+    )
+
+
+def image_response(name):
+    if name in _PICTURES:
+        return Response(_svg(_PICTURES[name]), media_type="image/svg+xml")
+    if name in _IMAGE_REDIRECTS:
+        return RedirectResponse(f"{IMG}/{_IMAGE_REDIRECTS[name]}", status_code=301)
+    if name in _UNDECODABLE:
+        media_type, body = _UNDECODABLE[name]
+        return Response(body, media_type=media_type)
+    status = _IMAGE_STATUS.get(name, 404)
+    return Response(f"Image unavailable ({status})", status_code=status)
+
+
 def _listing_value(plan):
     return f"USD {plan['price']} per month, per {plan['unit']}"
 
@@ -341,6 +498,11 @@ def render_info(slug):
     return _layout(INFO[slug], body + _extras(info_path(slug)))
 
 
+def render_media(slug):
+    title, copy = MEDIA[slug]
+    return _layout(title, f"<p>{copy}</p>" + _extras(info_path(slug)))
+
+
 def shop_response(path):
     """Serve one /shop/ path."""
     if path == "":
@@ -351,6 +513,12 @@ def shop_response(path):
         return render_plan(path[2:])
     if path in INFO:
         return render_info(path)
+    if path in MEDIA:
+        return render_media(path)
+    if path.startswith("img/"):
+        return image_response(path[4:])
+    if path == "assets/faq-search.js":
+        return Response(FAQ_SEARCH_JS, media_type="text/javascript")
     if path == "p/legacy-gift-card":
         return _layout("Gift cards", "<p>Gift cards are no longer available.</p>")
     if path == "files/price-list.txt":
@@ -377,6 +545,7 @@ ALL_PAGES = (
     + _PLAN_PATHS
     + list(_INFO_PATHS.values())
     + [plan_path("legacy-gift-card"), f"{SHOP}/files/price-list.txt"]
+    + [info_path(slug) for slug in MEDIA]
 )
 
 
@@ -419,6 +588,26 @@ def build_ground_truth(origin):
             }
         )
 
+    for i, (page, name, status, _) in enumerate(BROKEN_IMAGES, 1):
+        bugs.append(
+            {
+                "id": f"image-{i:02d}",
+                "claim_type": "broken_image",
+                "urls": [u(page)],
+                "details": {"page": u(page), "image": u(f"{IMG}/{name}")},
+                "http_status": status,
+            }
+        )
+    for i, (page, _, message) in enumerate(PAGE_ERRORS, 1):
+        bugs.append(
+            {
+                "id": f"error-{i:02d}",
+                "claim_type": "page_error",
+                "urls": [u(page)],
+                "details": {"page": u(page), "message": message},
+            }
+        )
+
     def decoy(name, claim_type, urls, details, expected, why):
         return {
             "id": f"decoy-{name}",
@@ -441,6 +630,14 @@ def build_ground_truth(origin):
 
     def overflow(name, path, why):
         return decoy(name, "horizontal_overflow", [path], {"url": u(path)}, "rejected", why)
+
+    def image(name, page, file, expected, why):
+        details = {"page": u(page), "image": u(f"{IMG}/{file}")}
+        return decoy(name, "broken_image", [page], details, expected, why)
+
+    def error(name, page, message, expected, why):
+        details = {"page": u(page), "message": message}
+        return decoy(name, "page_error", [page], details, expected, why)
 
     def price(name, plan, expected, why, key=None):
         return decoy(
@@ -509,6 +706,56 @@ def build_ground_truth(origin):
             key=price_key("Education " + PLANS[18]["name"], PLANS[18]["unit"]),
         ),
         price("discount", PLANS[21], "unverified", "discounted card has another context"),
+        image(
+            "image-noscript",
+            cat_path("hosting"),
+            "noscript-banner.png",
+            "unverified",
+            "missing image inside noscript, which a browser running scripts never requests",
+        ),
+        image(
+            "image-hidden",
+            info_path("gallery"),
+            "gallery/old-banner.png",
+            "unverified",
+            "missing image that the page does not show",
+        ),
+        image("image-redirect", f"{SHOP}/", "old-logo.png", "rejected", "redirects to an image"),
+        image(
+            "image-lazy",
+            info_path("gallery"),
+            "gallery/archive.svg",
+            "unverified",
+            "lazy image far below the first screen, not loaded yet",
+        ),
+        error(
+            "error-console",
+            cat_path("analytics"),
+            "Newsletter signup is not configured",
+            "rejected",
+            "console.error output, not an uncaught error",
+        ),
+        error(
+            "error-caught",
+            plan_path("backup-basic"),
+            "Saved cart could not be restored",
+            "rejected",
+            "the page catches this error",
+        ),
+        error(
+            "error-third-party",
+            plan_path("storage-plus"),
+            "Chat widget failed to start",
+            "unverified",
+            "uncaught error from a script on another origin",
+        ),
+        error(
+            "error-handled-later",
+            info_path("about"),
+            "Loyalty points are temporarily unavailable",
+            "rejected",
+            "the rejected promise gets a handler before the page settles",
+        ),
     ]
     return {"bugs": bugs, "decoys": decoys, "pages": [u(p) for p in ALL_PAGES]}
 

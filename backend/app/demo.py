@@ -109,6 +109,10 @@ async def network_fixture(page: str, request: Request):
         return Response(
             "document.body.dataset.externalScript='loaded';", media_type="text/javascript"
         )
+    if page == "throw.js":
+        return Response(
+            "throw new Error('Partner widget crashed on load');", media_type="text/javascript"
+        )
     if page == "image.svg":
         return Response(
             '<svg xmlns="http://www.w3.org/2000/svg" width="7" height="9"><rect width="7" height="9"/></svg>',
@@ -118,6 +122,11 @@ async def network_fixture(page: str, request: Request):
         content = '<link rel="stylesheet" href="site.css"><a href="child">Child</a>'
     elif page == "external":
         content = f'<link rel="stylesheet" href="{external}/site.css"><script defer src="{external}/script.js"></script><img id="external-image" src="{external}/image.svg">'
+    elif page == "script-errors":
+        content = (
+            f'<script src="{external}/throw.js"></script>'
+            "<script>throw new Error('Site menu failed on load')</script>"
+        )
     elif page == "failed-font":
         content = (
             '<script>const font = new FontFace("Broken", '

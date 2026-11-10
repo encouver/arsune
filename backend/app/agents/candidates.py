@@ -1,6 +1,7 @@
 import hashlib
 import json
 
+from app.browser.checker import image_state, load_reproduced
 from app.core.scan import ROLES, VIEWPORTS
 
 
@@ -45,7 +46,7 @@ def validate_candidates(items, selected):
         details = item.get("details", {})
         if not isinstance(details, dict):
             raise TypeError("Invalid candidate details.")
-        for key in ["source", "target", "url"]:
+        for key in ["source", "target", "url", "page"]:
             if key in details and details[key] not in selected:
                 raise ValueError("Candidate details reference an unselected page.")
         item["id"] = hashlib.sha256(
@@ -73,6 +74,39 @@ def scripted(observations):
                         [source, link],
                         f"The linked page returns HTTP {target['status']}.",
                         {"source": source, "target": link},
+                    )
+                )
+    for url, observation in desktop.items():
+        if not 200 <= (observation.get("status") or 0) < 300 or observation.get("error"):
+            continue
+        for image in observation.get("images", []):
+            if image.get("rendered") and image_state(image) == "broken":
+                failure = (
+                    f"returns HTTP {image['status']}"
+                    if image["status"] >= 400
+                    else "does not decode as an image"
+                )
+                result.append(
+                    candidate(
+                        "navigation",
+                        "broken_image",
+                        [url],
+                        f"The image {image['src'][:300]} on this page {failure}.",
+                        {"page": url, "image": image["src"]},
+                    )
+                )
+        if not load_reproduced(observation):
+            continue
+        for error in observation.get("page_errors", []):
+            message = " ".join(error["message"].split())
+            if error.get("first_party") and len(message) >= 8:
+                result.append(
+                    candidate(
+                        "navigation",
+                        "page_error",
+                        [url],
+                        f"Loading the page raises an uncaught error: {message}",
+                        {"page": url, "message": message},
                     )
                 )
     for observation in observations:

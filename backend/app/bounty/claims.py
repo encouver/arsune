@@ -5,6 +5,7 @@ import json
 import re
 from urllib.parse import urljoin, urlsplit
 
+from app.browser.checker import failing_images, matching_errors, normalize_message
 from app.browser.policy import origin, validate_target
 
 # Each supported claim type names its pages through exactly these detail keys.
@@ -12,7 +13,11 @@ CLAIM_TYPES = {
     "broken_link": ("source", "target"),
     "horizontal_overflow": ("url",),
     "price_mismatch": ("key",),
+    "broken_image": ("page", "image"),
+    "page_error": ("page", "message"),
 }
+# Claim types whose only page is details["page"]; the other key names what fails on it.
+PAGE_FAULTS = ("broken_image", "page_error")
 # NEAR account ID rules, which also accept 64-character implicit accounts.
 ACCOUNT = re.compile(r"(?=.{2,64}$)([a-z\d]+[-_])*[a-z\d]+(\.([a-z\d]+[-_])*[a-z\d]+)*")
 MAX_UNRESOLVED_CLAIMS = 3
@@ -69,6 +74,19 @@ def final_fingerprint(claim_type: str, urls: list[str], details: dict, evidence:
 
     if claim_type == "price_mismatch":
         return fingerprint(claim_type, [land(u) for u in urls], details)
+    if claim_type in PAGE_FAULTS:
+        # The fault is what failed on the final page: the image's final file, or the full
+        # message of the matched error, so claims that quote parts of one message are one fault.
+        page = next((o for o in evidence if o.get("url") == details["page"]), {})
+        if claim_type == "broken_image":
+            failing = failing_images(page, details["image"])
+            found = [spell_url(urlsplit(image["final_url"])) for image in failing]
+        else:
+            matched = matching_errors(page, details["message"])
+            found = [normalize_message(error["message"]) for error in matched]
+        key = CLAIM_TYPES[claim_type][1]
+        final_details = {"page": land(details["page"]), key: min(found, default=details[key])}
+        return fingerprint(claim_type, [final_details["page"]], final_details)
     final_details = {key: land(url) for key, url in details.items()}
     return fingerprint(claim_type, list(final_details.values()), final_details)
 
@@ -97,6 +115,16 @@ async def scoped_claim(site_origin: str, claim_type: str, urls: list, details: d
         if len(urls) != 2:
             raise ClaimError("A price mismatch compares exactly two pages.")
         return urls, {"key": key}
+    if claim_type in PAGE_FAULTS:
+        page = await on_site(details["page"])
+        if urls != [page]:
+            raise ClaimError("Claim URLs must be exactly the page named in the details.")
+        if claim_type == "broken_image":
+            return urls, {"page": page, "image": await on_site(details["image"])}
+        message = normalize_message(details["message"])
+        if not 8 <= len(message) <= 500:
+            raise ClaimError("The error message must be text of 8 to 500 characters.")
+        return urls, {"page": page, "message": message}
     details = {key: await on_site(details[key]) for key in keys}
     # Extra URLs would change the fingerprint without changing the fault.
     if sorted(urls) != sorted(details.values()):

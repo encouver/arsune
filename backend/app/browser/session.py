@@ -13,6 +13,29 @@ from app.browser.policy import TargetPolicyError, document_scope, origin, valida
 
 MAX_REDIRECTS = 3
 RESOURCE_READY_TIMEOUT_MS = 3000
+MAX_PAGE_ERRORS = 20
+MAX_IMAGE_REQUESTS = 200
+
+
+def exception_record(details):
+    """Keep the message and the script location of one uncaught error or rejection."""
+    exception = details.get("exception") or {}
+    if exception.get("description"):
+        message = exception["description"].split("\n    at ")[0]
+    elif "value" in exception:
+        message = str(exception["value"])
+    else:
+        # Errors from another origin's script come only as text, such as "Uncaught Error: ...".
+        text = details.get("text", "").removeprefix("Uncaught").strip()
+        message = text.removeprefix("(in promise)")
+    frames = (details.get("stackTrace") or {}).get("callFrames", [])
+    script = details.get("url") or next((f["url"] for f in frames if f.get("url")), "")
+    return {
+        "id": details.get("exceptionId"),
+        "message": message.strip()[:500],
+        "kind": "rejection" if "(in promise)" in details.get("text", "") else "error",
+        "script_url": script[:2048],
+    }
 
 
 @asynccontextmanager
@@ -50,6 +73,21 @@ async def inspection_browser(url, demo, state, save):
             page_issues = []
             page._arsune_resource_issues = page_issues
             page._arsune_pending = pending
+            # Image requests by the URL the element asked for, which survives redirects.
+            images, starts = {}, {}
+            page._arsune_images = images
+            errors, revoked = [], set()
+            page._arsune_errors = (errors, revoked)
+
+            def thrown(event):
+                # One record past the bound marks the list as truncated.
+                if len(errors) <= MAX_PAGE_ERRORS:
+                    errors.append(exception_record(event.get("exceptionDetails", {})))
+
+            # A rejection that gets a handler later is not an unhandled rejection.
+            session.on("Runtime.exceptionThrown", thrown)
+            session.on("Runtime.exceptionRevoked", lambda event: revoked.add(event["exceptionId"]))
+            await session.send("Runtime.enable")
 
             def failed(request):
                 kind = request.resource_type.capitalize()
@@ -73,7 +111,9 @@ async def inspection_browser(url, demo, state, save):
                 target = request["url"]
                 kind = event.get("resourceType", "Other")
                 request_id = event["requestId"]
+                start = starts[request_id] = starts.get(event.get("redirectedRequestId"), target)
                 reserved = consumed = 0
+                status = failure = None
                 try:
                     async with lock:
                         if state.get("request_count", 0) >= 400:
@@ -148,6 +188,7 @@ async def inspection_browser(url, demo, state, save):
                         headers=headers,
                         extensions={"sni_hostname": parts.hostname},
                     ) as response:
+                        status = response.status_code
                         location = response.headers.get("location")
                         if 300 <= response.status_code < 400 and location:
                             destination = urljoin(target, location)
@@ -242,12 +283,16 @@ async def inspection_browser(url, demo, state, save):
                     TimeoutError,
                     httpx.HTTPError,
                 ) as exc:
+                    failure = str(exc)
                     issue = {
                         "url": target,
                         "page_url": page.url,
                         "resource_type": kind,
-                        "reason": str(exc),
+                        "reason": failure,
                     }
+                    if status is not None and status >= 400:
+                        # The site answered with this error, so a visitor receives it too.
+                        issue["http_status"] = status
                     if len(issues) < 400:
                         issues.append(issue)
                     if len(page_issues) < 400:
@@ -263,6 +308,8 @@ async def inspection_browser(url, demo, state, save):
                         pass
                     await save()
                 finally:
+                    if kind == "Image" and (start in images or len(images) < MAX_IMAGE_REQUESTS):
+                        images[start] = {"final_url": target, "status": status, "failure": failure}
                     if reserved:
                         async with lock:
                             state["transfer_reserved_bytes"] -= max(0, reserved - consumed)
