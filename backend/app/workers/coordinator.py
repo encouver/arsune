@@ -6,7 +6,7 @@ from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.db import Session
-from app.core.models import Attempt, Job, PendingAction, utcnow
+from app.core.models import Job, PendingAction, utcnow
 from app.workers import store
 from app.workers.queue import app
 
@@ -22,23 +22,8 @@ def tick():
             .with_for_update(skip_locked=True)
         ).all()
         for job in jobs:
-            if job.deadline <= now or (
-                job.generation >= settings.max_attempts
-                and job.lease_until
-                and job.lease_until <= now
-            ):
-                job.status, job.error = "failed", "The job reached its time or attempt limit."
-                job.updated_at = now
-                job.lease_until = None
-                job.progress = {"stage": "failed", "message": job.error}
-                action = session.get(PendingAction, f"{job.id}:scan")
-                if action:
-                    session.delete(action)
-                if job.generation:
-                    attempt = session.get(Attempt, f"{job.id}:{job.generation}")
-                    if attempt:
-                        attempt.status, attempt.finished_at = "failed", now
-                store.hold_unsettled_claim(session, job)
+            if store.out_of_time(job, now):
+                store.fail_job(session, job, now)
                 continue
             if job.status == "queued" or not job.lease_until or job.lease_until <= now:
                 action_id = f"{job.id}:scan"
@@ -61,9 +46,10 @@ def tick():
             app.send_task("arsune.scan", args=[action.job_id])
             action.publish_after = now + timedelta(seconds=settings.lease_seconds)
     from app.bounty.crosschain import poll_funding
-    from app.bounty.recovery import recover_stuck_claims
+    from app.bounty.recovery import recover_stuck_claims, settle_stopped_claims
 
     recover_stuck_claims(now)
+    settle_stopped_claims()
     poll_funding(now)
 
 

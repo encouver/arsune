@@ -39,7 +39,7 @@ from app.settlement.base import SettlementError
 from app.settlement.dry import DRY_SALT, DrySettlement
 from app.settlement.near_tx import OutcomeUnknown, generate_key
 from app.v1.services import bounties as bounty_service
-from app.workers import store
+from app.workers import coordinator, store
 from app.workers.tasks import scan
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -221,6 +221,17 @@ def seed_result(job_id, result=CONFIRMED):
 def expire_lease(job_id):
     with Session.begin() as session:
         session.get(Job, job_id).lease_until = utcnow() - timedelta(seconds=1)
+
+
+def stop_job(job_id, *, attempts=False):
+    """A started job ran out of time (or used every attempt) and its worker is gone."""
+    with Session.begin() as session:
+        job = session.get(Job, job_id)
+        job.lease_until = utcnow() - timedelta(seconds=1)
+        if attempts:
+            job.generation = settings.max_attempts
+        else:
+            job.deadline = utcnow() - timedelta(seconds=1)
 
 
 class CountingSettlement(DrySettlement):
@@ -553,7 +564,7 @@ def test_crash_after_recorded_payment_completes_without_paying_again(client, sit
     assert sum(row["kind"] == "reward_out" for row in view["ledger"]) == 1
 
 
-def test_settlement_failure_and_failed_job_hold_the_claim_for_review(client, site, monkeypatch):
+def test_settlement_failure_holds_the_claim_for_review(client, site, monkeypatch):
     bounty = open_bounty(client, site)
 
     class FailingPay(CountingSettlement):
@@ -568,13 +579,79 @@ def test_settlement_failure_and_failed_job_hold_the_claim_for_review(client, sit
     assert view["status"] == "needs_review" and view["outcome"] == "unverified"
     assert [row["status"] for row in view["ledger"] if row["kind"] == "bond_refund"] == ["failed"]
 
-    stopped = submit(client, bounty, broken_link(site, "hunter-b.testnet"))
-    with Session.begin() as session:
-        session.get(Job, stopped["job_id"]).deadline = utcnow() - timedelta(seconds=1)
-    assert store.claim(stopped["job_id"]) is None
-    view = claim_view(client, bounty, stopped)
-    assert view["status"] == "needs_review" and view["job_status"] == "failed"
-    assert [row["kind"] for row in view["ledger"]] == ["bond_in"]
+
+def test_a_claim_job_that_stops_is_unverified_and_refunds_the_bond(client, site):
+    """RULES: a timeout makes a claim unverified and refunds the bond. The coordinator decides
+    a claim whose job stopped at its time or attempt limit, so the hunter is not blocked."""
+    bounty = open_bounty(client, site)
+    hunter = "hunter-slow.testnet"
+    claims = [
+        submit(client, bounty, broken_link(site, hunter, target=f"missing-{n}")) for n in range(3)
+    ]
+    for n, claim in enumerate(claims):
+        assert store.claim(claim["job_id"])  # a worker took the job, then stopped
+        stop_job(claim["job_id"], attempts=n == 0)
+    coordinator.tick()
+    coordinator.tick()  # a second pass changes nothing
+    for claim in claims:
+        view = claim_view(client, bounty, claim)
+        assert (view["status"], view["outcome"], view["job_status"]) == (
+            "unverified",
+            "unverified",
+            "failed",
+        ), view
+        assert view["settled_at"] and "time or attempt limit" in view["checker_reason"]
+        assert [row["kind"] for row in view["ledger"]] == ["bond_in", "bond_refund"]
+        refund = view["ledger"][1]
+        assert refund["amount"] == BOND and refund["tx_id"].startswith("dry-")
+        assert refund["memo"] == f"arsune:refund:{claim['id']}"
+        bundle = json.loads(client.get(view["evidence_url"]).content)
+        assert bundle["check"]["status"] == bundle["ruling"]["outcome"] == "unverified"
+        assert "time or attempt limit" in bundle["check"]["reason"]
+    # The three settled claims no longer count as unresolved.
+    submit(client, bounty, overflow(site, hunter))
+
+
+def test_a_stopped_job_finishes_a_decided_claim_and_holds_an_unknown_payment(
+    client, site, monkeypatch
+):
+    port = CountingSettlement()
+    monkeypatch.setattr(settlement, "get_settlement", lambda: port)
+    bounty = open_bounty(client, site)
+    decided = submit(client, bounty, broken_link(site, "hunter-a.testnet"))
+    seed_result(decided["job_id"])
+    pay_claim = worker.pay_claim
+
+    def crash(*args, **kwargs):
+        raise Crash
+
+    monkeypatch.setattr(worker, "pay_claim", crash)
+    with pytest.raises(Crash):
+        scan.run(decided["job_id"])  # decided proven, then stopped before any payment row
+    monkeypatch.setattr(worker, "pay_claim", pay_claim)
+
+    class CrashAfterSend(CountingSettlement):
+        def pay(self, receiver, amount, memo):
+            super().pay(receiver, amount, memo)
+            raise Crash
+
+    unknown = submit(client, bounty, overflow(site, "hunter-b.testnet"))
+    seed_result(unknown["job_id"])
+    monkeypatch.setattr(settlement, "get_settlement", CrashAfterSend)
+    with pytest.raises(Crash):
+        scan.run(unknown["job_id"])  # the reward may have been sent; its result is unknown
+    monkeypatch.setattr(settlement, "get_settlement", lambda: port)
+    for claim in (decided, unknown):
+        stop_job(claim["job_id"])
+    coordinator.tick()
+
+    view = claim_view(client, bounty, decided)
+    assert (view["status"], view["job_status"]) == ("paid", "failed"), view
+    assert port.payments == [("hunter-a.testnet", REWARD + BOND, f"arsune:reward:{decided['id']}")]
+    view = claim_view(client, bounty, unknown)
+    assert view["status"] == "needs_review" and view["outcome"] == "proven", view
+    assert "no recorded result" in view["settlement_note"]
+    assert not view["settled_at"]
 
 
 def test_settlement_info_in_dry_mode(client):
@@ -857,6 +934,28 @@ def test_near_intents_mode_uses_the_real_settlement_with_a_fake_rpc(client, site
     assert len(FakeRpc.sent) == sent
 
 
+def test_near_intents_funding_above_the_payment_cap_is_refused_before_any_transfer(
+    client, site, monkeypatch
+):
+    arsune_key, _ = generate_key()
+    monkeypatch.setattr(near_intents, "NearRpc", FakeRpc)
+    monkeypatch.setattr(FakeRpc, "sent", [])
+    monkeypatch.setattr(settings, "settlement_mode", "near_intents")
+    monkeypatch.setattr(settings, "near_account_id", "arsune-test.testnet")
+    monkeypatch.setattr(settings, "near_private_key", SecretStr(arsune_key))
+    monkeypatch.setattr(settings, "max_payment_amount", 2 * REWARD)
+    bounty = open_bounty(client, site, amount=2 * REWARD)
+    fund_id = str(uuid4())
+    response = fund(client, bounty, amount=3 * REWARD, fund_id=fund_id)
+    assert response.status_code == 422, response.text
+    assert "at most 2000000 token units" in response.json()["detail"]
+    assert "ARSUNE_MAX_PAYMENT_AMOUNT" in response.json()["detail"]
+    assert len(FakeRpc.sent) == 1  # only the opening transfer reached the network
+    assert len(ledger(bounty["id"])) == 1
+    # Nothing was saved for the refused transfer, so its fund_id is still free.
+    assert fund(client, bounty, amount=REWARD, fund_id=fund_id).status_code == 200
+
+
 def page_overflow(site, hunter, path):
     url = site + path
     return claim_payload(hunter, "horizontal_overflow", [url], {"url": url})
@@ -1012,6 +1111,33 @@ def test_a_top_up_reopens_a_bounty_whose_budget_ran_out(client, site):
     refused = fund(client, bounty, amount=FUND)
     assert refused.status_code == 409 and "budget ran out" in refused.json()["detail"]
     assert client.get(f"/api/bounties/{bounty['id']}").json()["budget_amount"] == 0
+
+
+def test_an_open_bounty_refuses_claims_until_it_is_funded(client, site):
+    created = client.post(
+        "/api/bounties",
+        json={
+            "url": site + "/faulty/",
+            "owner_account": "owner.testnet",
+            "reward_amount": REWARD,
+            "bond_amount": BOND,
+            "budget": FUND,
+        },
+    ).json()
+    httpx.post(site + "/bounty-proof-control", json={"token": created["proof_token"]})
+    bounty = client.post(f"/api/bounties/{created['id']}/verify").json()
+    assert (bounty["status"], bounty["closed_reason"], bounty["budget_amount"]) == ("open", None, 0)
+    response = client.post(
+        f"/api/bounties/{bounty['id']}/claims", json=overflow(site, "hunter-a.testnet")
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"] == (
+        f"The bounty is not funded yet: its budget of 0 token units cannot pay one reward and "
+        f"its fee ({REWARD + FEE} token units). The owner must add funds first."
+    )
+    assert ledger(bounty["id"]) == []
+    assert fund(client, bounty, amount=REWARD + FEE).status_code == 200
+    submit(client, bounty, overflow(site, "hunter-a.testnet"))
 
 
 def test_a_close_keeps_its_first_reason_and_only_a_spent_budget_reopens():

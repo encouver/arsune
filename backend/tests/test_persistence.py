@@ -4,10 +4,11 @@ from datetime import timedelta
 from uuid import uuid4
 
 import pytest
+from app.core.config import settings
 from app.core.db import Session
 from app.core.models import Attempt, Event, Job, PendingAction, Record, utcnow
 from app.main import app
-from app.workers import store
+from app.workers import coordinator, store
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, select
 
@@ -69,9 +70,26 @@ def test_api_blocks_private_target_and_evidence_escape(job_id):
     assert client.get("/api/jobs/missing").status_code == 404
 
 
-def test_deadline_failure_clears_pending_work(job_id):
-    with Session.begin() as session:
+def test_the_deadline_starts_when_a_worker_takes_the_job(job_id, monkeypatch):
+    sent = []
+    monkeypatch.setattr(coordinator.app, "send_task", lambda name, args: sent.append(args))
+    with Session.begin() as session:  # the job waited in a busy queue past its first deadline
         session.get(Job, job_id).deadline = utcnow() - timedelta(seconds=1)
+    coordinator.tick()
+    with Session() as session:
+        assert session.get(Job, job_id).status == "queued"
+    assert [job_id] in sent
+    started = store.claim(job_id)
+    assert started, "a queued job has not used any of its time"
+    left = started["deadline"] - utcnow()
+    assert left > timedelta(seconds=settings.job_deadline_seconds - 30)
+
+
+def test_deadline_failure_clears_pending_work(job_id):
+    assert store.claim(job_id)
+    with Session.begin() as session:
+        job = session.get(Job, job_id)
+        job.deadline = job.lease_until = utcnow() - timedelta(seconds=1)
         session.add(PendingAction(id=f"{job_id}:scan", job_id=job_id))
     assert store.claim(job_id) is None
     with Session() as session:

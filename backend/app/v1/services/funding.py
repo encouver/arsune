@@ -32,6 +32,8 @@ def options():
         "token_symbol": "USDC",
         "token_decimals": 6,
         "intents_contract": settings.intents_contract,
+        # In escrow mode a funding deposit goes to this contract, with a `msg` naming the bounty.
+        "escrow_contract": settings.escrow_contract if mode == "escrow" else None,
         "demo_site_url": settings.demo_url.rstrip("/"),
         "demo_site_origin": origin(settings.demo_url),
         "simulated_funding": mode == "dry",
@@ -41,7 +43,7 @@ def options():
 
 def create_funding_address(bounty_id, request: CreateFundingAddress):
     if settlement.settlement_mode() != "near_intents":
-        raise HTTPException(409, crosschain.DRY_REASON)
+        raise HTTPException(409, crosschain.unavailable_reason())
     with Session() as session:
         bounty = bounties.find_bounty(session, bounty_id)
         if bounty.status == "pending_proof":

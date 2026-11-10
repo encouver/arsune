@@ -60,7 +60,7 @@ Record the mode and provider. A mock endpoint is not a live model test. Missing 
 
 ## Budgets and recovery
 
-- Enforce a job deadline, request timeouts, request limits, and bounded retries.
+- Enforce a job deadline, request timeouts, request limits, and bounded retries. The job deadline starts when a worker first takes the job, so time in the queue does not count.
 - Live calls require a configured model, credential, output-token limit, and numeric cost ceiling. Include retries and uncertain charges.
 - Store progress outside the API and worker processes. The queue is not the sole record of unfinished work.
 - Stable stage and candidate IDs prevent duplicate results after repeated delivery.
@@ -144,12 +144,14 @@ Examples, as correct and rejected claims: 3 and 0 give 0.8 (`trusted`). 2 and 1 
 - A claim for a fault that is already proven is a duplicate. If the submitted URLs match the held fault exactly, no browser check is needed. Otherwise the fresh check finds the duplicate.
 - A proven claim that finds the budget unable to pay one reward and its fee is `unfunded`: the bond is refunded and the bounty closes. The claim holds no fault, so a later claim for the same fault can be paid after a top-up.
 - A timeout, a blocked page, or a missing resource makes a claim unverified, not rejected. Only contradicting evidence forfeits a bond.
+- A check job that reaches its time or attempt limit before a decision also makes the claim unverified. The coordinator saves an evidence bundle that gives this reason and refunds the bond (in `escrow` mode with an `unverified` ruling). A claim that was decided before the job stopped gets the rest of its settlement.
 
 ### Fees and shares
 
 - The fee is `reward * fee_bps / 10000`, rounded down. The default is 1000 basis points (10%). The budget pays the fee for each proven claim, in addition to the reward. In `escrow` mode the fee is at most 2000 basis points (the contract's limit).
 - A hunter can name one scout for a claim, with a share of 1 to 5000 basis points (0.01% to 50%) of the reward. The scout share comes from the reward, not from the budget.
-- The bounty closes when its budget is less than one reward and its fee. The budget is reserved for a proven claim when the checker decides it, so two claims cannot be paid from the same money.
+- A decision that leaves the budget less than one reward and its fee closes the bounty. The budget is reserved for a proven claim when the checker decides it, so two claims cannot be paid from the same money.
+- A bounty opens after the owner proof with a budget of 0. Until its budget pays one reward and its fee, it takes funds, but it rejects claims with 409. The message gives the budget and the amount that one reward and its fee need.
 
 ### Closing and top-ups
 
@@ -163,8 +165,8 @@ Examples, as correct and rejected claims: 3 and 0 give 0.8 (`trusted`). 2 and 1 
 ### Payment safety
 
 - Arsune saves each outgoing payment in the ledger before it sends it, with a unique memo for each claim and payment kind. A payment is never sent twice.
-- If a payment result is unknown or the payment fails, the claim goes to `needs_review` and the money stays held. There is no automatic retry. An operator checks the settlement account before any further action.
-- Every ledger row records the settlement mode and the transaction ID.
+- If a payment result is unknown or the payment fails, the claim goes to `needs_review` and the money stays held. There is no automatic retry. An operator checks the settlement account before any further action. A check job that stops does not put a claim in `needs_review` unless a payment of that claim has an unknown result.
+- Every ledger row records the settlement mode. A row for money that a transaction moved records that transaction ID. In `dry` and `near_intents` mode, a `fee` row and a `bond_forfeit` row have no transaction ID: the funding transfers and the bond transfer already put that money in Arsune's account, and it stays there, so no transfer occurs. In `escrow` mode, both rows record the `rule` transaction, because the escrow moves that money.
 
 ### Public evidence
 
@@ -176,7 +178,7 @@ Examples, as correct and rejected claims: 3 and 0 give 0.8 (`trusted`). 2 and 1 
 ### Settlement modes
 
 - `dry` is the default. No money moves. Signed transfers are still checked, and payouts get IDs like `dry-<hex>`. Every bounty response states the mode. Do not describe dry results as real payments.
-- `near_intents` moves real USDC inside the NEAR Intents Verifier contract on mainnet. Each transfer is limited by `ARSUNE_MAX_PAYMENT_AMOUNT`. Ledger rows link to the transaction on nearblocks.
+- `near_intents` moves real USDC inside the NEAR Intents Verifier contract on mainnet. Each transfer is limited by `ARSUNE_MAX_PAYMENT_AMOUNT`. A funding transfer above this limit gets 422 with the limit in the message, before any transfer, so its `fund_id` stays unused. Ledger rows link to the transaction on nearblocks.
 - `escrow` (opt-in) keeps bounty money and bonds in the escrow contract. Arsune creates the bounty on the escrow, relays the signed deposits, and sends one `rule` transaction for each decided claim; the contract makes the payouts. A ruling with an unknown or different result goes to `needs_review`, as a payment does. `ARSUNE_MAX_PAYMENT_AMOUNT` and the bond cap do not apply. Escrow mode is tested on a local NEAR sandbox and with mocks. The escrow is not deployed on mainnet.
 
 ## Completion checks

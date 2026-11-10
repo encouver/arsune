@@ -36,6 +36,13 @@ OUTCOMES = {
 UNKNOWN_PAYMENT = (
     "A payment attempt has no recorded result. Check the settlement account before any retry."
 )
+# The check result of a claim whose job stopped before a decision. A timeout proves nothing.
+STOPPED = {
+    "status": "unverified",
+    "checker_reason": "The check job reached its time or attempt limit before a decision. "
+    "A timeout proves nothing, so the claim is unverified.",
+    "evidence": [],
+}
 
 
 def locked_claim(session, job_id):
@@ -44,6 +51,17 @@ def locked_claim(session, job_id):
 
 def locked_bounty(session, bounty_id):
     return session.scalar(select(Bounty).where(Bounty.id == bounty_id).with_for_update())
+
+
+def require_turn(session, job_id, generation):
+    """Only the worker that holds the job lease may settle, or recovery after the job failed.
+
+    Recovery passes no generation. A failed job has no worker left that could write over it.
+    """
+    job = store.locked_job(session, job_id)
+    if generation is None and job.status == "failed":
+        return
+    store.require_claim(job, generation)
 
 
 def lock_bounty_then_claim(session, job_id):
@@ -239,12 +257,12 @@ def forfeit_bond(session, bounty, claim, mode, now):
 def decide(job_id, generation, result, mode):
     """Save the outcome once. The partial unique index lets only one claim hold proven."""
     with Session.begin() as session:
-        store.require_claim(store.locked_job(session, job_id), generation)
+        require_turn(session, job_id, generation)
         bounty, claim = lock_bounty_then_claim(session, job_id)
         if claim.outcome:
             if not claim.evidence_hash:
                 # A duplicate known at arrival is decided without a browser check.
-                publish_evidence(bounty, claim, result, utcnow())
+                publish_evidence(bounty, claim, {"status": claim.outcome}, utcnow())
             return
         outcome = OUTCOMES.get(result.get("status"), "unverified")
         unfunded = False
@@ -339,7 +357,7 @@ def reserve_reward(session, bounty, claim, mode, fee):
 def next_payment(job_id, generation, mode):
     """Commit the next payment row before its transfer; return the transfer to send, if any."""
     with Session.begin() as session:
-        store.require_claim(store.locked_job(session, job_id), generation)
+        require_turn(session, job_id, generation)
         bounty, claim = lock_bounty_then_claim(session, job_id)
         if claim.settled_at or claim.status == "needs_review":
             return None
@@ -437,7 +455,7 @@ def rule_entry(bounty, claim, bond):
 def next_rule(job_id, generation, mode):
     """Commit the ruling's ledger row before the rule transaction; return the call to send."""
     with Session.begin() as session:
-        store.require_claim(store.locked_job(session, job_id), generation)
+        require_turn(session, job_id, generation)
         bounty, claim = lock_bounty_then_claim(session, job_id)
         if claim.settled_at or claim.status == "needs_review":
             return None
@@ -541,3 +559,13 @@ def settle_claim(job_id, generation, result):
             "findings": [result],
             "observations": result.get("evidence", []),
         }
+
+
+def settle_stopped_claim(job_id):
+    """Settle a claim whose job failed at its time or attempt limit, without a worker lease.
+
+    A claim without an outcome becomes unverified and gets the ordinary refund (in escrow mode
+    an `unverified` ruling). A decided claim gets the rest of its settlement. A payment row
+    without a transaction ID still sends the claim to review: its result is unknown.
+    """
+    return settle_claim(job_id, None, STOPPED)

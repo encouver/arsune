@@ -394,8 +394,10 @@ with an in-memory chain; not deployed on mainnet.
   every deposit. The salt is the Verifier's current salt, as in `near_intents` mode. Swarm
   agents sign escrow deposits with `escrow.sign_deposit` (`swarm/identity.py`).
 - Outcomes sent to `rule`: `proven`, `rejected`, `duplicate`, `unverified`, and `unfunded` for a
-  proven claim that Arsune's budget cannot pay. The `rule` event must give the same outcome and
-  the same evidence hash; otherwise the claim goes to `needs_review`.
+  proven claim that Arsune's budget cannot pay. A claim whose check job stopped at its time or
+  attempt limit gets `unverified`, with an evidence bundle that gives that reason. The `rule`
+  event must give the same outcome and the same evidence hash; otherwise the claim goes to
+  `needs_review`.
 - Safety on retry is the same as in `near_intents` mode: the ruling's ledger row exists before
   the transaction, and a repeated run that finds it without a transaction ID sends nothing and
   holds the claim for review. The contract also refuses a second ruling for a claim.

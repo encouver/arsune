@@ -1,12 +1,13 @@
-"""Queue claim checks, and recover claims whose intake request stopped part way."""
+"""Queue claim checks, recover claims whose intake request stopped part way, and settle
+claims whose check job stopped at its time or attempt limit."""
 
 import logging
 from datetime import timedelta
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
-from app.bounty.worker import proven_holder
+from app.bounty.worker import proven_holder, settle_stopped_claim
 from app.core.config import settings
 from app.core.db import Session
 from app.core.models import Bounty, Claim, Job, LedgerEntry, PendingAction, utcnow
@@ -72,3 +73,28 @@ def recover_stuck_claims(now=None):
                 "Check the settlement account before any retry."
             )
             logger.warning("Claim %s needs review after an interrupted intake", claim.id)
+
+
+def settle_stopped_claims():
+    """Settle every claim whose job failed before its settlement ended.
+
+    A claim in review with an outcome waits for an operator: a payment result is unknown. A
+    claim in review without an outcome was held by an older rule that kept the bond after a
+    timeout; it has no payment row, so its refund is safe.
+    """
+    with Session() as session:
+        job_ids = session.scalars(
+            select(Claim.job_id)
+            .join(Job, Job.id == Claim.job_id)
+            .where(
+                Job.status == "failed",
+                Claim.settled_at.is_(None),
+                or_(Claim.status != "needs_review", Claim.outcome.is_(None)),
+            )
+        ).all()
+    for job_id in job_ids:
+        try:
+            settle_stopped_claim(job_id)
+            logger.info("Settled the claim of stopped job %s", job_id)
+        except Exception:
+            logger.exception("Settling the claim of stopped job %s failed", job_id)

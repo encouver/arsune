@@ -70,6 +70,10 @@ DRY_REASON = (
     "Funding from another chain needs live settlement on NEAR Intents. This Arsune runs in "
     "dry mode, where no real money can arrive. Use simulated funding instead."
 )
+ESCROW_REASON = (
+    "Funding from another chain needs live settlement on NEAR Intents. This Arsune runs in "
+    "escrow mode, where funds go to the escrow contract. Use a signed deposit instead."
+)
 OFFLINE_REASON = (
     "The 1Click API cannot be reached from this Arsune server, so funding from another chain "
     "is unavailable right now."
@@ -170,10 +174,14 @@ def find_token(asset_id: str) -> dict | None:
     return next((t for t in tokens() if t["asset_id"] == asset_id), None)
 
 
+def unavailable_reason() -> str:
+    return ESCROW_REASON if settings.settlement_mode == "escrow" else DRY_REASON
+
+
 def availability() -> dict:
     """Whether the owner page can offer funding from another chain, and why not."""
     if settings.settlement_mode != "near_intents":
-        return {"available": False, "reason": DRY_REASON, "tokens": []}
+        return {"available": False, "reason": unavailable_reason(), "tokens": []}
     try:
         items = tokens()
     except OneClickError:

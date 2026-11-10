@@ -93,6 +93,20 @@ def fee_amount(bounty):
     return fee_for(bounty.reward_amount, bounty.fee_bps)
 
 
+def require_one_transfer(amount):
+    """near_intents moves money in single transfers of at most the payment cap.
+
+    The check runs before any ledger row, so a refused fund_id stays unused.
+    """
+    cap = settings.max_payment_amount
+    if settlement.settlement_mode() == "near_intents" and amount > cap:
+        raise HTTPException(
+            422,
+            f"One funding transfer can be at most {cap} token units "
+            "(ARSUNE_MAX_PAYMENT_AMOUNT). Split the funding into smaller transfers.",
+        )
+
+
 def settlement_view():
     try:
         return settlement.settlement_info()
@@ -420,6 +434,7 @@ async def transfer_in(signed, *, sender, amount, memo, msg=None):
 
 async def fund_bounty(bounty_id, request: FundBounty):
     require_account(request.sender, "sender")
+    require_one_transfer(request.amount)
     entry_id, memo = request.fund_id, f"arsune:fund:{request.fund_id}"
     with Session() as session:
         find_bounty(session, bounty_id)
@@ -504,8 +519,15 @@ async def create_claim(bounty_id, request: CreateClaim):
         bounty = find_bounty(session, bounty_id, lock=True)
         if bounty.status != "open":
             raise HTTPException(409, "The bounty is not open.")
-        if bounty.budget_amount < bounty.reward_amount + fee_amount(bounty):
-            raise HTTPException(409, "The bounty budget cannot pay another reward.")
+        if not budget.pays_one_reward(bounty):
+            # A decision that spends the budget closes the bounty, so this one is not funded yet.
+            raise HTTPException(
+                409,
+                f"The bounty is not funded yet: its budget of {bounty.budget_amount} token "
+                f"units cannot pay one reward and its fee "
+                f"({bounty.reward_amount + fee_amount(bounty)} token units). "
+                "The owner must add funds first.",
+            )
         unresolved = session.scalar(
             select(func.count())
             .select_from(Claim)

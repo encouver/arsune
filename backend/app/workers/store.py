@@ -2,11 +2,11 @@ import hashlib
 import json
 from datetime import timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from app.core.config import settings
 from app.core.db import Session
-from app.core.models import Attempt, Claim, Event, Job, PendingAction, Record, utcnow
+from app.core.models import Attempt, Event, Job, PendingAction, Record, utcnow
 
 
 class LeaseLost(Exception):
@@ -17,23 +17,27 @@ def locked_job(session, job_id):
     return session.scalar(select(Job).where(Job.id == job_id).with_for_update())
 
 
-def hold_unsettled_claim(session, job):
-    """A failed claim job leaves money unsettled; hold it for review instead of guessing."""
-    if job.kind != "claim":
-        return
-    session.execute(
-        update(Claim)
-        .where(
-            Claim.job_id == job.id,
-            Claim.settled_at.is_(None),
-            Claim.status != "needs_review",
-        )
-        .values(
-            status="needs_review",
-            settlement_note="The check job stopped before settlement. The bond is held.",
-            updated_at=utcnow(),
-        )
-    )
+def out_of_time(job, now):
+    """True when a started job passed its deadline, or its last attempt lost its lease.
+
+    The deadline starts when a worker first takes the job, so time in the queue never counts.
+    """
+    if not job.generation:
+        return False
+    lease_over = not job.lease_until or job.lease_until <= now
+    return now >= job.deadline or (job.generation >= settings.max_attempts and lease_over)
+
+
+def fail_job(session, job, now):
+    """Stop a job at its limit. The coordinator settles a stopped claim job (bounty.recovery)."""
+    job.status, job.error = "failed", "The job reached its time or attempt limit."
+    job.updated_at, job.lease_until = now, None
+    job.progress = {"stage": "failed", "message": job.error}
+    session.query(PendingAction).filter_by(job_id=job.id).delete()
+    if job.generation:
+        previous = session.get(Attempt, f"{job.id}:{job.generation}")
+        if previous:
+            previous.status, previous.finished_at = "failed", now
 
 
 def require_claim(job, generation):
@@ -55,21 +59,16 @@ def claim(job_id):
         now = utcnow()
         if job.status == "running" and job.lease_until and job.lease_until > now:
             return None
-        if now >= job.deadline or job.generation >= settings.max_attempts:
-            job.status, job.error = "failed", "The job reached its time or attempt limit."
-            job.updated_at, job.lease_until = now, None
-            job.progress = {"stage": "failed", "message": job.error}
-            session.query(PendingAction).filter_by(job_id=job_id).delete()
-            if job.generation:
-                previous = session.get(Attempt, f"{job.id}:{job.generation}")
-                if previous:
-                    previous.status, previous.finished_at = "failed", now
-            hold_unsettled_claim(session, job)
+        if out_of_time(job, now):
+            fail_job(session, job, now)
             return None
         if job.generation:
             previous = session.get(Attempt, f"{job.id}:{job.generation}")
             if previous:
                 previous.status, previous.finished_at = "expired", now
+        else:
+            # The run time starts now: a job that waited in a busy queue has used none of it.
+            job.deadline = now + timedelta(seconds=settings.job_deadline_seconds)
         job.generation += 1
         job.status, job.updated_at = "running", now
         job.lease_until = now + timedelta(seconds=settings.lease_seconds)
@@ -159,6 +158,4 @@ def finish(job_id, generation, report=None, error=None):
         attempt.status, attempt.finished_at = job.status, utcnow()
         if report:
             persist_records(session, job_id, report)
-        if error:
-            hold_unsettled_claim(session, job)
         session.query(PendingAction).filter_by(job_id=job_id).delete()

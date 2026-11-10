@@ -16,11 +16,12 @@ from app import verify
 from app.bounty import reputation, settlement
 from app.core.config import settings
 from app.core.db import Session
-from app.core.models import Bounty, Job
+from app.core.models import Bounty, Job, utcnow
 from app.main import app
 from app.settlement import escrow, near_intents
 from app.settlement.base import SettlementError
 from app.settlement.near_tx import OutcomeUnknown, generate_key
+from app.workers import coordinator, store
 from app.workers.tasks import scan
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
@@ -232,8 +233,8 @@ def open_bounty(client, site, **terms):
     return response.json()
 
 
-def claim(client, bounty, hunter, result, scout=None, bond=BOND):
-    """Submit an overflow claim on its own page, then decide it with a seeded check result."""
+def submit_claim(client, bounty, hunter, scout=None, bond=BOND):
+    """Submit an overflow claim on its own page and return the queued claim."""
     claim_id = str(uuid4())
     url = f"{bounty['origin']}/p/{claim_id}"  # a page of its own, so no claim is a duplicate
     share = (scout["account"], scout["share_bps"]) if scout else None
@@ -252,7 +253,12 @@ def claim(client, bounty, hunter, result, scout=None, bond=BOND):
         payload["scout"] = scout
     response = client.post(f"/api/bounties/{bounty['id']}/claims", json=payload)
     assert response.status_code == 202, response.text
-    created = response.json()
+    return response.json()
+
+
+def claim(client, bounty, hunter, result, scout=None, bond=BOND):
+    """Submit a claim, then decide it with a seeded check result."""
+    created = submit_claim(client, bounty, hunter, scout, bond)
     seed_result(created["job_id"], result)
     scan.run(created["job_id"])
     return claim_view(client, bounty, created)
@@ -266,6 +272,10 @@ def test_escrow_mode_opens_funds_bonds_and_rules_on_the_escrow(client, site, cha
     info = client.get("/api/settlement").json()
     assert info["mode"] == "escrow" and info["escrow_contract"] == ESCROW
     assert info["arsune_account"] == ARSUNE and info["salt"] == "252812b3"
+    options = client.get("/api/funding/options").json()
+    assert (options["settlement_mode"], options["escrow_contract"]) == ("escrow", ESCROW)
+    assert not options["crosschain"]["available"]
+    assert "escrow mode" in options["crosschain"]["reason"]
     high_fee = {
         "url": site + "/faulty/",
         "owner_account": "owner.testnet",
@@ -364,6 +374,32 @@ def test_escrow_rule_is_sent_once_and_disagreements_go_to_review(client, site, c
     assert "The escrow ruled unfunded" in other["settlement_note"]
     assert rows(other)["reward_out"]["status"] == "failed"
     assert rows(other)["reward_out"]["tx_id"] is None
+
+
+def test_a_stopped_claim_job_gets_an_unverified_ruling_on_the_escrow(client, site, chain):
+    bounty = open_bounty(client, site)
+    created = submit_claim(client, bounty, "hunter-a.testnet")
+    assert store.claim(created["job_id"])  # a worker took the job, then stopped
+    with Session.begin() as session:
+        job = session.get(Job, created["job_id"])
+        job.deadline = job.lease_until = utcnow() - timedelta(seconds=1)
+    coordinator.tick()
+    view = claim_view(client, bounty, created)
+    assert (view["status"], view["outcome"], view["job_status"]) == (
+        "unverified",
+        "unverified",
+        "failed",
+    ), view
+    assert view["settled_at"]
+    record = chain.claims[created["id"]]
+    assert (record["outcome"], record["evidence_hash"]) == ("unverified", view["evidence_hash"])
+    refund = rows(view)["bond_refund"]
+    assert refund["amount"] == BOND and refund["tx_id"].startswith("EscrowTx")
+    bundle = json.loads(client.get(view["evidence_url"]).content)
+    assert bundle["ruling"]["outcome"] == "unverified"
+    assert "time or attempt limit" in bundle["check"]["reason"]
+    coordinator.tick()
+    assert chain.sent.count("rule") == 1
 
 
 def test_escrow_bond_has_no_near_intents_cap_and_withdraw_closes_for_good(
