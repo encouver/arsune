@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     model_api_key: str = ""
     model_name: str = ""
     model_max_output_tokens: int = Field(default=1800, ge=1, le=8000)
+    model_temperature: float | None = Field(default=None, ge=0, le=2)
     model_input_usd_per_million: float | None = None
     model_output_usd_per_million: float | None = None
     model_cost_ceiling_usd: float = Field(default=0.25, gt=0, le=10)

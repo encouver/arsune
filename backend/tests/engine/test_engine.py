@@ -175,6 +175,54 @@ async def test_provider_transport_and_budget(monkeypatch):
         await generate_candidates([], transport=httpx.MockTransport(respond))
 
 
+def _provider_settings(monkeypatch):
+    from app.core.config import settings
+
+    for key, value in {
+        "model_base_url": "https://model.test/v1",
+        "model_api_key": "server-secret",
+        "model_name": "test-model",
+        "model_max_output_tokens": 100,
+        "model_cost_ceiling_usd": 0.25,
+        "model_input_usd_per_million": 1.0,
+        "model_output_usd_per_million": 1.0,
+    }.items():
+        monkeypatch.setattr(settings, key, value)
+    return settings
+
+
+@pytest.mark.parametrize("temperature", [None, 0, 1.0])
+async def test_provider_temperature_only_when_set(monkeypatch, temperature):
+    settings = _provider_settings(monkeypatch)
+    monkeypatch.setattr(settings, "model_temperature", temperature)
+    bodies = []
+
+    def respond(request):
+        bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200, json={"choices": [{"message": {"content": '{"candidates": []}'}}]}
+        )
+
+    await generate_candidates([], transport=httpx.MockTransport(respond))
+    if temperature is None:
+        assert "temperature" not in bodies[0]
+    else:
+        assert bodies[0]["temperature"] == temperature
+
+
+async def test_provider_cut_off_answer(monkeypatch):
+    _provider_settings(monkeypatch)
+
+    def respond(request):
+        return httpx.Response(
+            200,
+            json={"choices": [{"finish_reason": "length", "message": {"content": '{"cand'}}]},
+        )
+
+    with pytest.raises(ValueError, match="cut off"):
+        await generate_candidates([], transport=httpx.MockTransport(respond))
+
+
 @pytest.mark.parametrize("failure", ["invalid-json", "malformed", "timeout"])
 async def test_provider_failures(monkeypatch, failure):
     from app.core.config import settings

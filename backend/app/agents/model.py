@@ -59,6 +59,8 @@ def validate_config(config):
 async def generate_candidates(
     observations: list[dict], transport=None, *, role=None
 ) -> tuple[list[dict], dict]:
+    from app.core.config import settings
+
     config = model_config()
     cap, ceiling, input_rate, output_rate = validate_config(config)
     if role is not None:
@@ -87,21 +89,24 @@ async def generate_candidates(
     base = config["BASE_URL"].rstrip("/")
     if not base.startswith(("http://", "https://")):
         raise ModelConfigurationError("The configured model endpoint must use HTTP or HTTPS.")
+    request_body = {
+        "model": config["NAME"],
+        "max_tokens": cap,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": payload},
+        ],
+        "response_format": {"type": "json_object"},
+    }
+    # Some models accept only their default temperature, so send one only when configured.
+    if settings.model_temperature is not None:
+        request_body["temperature"] = settings.model_temperature
     async with httpx.AsyncClient(timeout=30, follow_redirects=False, transport=transport) as client:  # noqa: SIM117
         async with client.stream(
             "POST",
             f"{base}/chat/completions",
             headers={"Authorization": f"Bearer {config['API_KEY']}"},
-            json={
-                "model": config["NAME"],
-                "max_tokens": cap,
-                "temperature": 0,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": payload},
-                ],
-                "response_format": {"type": "json_object"},
-            },
+            json=request_body,
         ) as response:
             response.raise_for_status()
             body = bytearray()
@@ -109,7 +114,10 @@ async def generate_candidates(
                 body.extend(chunk)
                 if len(body) > 131072:
                     raise ValueError("Model response exceeds the size limit.")
-    content = json.loads(body)["choices"][0]["message"]["content"]
+    choice = json.loads(body)["choices"][0]
+    if choice.get("finish_reason") == "length":
+        raise ValueError("the answer was cut off (max_tokens)")
+    content = choice["message"]["content"]
     candidates = json.loads(content)["candidates"]
     if not isinstance(candidates, list) or len(candidates) > 20:
         raise ValueError("Model candidates must be a list of at most 20 items.")
