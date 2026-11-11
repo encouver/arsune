@@ -27,9 +27,30 @@ def get_bounty(bounty_id: str):
     return bounties.get_bounty(bounty_id)
 
 
+def accepted_while_checking(response: Response, site_check: dict | None):
+    # 202: the site check runs in the worker; read the bounty or the check again for its result.
+    if site_check and site_check["state"] == "checking":
+        response.status_code = 202
+
+
 @router.post("/bounties/{bounty_id}/verify")
-async def verify_bounty(bounty_id: str):
-    return await bounties.verify_bounty(bounty_id)
+async def verify_bounty(bounty_id: str, response: Response):
+    bounty = await bounties.verify_bounty(bounty_id)
+    if bounty["status"] != "open":
+        accepted_while_checking(response, bounty["site_check"])
+    return bounty
+
+
+@router.post("/bounties/{bounty_id}/site-check")
+def request_site_check(bounty_id: str, response: Response):
+    detail = bounties.request_site_check(bounty_id)
+    accepted_while_checking(response, detail["site_check"])
+    return detail
+
+
+@router.get("/bounties/{bounty_id}/site-check")
+def get_site_check(bounty_id: str):
+    return bounties.get_site_check(bounty_id)
 
 
 @router.post("/bounties/{bounty_id}/fund")

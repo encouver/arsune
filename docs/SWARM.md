@@ -99,7 +99,7 @@ The request is `POST /api/bounties/{id}/claims`. Its fields are `claim_id`, `hun
 | Response | Hunter action |
 | --- | --- |
 | 202 | The claim is accepted. |
-| 409 or 429 | Keeps the finding and waits. |
+| 409 or 429 | Keeps the finding and waits. A paused bounty stops the whole swarm (see [Site check](#site-check)). |
 | 402 | The bond failed. The hunter reads its balance again and gives up after 3 failures. |
 | 422 | Drops the finding. |
 | 504 | Counts the claim. Arsune holds it for review. |
@@ -361,7 +361,8 @@ Simulation needs no money and no model. It can run on a judge's machine.
   10 scouts (`links=3,mobile=2,prices=2,images=1,errors=1,hasty=1`). The specialists follow
   the demo shop's 66 bugs: 20 links, 15 overflows, 15 prices, 10 images and 6 page errors.
 - With `--setup`, a fresh implicit owner creates a bounty on the demo site, publishes the proof
-  token through the demo's `POST /bounty-proof-control`, and verifies the bounty.
+  token through the demo's `POST /bounty-proof-control`, and verifies the bounty. The swarm then
+  waits until Arsune's site check opens the bounty. The demo shop passes the check.
 - The owner then funds the bounty with a signed transfer (memo `arsune:fund:{fund_id}`).
   Defaults: reward 1 USDC, bond 0.1 USDC, budget 20 USDC, fee 10%.
 
@@ -387,13 +388,45 @@ Live mode moves real USDC on NEAR mainnet.
 uv run python -m swarm live --setup --i-approve-mainnet --hunters 4 --scouts 1
 ```
 
+### Site check
+
+Agents spend time, bonds and model tokens. Arsune's checker must be able to read the site, or
+every claim is `unverified`. The swarm therefore asks Arsune before it starts an agent:
+
+1. The bounty must be `open`. A paused or closed bounty stops the run at start, with Arsune's
+   reason. `--bounty-id` on a bounty that is not open fails at start.
+2. The runner calls `POST /api/bounties/{id}/site-check`. Arsune's worker loads the bounty URL
+   at 1280 and 390 pixels with the checker's own browser code. The runner reads
+   `GET /api/bounties/{id}/site-check` until the state is `passed` or `failed`
+   (`site_check_timeout`, 180 s). Arsune keeps a result for 5 minutes, so the check that opened
+   a `--setup` bounty is used again.
+3. `passed`: the log shows "Site check passed: Arsune loaded <url> completely at 1280 and 390
+   pixels wide." Then the agents start.
+4. `failed`: no agent starts and no model is called. The log shows "No agent starts: Arsune
+   cannot check this site: ..." with what did not load. `/state` has the result in
+   `site_check`, and the board shows it. The run exits with status 2. With `--hold`, the
+   swarm keeps `/state` served instead.
+
+An external hunter agent can make the same call before it spends tokens. The check runs in
+Arsune's worker queue, so `POST` answers 202 first; read the check again until it has a result.
+
+During a race, Arsune pauses a bounty after 5 claims in a row that its own limits left
+unverified (docs/ARCHITECTURE.md, "Pause"). The swarm sees the pause on its next read of the
+bounty, about one second later. It logs "The bounty is paused: Arsune cannot check this site —
+agents stop to save tokens." and then Arsune's reason. The runner stops the model client before
+the agents see the stop, so no AI agent makes a model call after that line. Arsune still
+settles the claims that it took before the pause.
+
 ### Stop conditions and summary
 
 The swarm stops at the first of these:
 
 - The time limit (`--duration`, default 300 s).
-- The bounty is no longer `open` (for example closed because the budget is spent).
+- The bounty is no longer `open` (for example closed because the budget is spent, or paused
+  because Arsune cannot check the site).
 - Every agent is broke or done.
+
+At the stop, AI agents make no more model calls.
 
 The swarm then waits up to `--settle-timeout` (120 s) for Arsune to settle the open claims.
 It prints a summary: claims, proven, rejected, duplicates, unverified, in review, payouts to
@@ -431,8 +464,13 @@ read-only JSON endpoint with `Access-Control-Allow-Origin: *`. The board reads i
  "log": [{"at": "2026-11-09T20:50:24+00:00", "agent": "hunter-007",
           "text": "hunter-007 lost its bond: the checker could not reproduce the mobile overflow on /shop/about (…)."}],
  "ai": {"agents": 7, "calls": 64, "usd_spent": 0.0412, "budget_usd": 0.5,
-        "model": "openai/gpt-5.6-luna"}}
+        "model": "openai/gpt-5.6-luna"},
+ "site_check": {"state": "passed", "reason": "Arsune loaded … completely at 1280 and 390 pixels wide.", "…": "…"}}
 ```
+
+`site_check` is Arsune's site check from before the agents started (see
+[Site check](#site-check)), or `null` before the runner has one. When its `state` is `failed`,
+no agent started, and the board shows the reason.
 
 Agent fields:
 

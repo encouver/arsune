@@ -32,6 +32,7 @@
 .bo-how li::before { content: counter(how); font-family: var(--serif); font-size: 20px; color: var(--green); line-height: 1.2; }
 .bo-how strong { display: block; }
 .bo-steps { display: grid; gap: 14px; }
+.bo-paused { margin-bottom: 14px; }
 .bo-step { display: grid; grid-template-columns: 42px minmax(0, 1fr); gap: 14px; }
 .bo-step-n { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-family: var(--serif); font-size: 18px; background: #f1f5e9; border: 1px solid #e4eadb; color: #6f8459; }
 .bo-step[data-step="done"] .bo-step-n { background: var(--lime); border-color: #b6d36a; color: #25400f; }

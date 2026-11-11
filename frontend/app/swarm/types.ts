@@ -49,6 +49,8 @@ export type SwarmState = {
   tips: Tip[];
   log: { at: string; agent: string; text: string }[];
   ai?: AiUsage;
+  // Arsune's site check before any agent starts; "failed" means that no agent started.
+  site_check?: { state: string; reason: string | null } | null;
 };
 
 export type Claim = {
@@ -93,6 +95,7 @@ export type Bounty = {
   id: string;
   url: string;
   status: string;
+  paused_reason?: string | null;
   reward_amount: number;
   bond_amount: number;
   fee_bps: number;

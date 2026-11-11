@@ -58,6 +58,10 @@ def scan(job_id):
                     return await check_claim(
                         job_id, generation, claim["checkpoint"], checkpoint, output
                     )
+                if claim["kind"] == "site_check":
+                    from app.bounty.site_check import check_site
+
+                    return await check_site(claim["url"], claim["checkpoint"], checkpoint, output)
                 if claim["kind"] == "incident":
                     from app.incidents import run_incident, validate_bundle
                     from app.v1.services.incidents import load_sources
@@ -94,6 +98,11 @@ def scan(job_id):
 
             # Payments are synchronous and run outside the browser event loop.
             report = settle_claim(job_id, generation, report)
+        elif claim["kind"] == "site_check":
+            from app.bounty.site_check import open_checked_bounty
+
+            # Opening an escrow bounty is a synchronous transaction, like a payment.
+            report = open_checked_bounty(job_id, generation, report)
         store.finish(job_id, generation, report=report)
     except store.LeaseLost:
         return

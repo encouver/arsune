@@ -222,6 +222,7 @@ async function mock(
     mode?: Mode;
     swarm?: unknown | null;
     fail?: () => boolean;
+    bounty?: Record<string, unknown>;
   } = {},
 ) {
   const mode = opts.mode ?? "dry";
@@ -238,7 +239,7 @@ async function mock(
   );
   await page.route("**/api/bounties/*", (route) => {
     if (opts.fail?.()) return route.fulfill({ status: 500, body: "down" });
-    return route.fulfill({ json: bounty(mode) });
+    return route.fulfill({ json: { ...bounty(mode), ...opts.bounty } });
   });
 }
 
@@ -626,4 +627,54 @@ test("the AI block stays hidden when no AI agent runs", async ({ page }) => {
   await expect(page.getByTestId("agent-tile")).toHaveCount(12);
   await expect(page.getByTestId("ai-usage")).toHaveCount(0);
   await expect(page.getByTestId("ai-badge")).toHaveCount(0);
+});
+
+test("a failed site check says that no agent started, and why", async ({
+  page,
+}) => {
+  const reason =
+    "Arsune cannot check this site: a fresh load of https://shop.example/ did not complete. " +
+    "Script https://cdn.example/app.js: Browser policy blocked script-src-elem.";
+  await mock(page, {
+    swarm: {
+      ...swarm(0),
+      finished: true,
+      site_check: { state: "failed", reason },
+      log: [
+        {
+          at: "2026-11-09T10:00:05Z",
+          agent: "swarm",
+          text: `No agent starts: ${reason}`,
+        },
+      ],
+    },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("site-check-banner")).toHaveText(
+    `No agent started: ${reason}`,
+  );
+  await expect(page.getByTestId("activity-log")).toContainText(
+    "No agent starts: Arsune cannot check this site",
+  );
+});
+
+test("a paused bounty shows the stop line and Arsune's reason", async ({
+  page,
+}) => {
+  const reason =
+    "Arsune cannot check this site: the last 5 claims were unverified because Arsune could " +
+    "not load their pages completely.";
+  const stop =
+    "The bounty is paused: Arsune cannot check this site — agents stop to save tokens.";
+  await mock(page, {
+    bounty: { status: "paused", paused_reason: reason },
+    swarm: {
+      ...swarm(),
+      log: [{ at: "2026-11-09T10:00:09Z", agent: "swarm", text: stop }],
+    },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("paused-banner")).toContainText(reason);
+  await expect(page.getByTestId("activity-log")).toContainText(stop);
+  await expect(page.getByTestId("site-check-banner")).toHaveCount(0);
 });

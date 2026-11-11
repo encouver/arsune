@@ -64,6 +64,8 @@ function makeBounty(mode: Mode, url: string) {
     owner_account: "demo-owner.near",
     status: "pending_proof",
     closed_reason: null as string | null,
+    paused_reason: null as string | null,
+    site_check: null as Record<string, unknown> | null,
     reward_amount: 1_000_000,
     bond_amount: 100_000,
     fee_bps: 1000,
@@ -86,14 +88,47 @@ type Api = {
   funding: Record<string, unknown>[];
   verifyError?: string;
   quoteError?: string;
+  // What Arsune's site check cannot load; unset, the check passes.
+  siteProblem?: string;
+  readsUntilChecked: number;
 };
+
+const UNLOADED =
+  "Arsune cannot check this site: a fresh load of http://127.0.0.1:8541/shop/ did not complete. " +
+  "Script https://cdn.example/app.js: Private and local network destinations are not permitted.";
+
+// Arsune's worker runs the site check; here it ends on the third read of the bounty.
+function finishSiteCheck(state: Api) {
+  const b = state.bounty;
+  if (b.site_check?.state !== "checking" || --state.readsUntilChecked > 0)
+    return;
+  if (state.siteProblem) {
+    b.site_check = {
+      ...b.site_check,
+      state: "failed",
+      reason: state.siteProblem,
+    };
+    return;
+  }
+  b.site_check = {
+    ...b.site_check,
+    state: "passed",
+    reason: `Arsune loaded ${b.url} completely at 1280 and 390 pixels wide.`,
+  };
+  Object.assign(b, { status: "open", paused_reason: null });
+}
 
 async function mockApi(
   page: Page,
   mode: Mode,
   url = "http://127.0.0.1:8541/shop/",
 ): Promise<Api> {
-  const state: Api = { bounty: makeBounty(mode, url), calls: [], funding: [] };
+  const state: Api = {
+    bounty: makeBounty(mode, url),
+    calls: [],
+    funding: [],
+    readsUntilChecked: 0,
+  };
   const opts = options(mode);
   await page.route("**/api/**", async (route: Route) => {
     const req = route.request();
@@ -115,13 +150,26 @@ async function mockApi(
       });
       return json(b, 201);
     }
-    if (path === `/api/bounties/${ID}`) return json(b);
+    if (path === `/api/bounties/${ID}`) {
+      finishSiteCheck(state);
+      return json(b);
+    }
     if (path === `/api/bounties/${ID}/demo-proof`)
       return json({ published: true, proof_url: b.proof_url });
     if (path === `/api/bounties/${ID}/verify`) {
       if (state.verifyError) return json({ detail: state.verifyError }, 409);
-      b.status = "open";
-      return json(b);
+      b.site_check = {
+        job_id: `j${state.calls.length}`,
+        state: "checking",
+        url: b.url,
+        reason: `Arsune is loading ${b.url} in a fresh browser.`,
+        problems: [],
+        note: null,
+        checked_at: null,
+        fresh_until: null,
+      };
+      state.readsUntilChecked = 3;
+      return json(b, 202);
     }
     if (path === `/api/bounties/${ID}/fund-simulated`) {
       b.budget_amount += body.amount;
@@ -285,8 +333,22 @@ test("dry flow: demo proof, simulated funding, then the live board", async ({
   await page
     .getByRole("button", { name: "Demo site: set proof automatically" })
     .click();
+  // The proof is read; Arsune then loads the site before the bounty opens.
+  await expect(page.getByTestId("site-check")).toHaveAttribute(
+    "data-state",
+    "checking",
+  );
+  await expect(page.getByTestId("step-2-status")).toHaveText(
+    "Checking your site",
+  );
+  await expect(page.getByTestId("bounty-status")).toHaveText(
+    "Waiting for proof",
+  );
   await expect(page.getByTestId("proof-done")).toContainText(
     "Ownership proven",
+  );
+  await expect(page.getByTestId("site-check")).toContainText(
+    "completely at 1280 and 390 pixels wide",
   );
   await expect(page.getByTestId("step-2-status")).toHaveText("Done");
   await expect(page.getByTestId("bounty-status")).toHaveText("Open");
@@ -373,6 +435,60 @@ test("manual proof gives exact instructions and shows the checker's refusal", as
   api.verifyError = undefined;
   await page.getByRole("button", { name: "Check ownership" }).click();
   await expect(page.getByTestId("proof-done")).toBeVisible();
+});
+
+test("a site that Arsune cannot load completely does not open, and the owner checks again", async ({
+  page,
+}) => {
+  const api = await mockApi(page, "dry", "https://shop.example.com/");
+  api.siteProblem = UNLOADED;
+  await page.goto(`/bounties/${ID}`);
+  await page.getByRole("button", { name: "Check ownership" }).click();
+  await expect(page.getByTestId("site-check")).toHaveAttribute(
+    "data-state",
+    "failed",
+  );
+  await expect(page.getByTestId("site-check")).toContainText(UNLOADED);
+  await expect(page.getByTestId("step-2-status")).toHaveText(
+    "Site check failed",
+  );
+  await expect(page.getByTestId("bounty-status")).toHaveText(
+    "Waiting for proof",
+  );
+  await expect(page.getByTestId("step-3-status")).toHaveText("After the proof");
+
+  api.siteProblem = undefined;
+  await page.getByRole("button", { name: "Check again" }).click();
+  await expect(page.getByTestId("proof-done")).toBeVisible();
+  await expect(page.getByTestId("bounty-status")).toHaveText("Open");
+});
+
+test("a paused bounty shows Arsune's reason and resumes after a passing site check", async ({
+  page,
+}) => {
+  const api = await mockApi(page, "dry");
+  const reason =
+    "Arsune cannot check this site: the last 5 claims were unverified because Arsune could " +
+    "not load their pages completely. Last claim: Script https://cdn.example/app.js.";
+  Object.assign(api.bounty, {
+    status: "paused",
+    paused_reason: reason,
+    budget_amount: 10_000_000,
+  });
+  await page.goto(`/bounties/${ID}`);
+  await expect(page.getByTestId("bounty-status")).toHaveText("Paused");
+  await expect(page.getByTestId("paused-banner")).toContainText(
+    "takes no new claims",
+  );
+  await expect(page.getByTestId("paused-banner")).toContainText(reason);
+  await page.getByRole("button", { name: "Check the site and resume" }).click();
+  await expect(
+    page.getByTestId("paused-banner").getByTestId("site-check"),
+  ).toHaveAttribute("data-state", "checking");
+  await expect(page.getByTestId("bounty-status")).toHaveText("Open");
+  await expect(page.getByTestId("paused-banner")).toHaveCount(0);
+  const posts = api.calls.filter((c) => c.method === "POST").map((c) => c.path);
+  expect(posts).toEqual([`/api/bounties/${ID}/verify`]);
 });
 
 test("live mode: 1Click deposit address with copy and live status", async ({

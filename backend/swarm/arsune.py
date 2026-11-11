@@ -44,7 +44,15 @@ class ArsuneApi:
         return await self._call("POST", "/api/bounties", body, ok=(201,))
 
     async def verify_bounty(self, bounty_id: str) -> dict:
-        return await self._call("POST", f"/api/bounties/{bounty_id}/verify")
+        """202 while Arsune checks the site; the bounty opens when the check passes."""
+        return await self._call("POST", f"/api/bounties/{bounty_id}/verify", ok=(200, 202))
+
+    async def request_site_check(self, bounty_id: str) -> dict:
+        """Can Arsune's checker load the site now? Arsune reuses a result for a few minutes."""
+        return await self._call("POST", f"/api/bounties/{bounty_id}/site-check", ok=(200, 202))
+
+    async def site_check(self, bounty_id: str) -> dict:
+        return await self._call("GET", f"/api/bounties/{bounty_id}/site-check")
 
     async def fund_bounty(self, bounty_id: str, body: dict) -> dict:
         return await self._call("POST", f"/api/bounties/{bounty_id}/fund", body)

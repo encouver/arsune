@@ -12,7 +12,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from app.bounty import budget, evidence, settlement
+from app.bounty import budget, evidence, settlement, site_check
 from app.bounty.claims import fee_for, final_fingerprint
 from app.browser.checker import check_candidate
 from app.browser.observations import observe_page
@@ -278,6 +278,8 @@ def decide(job_id, generation, result, mode):
         claim.evidence = evidence_summary(result)
         claim.updated_at = now
         publish_evidence(bounty, claim, result, now)
+        # A queued claim is still settled after a pause; only new claims are refused.
+        site_check.count_claim(bounty, outcome, result, now)
         # The escrow moves the bond only when it records the ruling (rule_on_escrow).
         if outcome == "rejected" and mode != "escrow":
             forfeit_bond(session, bounty, claim, mode, now)

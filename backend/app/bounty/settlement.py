@@ -3,10 +3,12 @@
 import time
 from contextlib import contextmanager
 from threading import Lock
+from uuid import uuid4
 
 from sqlalchemy import text
 
 from app.core.config import settings
+from app.core.models import LedgerEntry
 from app.settlement.base import Settlement
 from app.settlement.dry import DRY_ACCOUNT, DRY_SALT, DrySettlement
 
@@ -156,6 +158,21 @@ def open_on_escrow(bounty) -> str | None:
     port = get_settlement()
     with relayer_lock(port.mode):
         return port.open_bounty(port.terms(bounty))
+
+
+def escrow_row(bounty, kind, amount, account, tx_id):
+    """A ledger row for an escrow call that is not a claim payment."""
+    return LedgerEntry(
+        id=str(uuid4()),
+        bounty_id=bounty.id,
+        kind=kind,
+        amount=amount,
+        account=account,
+        memo=f"arsune:{kind}:{bounty.id}",
+        tx_id=tx_id,
+        settlement_mode="escrow",
+        status="completed",
+    )
 
 
 def rule(claim_id: str, outcome: str, evidence_hash: str):

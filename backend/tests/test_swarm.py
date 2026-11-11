@@ -53,7 +53,9 @@ from swarm.market import (
 from swarm.runner import (
     DEFAULT_MIX,
     DEFAULT_SCOUT_MIX,
+    PAUSED,
     Config,
+    SiteUncheckable,
     SwarmError,
     assign,
     check_mode,
@@ -82,6 +84,7 @@ STATE_KEYS = {
     "tips",
     "log",
     "ai",
+    "site_check",
 }
 AI_KEYS = {"agents", "calls", "usd_spent", "budget_usd", "model"}
 AGENT_KEYS = {
@@ -469,14 +472,47 @@ def site_handler(request: httpx.Request) -> httpx.Response:
     return httpx.Response(404, html="<h1>Missing</h1>")
 
 
+UNCHECKABLE = (
+    "Arsune cannot check this site: a fresh load of http://site.test/site/ did not complete. "
+    "Script http://cdn.test/app.js: Browser policy blocked script-src-elem."
+)
+PAUSED_REASON = (
+    "Arsune cannot check this site: the last 5 claims were unverified because Arsune could not "
+    "load their pages completely. Last claim: Script http://cdn.test/app.js: blocked."
+)
+
+
 class FakeArsune:
     """Arsune's public bounty API in memory. Its checker knows the site's real faults, and
-    the bond follows the hunter's record with Arsune's own tier rule."""
+    the bond follows the hunter's record with Arsune's own tier rule.
 
-    def __init__(self, budget):
+    Its site check runs "in the worker": verify answers 202, and the bounty opens on the next
+    read of the check when the site is `checkable`."""
+
+    def __init__(self, budget, checkable=True):
         self.budget, self.bounty, self.claims, self.ledger = budget, None, [], []
         self.funded = False
         self.quotes = 0
+        self.checkable = checkable
+        self.site_checks = 0  # check results that a client read
+
+    def open_bounty(self, reward=1_000_000, bond=100_000):
+        """A bounty that is open already, for --bounty-id runs."""
+        self.bounty = {
+            "id": "b1",
+            "url": ORIGIN + "/site/",
+            "status": "open",
+            "reward_amount": reward,
+            "bond_amount": bond,
+        }
+
+    def site_check(self):
+        self.site_checks += 1
+        if self.checkable and self.bounty["status"] == "pending_proof":
+            self.bounty["status"] = "open"
+        if self.checkable:
+            return {"state": "passed", "reason": "Arsune loaded the site completely."}
+        return {"state": "failed", "reason": UNCHECKABLE, "problems": [UNCHECKABLE[90:]]}
 
     def quote(self, hunter):
         decided = Counter(
@@ -542,8 +578,11 @@ class FakeArsune:
             self.bounty["url"] = body["url"]
             return httpx.Response(201, json=self.bounty)
         if path == "/api/bounties/b1/verify":
-            self.bounty["status"] = "open"
-            return httpx.Response(200, json=self.bounty)
+            return httpx.Response(202, json={**self.bounty, "site_check": {"state": "checking"}})
+        if path == "/api/bounties/b1/site-check":
+            if method == "POST" and self.bounty["status"] != "open":
+                return httpx.Response(409, json={"detail": "The bounty is not open."})
+            return httpx.Response(200, json={"bounty_id": "b1", "site_check": self.site_check()})
         if path == "/api/bounties/b1/fund":
             memo = f"arsune:fund:{body['fund_id']}"
             verify_signed_transfer(
@@ -577,6 +616,8 @@ class FakeArsune:
         return httpx.Response(404, json={"detail": "Not found"})
 
     def claim(self, body):
+        if self.bounty["status"] == "paused":
+            return httpx.Response(409, json={"detail": f"The bounty is paused: {PAUSED_REASON}"})
         if self.bounty["status"] != "open":
             return httpx.Response(409, json={"detail": "The bounty is not open."})
         hunter = body["hunter_account"]
@@ -651,6 +692,8 @@ async def test_full_simulation_against_the_api_contract():
         60,
     )
     assert arsune.funded
+    # One read after verify opened the bounty; one fresh check came before the agents.
+    assert arsune.site_checks == 2
     outcomes = Counter(c["outcome"] for c in arsune.claims)
     assert outcomes["proven"] == len(REAL) == summary["proven"]
     assert summary["claims"] == len(arsune.claims) == sum(outcomes.values())
@@ -696,6 +739,106 @@ async def test_run_stops_at_the_time_limit_and_settles_open_claims():
     )
     assert summary["open"] == 0 and summary["wall_seconds"] < 10
     assert summary["claims"] == len(arsune.claims) < 4
+
+
+def built_agents(monkeypatch):
+    """Record each call that builds the swarm's agents."""
+    from swarm import runner
+
+    calls, build = [], runner.build_agents
+
+    def recorded(*args):
+        calls.append(args)
+        return build(*args)
+
+    monkeypatch.setattr(runner, "build_agents", recorded)
+    return calls
+
+
+@pytest.mark.parametrize("setup", [True, False])
+async def test_no_agent_starts_and_no_model_is_called_when_arsune_cannot_check_the_site(
+    setup, monkeypatch, capsys
+):
+    arsune, model = FakeArsune(budget=20_000_000, checkable=False), FakeModel(smart_model)
+    if not setup:
+        arsune.open_bounty()  # opened earlier; the site changed since then
+    built = built_agents(monkeypatch)
+    config = run_config(setup=setup, bounty_id="b1", ai_hunters=2, ai_model=AI_MODEL, quiet=False)
+    with pytest.raises(SiteUncheckable, match="Arsune cannot check this site"):
+        await asyncio.wait_for(
+            run(
+                config,
+                httpx.MockTransport(arsune.handler),
+                httpx.MockTransport(site_handler),
+                httpx.MockTransport(model.handler),
+            ),
+            30,
+        )
+    assert built == [] and model.requests == [] and arsune.claims == [] and arsune.quotes == 0
+    assert not arsune.funded  # with --setup the owner does not fund a bounty that stays closed
+    assert f"No agent starts: {UNCHECKABLE}" in capsys.readouterr().out
+
+
+async def test_a_run_on_a_paused_bounty_fails_at_start_with_arsunes_reason():
+    arsune = FakeArsune(budget=20_000_000)
+    arsune.open_bounty()
+    arsune.bounty |= {"status": "paused", "paused_reason": PAUSED_REASON}
+    with pytest.raises(SwarmError, match=f"Bounty b1 is paused, not open: {PAUSED_REASON}"):
+        await run(run_config(setup=False, bounty_id="b1"), httpx.MockTransport(arsune.handler))
+    assert arsune.site_checks == 0
+
+
+async def test_the_swarm_stops_when_the_bounty_pauses_and_makes_no_model_call_after(
+    monkeypatch, capsys
+):
+    async def unmeasured(self, url):
+        return None
+
+    for name in ("page_width", "price_facts", "desktop_look"):
+        monkeypatch.setattr(BrowserPool, name, unmeasured)
+    arsune = FakeArsune(budget=20_000_000)
+
+    def pausing(system, user):
+        # Arsune pauses the bounty while an AI hunter waits for its first answer.
+        arsune.bounty |= {"status": "paused", "paused_reason": PAUSED_REASON}
+        return smart_model(system, user)
+
+    model = FakeModel(pausing)
+    calls_at_halt = []
+    halt = ModelClient.halt
+
+    def recorded(self):
+        calls_at_halt.append(len(model.requests))
+        halt(self)
+
+    monkeypatch.setattr(ModelClient, "halt", recorded)
+    summary = await asyncio.wait_for(
+        run(
+            # Real think time keeps the agents busy until the pause is seen.
+            run_config(hunters=0, scouts=0, ai_hunters=2, ai_model=AI_MODEL, pace=1.0, quiet=False),
+            httpx.MockTransport(arsune.handler),
+            httpx.MockTransport(site_handler),
+            httpx.MockTransport(model.handler),
+        ),
+        60,
+    )
+    log = capsys.readouterr().out
+    assert PAUSED in log and f"Arsune's reason: {PAUSED_REASON}" in log
+    # The AI hunters thought until the pause; after the stop no model call is made.
+    assert calls_at_halt == [len(model.requests)] and len(model.requests) >= 1
+    assert "takes no action" not in log
+    assert summary["claims"] == len(arsune.claims) == 0  # the paused bounty refused the claims
+    assert summary["wall_seconds"] < 10
+
+
+async def test_a_halted_model_client_sends_no_request():
+    model = FakeModel(lambda system, user: '{"claims": []}')
+    client = model.client()
+    client.halt()
+    with pytest.raises(ModelFailure, match="the swarm stopped"):
+        await client.ask("s", "u", 100)
+    assert model.requests == [] and client.budget.calls == 0
+    await client.close()
 
 
 # ---------------------------------------------------------------- reputation bonds

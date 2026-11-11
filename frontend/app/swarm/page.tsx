@@ -404,6 +404,21 @@ export default function SwarmPage() {
             {errors.join(" ")}
           </div>
         )}
+        {swarm?.site_check?.state === "failed" && (
+          <div
+            className="sw-error"
+            role="alert"
+            data-testid="site-check-banner"
+          >
+            No agent started: {swarm.site_check.reason}
+          </div>
+        )}
+        {bounty?.status === "paused" && (
+          <div className="sw-error" role="alert" data-testid="paused-banner">
+            The bounty is paused: Arsune cannot check this site, so agents stop
+            to save tokens. {bounty.paused_reason}
+          </div>
+        )}
         {loaded && !bounty && errors.length === 0 && (
           <div className="notice">
             No bounty found yet. Create one through the API, then reload.

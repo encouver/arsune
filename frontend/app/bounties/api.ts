@@ -48,14 +48,30 @@ export type OwnerClaim = {
   evidence_url: string | null;
 };
 
+// Arsune's answer to "can the checker load this site?". The worker loads the bounty URL at
+// 1280 and 390 pixels; the bounty opens (or resumes) only when the check passes.
+export type SiteCheck = {
+  job_id: string;
+  state: "checking" | "passed" | "failed";
+  url: string;
+  reason: string | null;
+  problems: string[];
+  note: string | null;
+  checked_at: string | null;
+  fresh_until: string | null;
+};
+
 export type OwnerBounty = {
   id: string;
   url: string;
   origin: string;
   owner_account: string;
-  status: "pending_proof" | "open" | "closed" | string;
+  status: "pending_proof" | "open" | "paused" | "closed" | string;
   // "budget_spent" while a bounty is closed because its budget ran out; a top-up reopens it.
   closed_reason: string | null;
+  // Why Arsune paused the bounty: claims that its own limits left unverified.
+  paused_reason: string | null;
+  site_check: SiteCheck | null;
   reward_amount: number;
   bond_amount: number;
   fee_bps: number;

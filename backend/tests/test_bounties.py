@@ -48,6 +48,8 @@ from sqlalchemy import delete, select
 REWARD, BOND, FUND = 1_000_000, 100_000, 5_000_000
 FEE = REWARD * 1000 // 10_000
 CONFIRMED = {"status": "confirmed", "checker_reason": "Fresh target returned HTTP 404."}
+# A seeded site check result opens a bounty without a browser; test_site_check.py runs real ones.
+CHECKABLE = {"checkable": True, "reason": "Arsune loaded the site completely.", "problems": []}
 # Signer keys are not checked against accounts before simulation, so one test key signs for all.
 KEY, _ = generate_key()
 
@@ -109,6 +111,10 @@ def client(site, tmp_path, monkeypatch):
         job_ids = session.scalars(
             select(Claim.job_id).where(Claim.bounty_id.in_(created), Claim.job_id.is_not(None))
         ).all()
+        urls = select(Bounty.url).where(Bounty.id.in_(created))
+        job_ids += session.scalars(
+            select(Job.id).where(Job.kind == "site_check", Job.url.in_(urls))
+        ).all()
         session.execute(delete(LedgerEntry).where(LedgerEntry.bounty_id.in_(created)))
         session.execute(delete(Claim).where(Claim.bounty_id.in_(created)))
         session.execute(delete(Bounty).where(Bounty.id.in_(created)))
@@ -133,12 +139,29 @@ def open_bounty(client, site, amount=FUND):
     assert bounty["status"] == "pending_proof"
     assert bounty["settlement_mode"] == settings.settlement_mode
     httpx.post(site + "/bounty-proof-control", json={"token": bounty["proof_token"]})
-    response = client.post(f"/api/bounties/{bounty['id']}/verify")
-    assert response.status_code == 200, response.text
-    assert response.json()["status"] == "open"
+    assert verify_and_check(client, bounty)["status"] == "open"
     response = fund(client, bounty, amount)
     assert response.status_code == 200, response.text
     return response.json()
+
+
+def run_site_check(bounty_id, result=CHECKABLE):
+    """Run the bounty's queued site check in this process; seed `result` unless it is None."""
+    with Session.begin() as session:
+        job_id = session.get(Bounty, bounty_id).site_check_job_id
+        if result is not None:
+            session.get(Job, job_id).checkpoint = {"result": result}
+    scan.run(job_id)
+    return job_id
+
+
+def verify_and_check(client, bounty, result=CHECKABLE):
+    """The owner's verify request, then the worker's site check. Return the bounty view."""
+    response = client.post(f"/api/bounties/{bounty['id']}/verify")
+    assert response.status_code == 202, response.text
+    assert response.json()["site_check"]["state"] == "checking"
+    run_site_check(bounty["id"], result)
+    return client.get(f"/api/bounties/{bounty['id']}").json()
 
 
 def signed(sender, amount, memo, receiver=None, deadline=None):
@@ -288,7 +311,7 @@ def test_owner_proof_requires_the_exact_token_under_the_url_policy(client, proof
     ).json()
     token, path = bounty["proof_token"], "/.well-known/arsune-bounty.txt"
     assert bounty["proof_url"] == proof_site + path
-    verify = f"/api/bounties/{bounty['id']}/verify"
+    url = f"/api/bounties/{bounty['id']}/verify"
     cases = [
         (404, {}, b"missing"),
         (200, {}, b"wrong-token"),
@@ -297,7 +320,7 @@ def test_owner_proof_requires_the_exact_token_under_the_url_policy(client, proof
     ]
     for case in cases:
         ProofServer.responses = {path: case}
-        response = client.post(verify)
+        response = client.post(url)
         assert response.status_code == 409, (case, response.text)
         assert client.get(f"/api/bounties/{bounty['id']}").json()["status"] == "pending_proof"
 
@@ -308,7 +331,7 @@ def test_owner_proof_requires_the_exact_token_under_the_url_policy(client, proof
     original = proof.validate_target
     monkeypatch.setattr(proof, "validate_target", public)
     ProofServer.responses = {path: cases[-1]}
-    response = client.post(verify)
+    response = client.post(url)
     assert response.status_code == 409 and "another origin" in response.text
     monkeypatch.setattr(proof, "validate_target", original)
     assert fund(client, bounty).status_code == 409
@@ -316,9 +339,7 @@ def test_owner_proof_requires_the_exact_token_under_the_url_policy(client, proof
         path: (302, {"Location": "/proof.txt"}, b""),
         "/proof.txt": (200, {}, f"  {token}\n".encode()),
     }
-    response = client.post(verify)
-    assert response.status_code == 200, response.text
-    assert response.json()["status"] == "open"
+    assert verify_and_check(client, bounty)["status"] == "open"
 
 
 def test_claims_are_limited_to_the_bounty_scope(client, site, monkeypatch):
@@ -1032,7 +1053,7 @@ def test_links_that_redirect_to_one_missing_page_are_one_fault(client, proof_sit
         },
     ).json()
     ProofServer.responses[token_path] = (200, {}, bounty["proof_token"].encode())
-    assert client.post(f"/api/bounties/{bounty['id']}/verify").status_code == 200
+    assert verify_and_check(client, bounty)["status"] == "open"
     assert fund(client, bounty).status_code == 200
 
     def link_claim(hunter, target):
@@ -1125,7 +1146,7 @@ def test_an_open_bounty_refuses_claims_until_it_is_funded(client, site):
         },
     ).json()
     httpx.post(site + "/bounty-proof-control", json={"token": created["proof_token"]})
-    bounty = client.post(f"/api/bounties/{created['id']}/verify").json()
+    bounty = verify_and_check(client, created)
     assert (bounty["status"], bounty["closed_reason"], bounty["budget_amount"]) == ("open", None, 0)
     response = client.post(
         f"/api/bounties/{bounty['id']}/claims", json=overflow(site, "hunter-a.testnet")

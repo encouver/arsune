@@ -9,7 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.bounty import budget, reputation, settlement
+from app.bounty import budget, reputation, settlement, site_check
 from app.bounty.claims import (
     ACCOUNT,
     MAX_UNRESOLVED_CLAIMS,
@@ -122,6 +122,7 @@ def bounty_summary(bounty, mode):
         "owner_account": bounty.owner_account,
         "status": bounty.status,
         "closed_reason": bounty.closed_reason,
+        "paused_reason": bounty.paused_reason,
         "reward_amount": bounty.reward_amount,
         "bond_amount": bounty.bond_amount,
         "fee_bps": bounty.fee_bps,
@@ -224,6 +225,7 @@ def bounty_detail(session, bounty):
         **bounty_summary(bounty, settlement.settlement_mode()),
         "proof_token": bounty.proof_token,
         "proof_url": proof_url(bounty.url),
+        "site_check": site_check.view(site_check.current(session, bounty)),
         "claims": [claim_summary(c) for c in claims],
         "ledger": [ledger_view(e) for e in ledger],
         "hunters": hunters,
@@ -350,54 +352,66 @@ def get_hunter(account):
     }
 
 
+def not_open(bounty):
+    """Why the bounty takes no claims now."""
+    if bounty.status == "paused":
+        return f"The bounty is paused: {bounty.paused_reason}"
+    if bounty.status == "closed":
+        return "The bounty is closed."
+    return "The bounty is not open."
+
+
 async def verify_bounty(bounty_id):
+    """Read the owner's proof, then queue a site check. The worker opens the bounty on a pass.
+
+    A paused bounty needs no new proof: the check alone decides if it opens again.
+    """
     with Session() as session:
         bounty = find_bounty(session, bounty_id)
         if bounty.status == "open":
             return bounty_detail(session, bounty)
-        if bounty.status != "pending_proof":
-            raise HTTPException(409, "Only a bounty that waits for proof can be verified.")
-        url, token = bounty.url, bounty.proof_token
-    try:
-        matches = await proof_matches(url, token)
-    except ProofError as exc:
-        raise HTTPException(409, str(exc)) from exc
-    if not matches:
-        raise HTTPException(409, "The proof file does not contain this bounty's token.")
-    escrow = settings.settlement_mode == "escrow"
-    tx_id = await open_on_escrow(bounty) if escrow else None
+        if bounty.status not in ("pending_proof", "paused"):
+            raise HTTPException(
+                409, "Only a bounty that waits for proof, or a paused bounty, can be verified."
+            )
+        url, token, needs_proof = bounty.url, bounty.proof_token, bounty.status == "pending_proof"
+    if needs_proof:
+        try:
+            matches = await proof_matches(url, token)
+        except ProofError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if not matches:
+            raise HTTPException(409, "The proof file does not contain this bounty's token.")
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
-        if bounty.status == "pending_proof":
-            bounty.status, bounty.updated_at = "open", utcnow()
-            if escrow:
-                session.add(escrow_row(bounty, "escrow_open", 0, settings.escrow_contract, tx_id))
+        if bounty.status in ("pending_proof", "paused"):
+            # The owner asks again after a change on the site, so an old result is not reused.
+            site_check.start(session, bounty, reuse=False)
         return bounty_detail(session, bounty)
 
 
-async def open_on_escrow(bounty):
-    """Create the bounty on the escrow before it takes funds. Arsune pays the storage NEAR."""
-    try:
-        return await run_in_threadpool(settlement.open_on_escrow, bounty)
-    except OutcomeUnknown:
-        raise HTTPException(504, "The escrow result is unknown. Verify again later.") from None
-    except SettlementError as exc:
-        raise HTTPException(502, f"The escrow did not open the bounty: {exc}") from None
+def site_check_detail(session, bounty):
+    return {
+        "bounty_id": bounty.id,
+        "bounty_status": bounty.status,
+        "paused_reason": bounty.paused_reason,
+        "site_check": site_check.view(site_check.current(session, bounty)),
+    }
 
 
-def escrow_row(bounty, kind, amount, account, tx_id):
-    """A ledger row for an escrow call that is not a claim payment."""
-    return LedgerEntry(
-        id=str(uuid4()),
-        bounty_id=bounty.id,
-        kind=kind,
-        amount=amount,
-        account=account,
-        memo=f"arsune:{kind}:{bounty.id}",
-        tx_id=tx_id,
-        settlement_mode="escrow",
-        status="completed",
-    )
+def request_site_check(bounty_id):
+    """Start a check of an open bounty's site, or return a fresh one, before agents start."""
+    with Session.begin() as session:
+        bounty = find_bounty(session, bounty_id, lock=True)
+        if bounty.status != "open":
+            raise HTTPException(409, not_open(bounty))
+        site_check.start(session, bounty, reuse=True)
+        return site_check_detail(session, bounty)
+
+
+def get_site_check(bounty_id):
+    with Session() as session:
+        return site_check_detail(session, find_bounty(session, bounty_id))
 
 
 def withdraw_bounty(bounty_id):
@@ -419,7 +433,9 @@ def withdraw_bounty(bounty_id):
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
         amount = int(event.get("amount", 0))
-        session.add(escrow_row(bounty, "withdraw", amount, bounty.owner_account, call.tx_hash))
+        session.add(
+            settlement.escrow_row(bounty, "withdraw", amount, bounty.owner_account, call.tx_hash)
+        )
         bounty.status, bounty.closed_reason = "closed", WITHDRAWN
         bounty.budget_amount, bounty.updated_at = 0, utcnow()
         return bounty_detail(session, bounty)
@@ -493,8 +509,8 @@ async def create_claim(bounty_id, request: CreateClaim):
         bounty = find_bounty(session, bounty_id)
         if session.get(Claim, claim_id):
             raise HTTPException(409, "This claim_id is already used.")
-        if bounty.status == "closed":
-            raise HTTPException(409, "The bounty is closed.")
+        if bounty.status in ("closed", "paused"):
+            raise HTTPException(409, not_open(bounty))
         site_origin = bounty.origin
         quote = bond_quote(session, bounty, request.hunter_account)
     try:
@@ -518,7 +534,7 @@ async def create_claim(bounty_id, request: CreateClaim):
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
         if bounty.status != "open":
-            raise HTTPException(409, "The bounty is not open.")
+            raise HTTPException(409, not_open(bounty))
         if not budget.pays_one_reward(bounty):
             # A decision that spends the budget closes the bounty, so this one is not funded yet.
             raise HTTPException(

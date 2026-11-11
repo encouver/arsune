@@ -29,6 +29,8 @@ class SwarmState:
         self.agents: list = []
         self.board = None
         self.ai = None  # the run's model client when AI agents run
+        # Arsune's answer to "can the checker load this site?", asked before any agent starts.
+        self.site_check: dict | None = None
         self.events: deque[dict] = deque(maxlen=LOG_SIZE)
 
     def log(self, agent: str, text: str):
@@ -48,6 +50,7 @@ class SwarmState:
             "tips": [tip.view() for tip in self.board.tips.values()] if self.board else [],
             "log": list(self.events),
             "ai": self.ai_view(),
+            "site_check": self.site_check,
         }
 
     def ai_view(self) -> dict:

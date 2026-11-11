@@ -40,6 +40,7 @@ from test_bounties import (  # noqa: F401
     expire_lease,
     seed_result,
     site,
+    verify_and_check,
 )
 
 ARSUNE = "arsune-test.testnet"
@@ -226,8 +227,8 @@ def open_bounty(client, site, **terms):
     }
     bounty = client.post("/api/bounties", json=body | terms).json()
     httpx.post(site + "/bounty-proof-control", json={"token": bounty["proof_token"]})
-    response = client.post(f"/api/bounties/{bounty['id']}/verify")
-    assert response.status_code == 200, response.text
+    # The worker creates the bounty on the escrow after the site check passes.
+    assert verify_and_check(client, bounty)["status"] == "open"
     response = fund(client, bounty)
     assert response.status_code == 200, response.text
     return response.json()
@@ -441,14 +442,16 @@ def test_escrow_bounty_with_other_terms_does_not_open(client, site, chain, monke
     ).json()
     httpx.post(site + "/bounty-proof-control", json={"token": bounty["proof_token"]})
     monkeypatch.setattr(settings, "escrow_contract", "")
-    response = client.post(f"/api/bounties/{bounty['id']}/verify")
-    assert response.status_code == 502 and "ARSUNE_ESCROW_CONTRACT" in response.text
+    view = verify_and_check(client, bounty)
+    assert view["status"] == "pending_proof"
+    assert view["site_check"]["state"] == "passed"
+    assert "ARSUNE_ESCROW_CONTRACT" in view["site_check"]["note"]
     monkeypatch.setattr(settings, "escrow_contract", ESCROW)
     # The owner can create the escrow bounty first, with other terms.
     chain.bounties[bounty["id"]] = {"bounty_id": bounty["id"], "reward": "1"}
-    response = client.post(f"/api/bounties/{bounty['id']}/verify")
-    assert response.status_code == 502 and "other terms" in response.text
-    assert client.get(f"/api/bounties/{bounty['id']}").json()["status"] == "pending_proof"
+    view = verify_and_check(client, bounty)
+    assert view["status"] == "pending_proof" and "other terms" in view["site_check"]["note"]
+    assert not [row for row in view["ledger"] if row["kind"] == "escrow_open"]
 
 
 def test_verify_compares_the_bundle_with_the_escrow_record(

@@ -89,6 +89,8 @@ A site owner pays for proven functional faults on the owner's own site. Independ
 ### Scope
 
 - Only the owner of a site can open a bounty for it. The owner puts the bounty token in `/.well-known/arsune-bounty.txt` on the bounty origin. Arsune checks no claims before this proof.
+- After the proof, Arsune loads the bounty URL in a fresh browser, as its checker does, at 1280 and 390 pixels. The bounty opens only when both loads answer HTTP 2xx and are complete. An image that the site answers with an HTTP error does not stop the opening: it is a fault for hunters to find.
+- Arsune pauses an open bounty after 5 decided claims in a row that its own limits left unverified. A paused bounty rejects new claims with 409 and the reason. Arsune still settles the claims that it took before the pause. A new passing site check, which the owner asks for, opens the bounty again.
 - Only functional faults are in scope: a broken internal link, horizontal overflow at the 390-pixel mobile viewport, a price mismatch for one matched product context, a broken image, and an uncaught error on page load. Other claim types are rejected at submission.
 - A page error counts only when a script on the bounty origin raises it. An error from a script on another origin does not count.
 - Security testing of any kind is out of scope. The checker does not submit forms, sign in, buy, change the site, or put load on the site.

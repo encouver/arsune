@@ -34,6 +34,7 @@ OPENAI_COMPATIBLE, ANTHROPIC = "openai_compatible", "anthropic"
 # A call asks for at least this many output tokens on every provider.
 MIN_MAX_TOKENS = 4000
 CUT_OFF = "the answer was cut off (max_tokens)"
+HALTED = "the swarm stopped, so the agent makes no more model calls"
 CLAUDE_SDK_RETRIES = 2
 # Only these models can retry a policy refusal on the server (beta header for fallbacks="default").
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-sonnet-5-5"}
@@ -258,16 +259,27 @@ class ModelClient:
             follow_redirects=False,
         )
         self._slots = asyncio.Semaphore(concurrency)
+        self.halted = False
+
+    def halt(self):
+        """Refuse every later call, also one that waits for a slot: the swarm stopped."""
+        self.halted = True
+
+    def _refuse_when_halted(self):
+        if self.halted:
+            raise ModelFailure(HALTED)
 
     async def ask(self, system: str, user: str, max_tokens: int) -> dict:
         """One chat call that must answer a JSON object. Raises BudgetSpent or ModelFailure.
         `max_tokens` is raised to MIN_MAX_TOKENS; an answer that hits the limit is a failure."""
+        self._refuse_when_halted()
         if self.budget.exhausted:
             raise BudgetSpent
         max_tokens = max(max_tokens, MIN_MAX_TOKENS)
         if self.settings.provider == ANTHROPIC:
             return await self._ask_claude(system, user, max_tokens)
         async with self._slots:
+            self._refuse_when_halted()
             held = self.budget.reserve(len((system + user).encode()), max_tokens)
             usage = None
             try:
@@ -296,6 +308,7 @@ class ModelClient:
 
     async def _ask_claude(self, system: str, user: str, max_tokens: int) -> dict:
         async with self._slots:
+            self._refuse_when_halted()
             held = self.budget.reserve(len((system + user).encode()), max_tokens)
             usage = None  # no report: the whole reservation stays charged
             try:

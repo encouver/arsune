@@ -181,6 +181,14 @@ class Run:
         bounty = self.post("/api/bounties", body)
         httpx.post(self.site + "/bounty-proof-control", json={"token": bounty["proof_token"]})
         self.post(f"/api/bounties/{bounty['id']}/verify")
+        # The worker checks the site, then opens the bounty on the escrow.
+        for _ in range(120):
+            view = self.api.get(f"/api/bounties/{bounty['id']}").json()
+            if view["status"] == "open" or view["site_check"]["state"] != "checking":
+                break
+            time.sleep(1)
+        if view["status"] != "open":
+            raise SystemExit(f"The bounty did not open: {view['site_check']}")
         fund_id = str(uuid4())
         msg, memo = escrow.fund_msg(bounty["id"]), f"arsune:fund:{fund_id}"
         signed = self.deposit(owner, BUDGET, msg, memo)

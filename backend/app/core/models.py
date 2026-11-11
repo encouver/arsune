@@ -105,6 +105,12 @@ class Bounty(Base):
     fee_bps: Mapped[int] = mapped_column(Integer)
     budget_amount: Mapped[int] = mapped_column(BigInteger, default=0)
     budget_target: Mapped[int] = mapped_column(BigInteger)
+    # The latest "can Arsune check this site?" job (app.bounty.site_check).
+    site_check_job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id"), index=True)
+    # Why Arsune paused the bounty; None unless the status is paused.
+    paused_reason: Mapped[str | None] = mapped_column(Text)
+    # Decided claims in a row that Arsune's own limits left unverified.
+    unchecked_claims: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

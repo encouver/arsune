@@ -34,10 +34,19 @@ DEFAULT_SCOUT_MIX = {"links": 3, "mobile": 2, "prices": 2, "images": 1, "errors"
 AGENT_CLASSES = {"careless": Careless, "copycat": Copycat}
 LIVE_CAP = 1_000_000  # the approved live budget: 1 USDC
 MAX_AI_BUDGET_USD = 5.0  # a typo guard for --ai-budget
+PAUSED = "The bounty is paused: Arsune cannot check this site — agents stop to save tokens."
 
 
 class SwarmError(Exception):
     pass
+
+
+class SiteUncheckable(SwarmError):
+    """Arsune's checker cannot load the bounty site, so no agent starts."""
+
+    def __init__(self, check: dict):
+        super().__init__(check.get("reason") or "Arsune cannot check this site.")
+        self.check = check
 
 
 @dataclass
@@ -67,6 +76,7 @@ class Config:
     copy_loss_limit: int = 3
     poll: float = 1.0
     settle_timeout: float = 120
+    site_check_timeout: float = 180  # Arsune's site check runs in its worker queue
     state_host: str = "127.0.0.1"
     state_port: int | None = 8590
     seed: int | None = None
@@ -148,7 +158,34 @@ def identities(config: Config) -> tuple[Identity, list[Identity], list[Identity]
     )
 
 
-async def setup_bounty(config, api, site, owner, settlement, log) -> str:
+async def wait_for_site_check(api, bounty_id, detail, config) -> dict:
+    """Read Arsune's site check until it has a result; return the check."""
+    deadline = time.monotonic() + config.site_check_timeout
+    check = detail.get("site_check") or {}
+    while check.get("state") == "checking":
+        if time.monotonic() >= deadline:
+            raise SwarmError(
+                f"Arsune did not finish its site check in {config.site_check_timeout:.0f} s. "
+                "No agent starts."
+            )
+        await asyncio.sleep(config.poll)
+        check = (await api.site_check(bounty_id)).get("site_check") or {}
+    if check.get("state") != "passed":
+        raise SiteUncheckable(check)
+    return check
+
+
+async def require_checkable(config, api, bounty_id, state) -> dict:
+    """Ask Arsune for a fresh site check before any agent starts or any model is called."""
+    check = await wait_for_site_check(
+        api, bounty_id, await api.request_site_check(bounty_id), config
+    )
+    state.site_check = check
+    state.log("swarm", f"Site check passed: {check['reason']}")
+    return check
+
+
+async def setup_bounty(config, api, site, owner, settlement, state) -> str:
     """Create, prove and fund a bounty on the controlled demo site."""
     bounty = await api.create_bounty(
         {
@@ -160,11 +197,13 @@ async def setup_bounty(config, api, site, owner, settlement, log) -> str:
             "budget": config.budget,
         }
     )
+    state.bounty_id = bounty["id"]
     response = await site.http.post(
         origin(config.site_url) + "/bounty-proof-control", json={"token": bounty["proof_token"]}
     )
     response.raise_for_status()
-    await api.verify_bounty(bounty["id"])
+    # Arsune opens the bounty only after its own browser loads the site completely.
+    await wait_for_site_check(api, bounty["id"], await api.verify_bounty(bounty["id"]), config)
     fund_id = str(uuid4())
     await api.fund_bounty(
         bounty["id"],
@@ -181,12 +220,40 @@ async def setup_bounty(config, api, site, owner, settlement, log) -> str:
             ),
         },
     )
-    log(
+    state.log(
         "owner",
         f"The owner opened a bounty on {config.site_url}: {usdc(config.reward)} per proven bug, "
         f"{usdc(config.bond)} bond, funded with {usdc(config.budget)}.",
     )
     return bounty["id"]
+
+
+async def ready_bounty(config, api, site, owner, settlement, state) -> BountyFeed:
+    """The feed of an open bounty whose site Arsune can check now. No agent exists yet."""
+    if config.setup:
+        bounty_id = await setup_bounty(config, api, site, owner, settlement, state)
+    elif config.bounty_id:
+        bounty_id = config.bounty_id
+    else:
+        raise SwarmError("Give --bounty-id or --setup.")
+    state.bounty_id = bounty_id
+    feed = BountyFeed(api, bounty_id, config.poll)
+    await feed.refresh()
+    if feed.status != "open":
+        why = f": {feed.bounty['paused_reason']}" if feed.bounty.get("paused_reason") else "."
+        raise SwarmError(f"Bounty {bounty_id} is {feed.status}, not open{why}")
+    await require_checkable(config, api, bounty_id, state)
+    return feed
+
+
+async def refuse_to_start(exc: SiteUncheckable, config, server, state):
+    """Show why no agent starts; with --hold, keep /state served so the board shows it."""
+    state.site_check = exc.check
+    state.log("swarm", f"No agent starts: {exc}")
+    state.finished = True
+    if config.hold and server:
+        state.log("swarm", "Holding /state open; press Ctrl-C to exit.")
+        await asyncio.Event().wait()
 
 
 def build_agents(config: Config, swarm: Swarm, hunters, scouts, rng) -> list:
@@ -240,7 +307,7 @@ async def wait_for_end(swarm: Swarm, tasks: list, duration: float) -> str:
         if all(task.done() for task in tasks):
             return "every agent is broke or done"
         if swarm.feed.status not in (None, "open"):
-            return f"the bounty is {swarm.feed.status}"
+            return PAUSED if swarm.feed.status == "paused" else f"the bounty is {swarm.feed.status}"
         if time.monotonic() >= deadline:
             return "the time limit was reached"
         await asyncio.wait(tasks, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
@@ -286,17 +353,12 @@ async def run(
         settlement = await api.settlement()
         check_mode(config, settlement)
         owner, hunters, scouts = identities(config)
-        if config.setup:
-            bounty_id = await setup_bounty(config, api, site, owner, settlement, state.log)
-        elif config.bounty_id:
-            bounty_id = config.bounty_id
-        else:
-            raise SwarmError("Give --bounty-id or --setup.")
-        state.bounty_id = bounty_id
-        feed = BountyFeed(api, bounty_id, config.poll)
-        await feed.refresh()
-        if feed.status != "open":
-            raise SwarmError(f"Bounty {bounty_id} is {feed.status}, not open.")
+        try:
+            feed = await ready_bounty(config, api, site, owner, settlement, state)
+        except SiteUncheckable as exc:
+            await refuse_to_start(exc, config, server, state)
+            raise
+        bounty_id = feed.bounty_id
         board = TipBoard(state.log)
         swarm = Swarm(
             api,
@@ -329,8 +391,14 @@ async def run(
         feed_task = asyncio.create_task(feed.run(swarm.stop))
         tasks = [asyncio.create_task(agent.run()) for agent in swarm.agents]
         reason = await wait_for_end(swarm, tasks, config.duration)
-        state.log("swarm", f"The swarm stops: {reason}.")
+        if ai:
+            ai.halt()  # before the agents see the stop, so no later model call is made
         swarm.stop.set()
+        if reason == PAUSED:
+            state.log("swarm", PAUSED)
+            state.log("swarm", f"Arsune's reason: {feed.bounty.get('paused_reason')}")
+        else:
+            state.log("swarm", f"The swarm stops: {reason}.")
         _, late = await asyncio.wait(tasks, timeout=20)
         for task in late:
             task.cancel()

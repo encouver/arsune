@@ -22,6 +22,7 @@ import {
   parseUsdc,
   settlementBadge,
   shortHash,
+  SiteCheck,
   Token,
   untilText,
   usdc,
@@ -47,8 +48,15 @@ const FUNDING_LABELS: Record<string, string> = {
 const BOUNTY_LABELS: Record<string, string> = {
   pending_proof: "Waiting for proof",
   open: "Open",
+  paused: "Paused",
   closed: "Closed",
 };
+
+function proofStatus(check: SiteCheck | null): string {
+  if (check?.state === "checking") return "Checking your site";
+  if (check?.state === "failed") return "Site check failed";
+  return "Waiting for proof";
+}
 
 const CHAINS: Record<string, string> = {
   near: "NEAR",
@@ -243,6 +251,9 @@ export default function BountyPage({
               {loadError} Showing the last good state.
             </div>
           )}
+          {bounty.status === "paused" && (
+            <PausedBanner bounty={bounty} onChange={refresh} />
+          )}
 
           <ol className="bo-steps" aria-label="Steps">
             <Step n={1} title="Bounty created" state={states[0]} status="Done">
@@ -272,7 +283,7 @@ export default function BountyPage({
               n={2}
               title="Prove that you own the site"
               state={states[1]}
-              status={proven ? "Done" : "Waiting for proof"}
+              status={proven ? "Done" : proofStatus(bounty.site_check)}
             >
               <ProveStep bounty={bounty} options={options} onChange={refresh} />
             </Step>
@@ -442,19 +453,26 @@ function ProveStep({
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const isDemo = !!options && bounty.origin === options.demo_site_origin;
+  const checking = bounty.site_check?.state === "checking";
 
   if (bounty.status !== "pending_proof")
     return (
-      <Message
-        kind="ok"
-        testId="proof-done"
-        text={`Ownership proven. Arsune read the token at ${bounty.proof_url}.`}
-      />
+      <>
+        <Message
+          kind="ok"
+          testId="proof-done"
+          text={`Ownership proven. Arsune read the token at ${bounty.proof_url}.`}
+        />
+        {bounty.site_check?.state === "passed" && (
+          <SiteCheckResult check={bounty.site_check} />
+        )}
+      </>
     );
 
   async function verify() {
+    // The proof is read now; the site check runs in Arsune's worker and the page polls it.
     await api(`/api/bounties/${bounty.id}/verify`, {});
-    setInfo("Ownership proven. The bounty is open.");
+    setInfo(null);
     await onChange();
   }
 
@@ -523,8 +541,10 @@ function ProveStep({
         <li>
           <div>
             <strong>Check ownership</strong>
-            Arsune reads the file once under its URL policy and opens the bounty
-            only when the content equals the token.
+            Arsune reads the file once under its URL policy. When the content
+            equals the token, Arsune loads your site in a fresh browser at 1280
+            and 390 pixels. The bounty opens only when that load is complete, so
+            hunters never work on a site that Arsune cannot check.
           </div>
         </li>
       </ol>
@@ -533,16 +553,20 @@ function ProveStep({
           type="button"
           className="bo-btn"
           onClick={check}
-          disabled={!!busy}
+          disabled={!!busy || checking}
         >
-          {busy === "check" ? "Checking…" : "Check ownership"}
+          {busy === "check"
+            ? "Checking…"
+            : bounty.site_check?.state === "failed"
+              ? "Check again"
+              : "Check ownership"}
         </button>
         {isDemo && (
           <button
             type="button"
             className="bo-btn bo-btn-quiet"
             onClick={demo}
-            disabled={!!busy}
+            disabled={!!busy || checking}
           >
             {busy === "demo"
               ? "Setting proof…"
@@ -552,7 +576,87 @@ function ProveStep({
       </div>
       <Message kind="info" text={info} testId="proof-info" />
       <Message kind="error" text={error} testId="proof-error" />
+      <SiteCheckResult check={bounty.site_check} />
     </>
+  );
+}
+
+function SiteCheckResult({ check }: { check: SiteCheck | null }) {
+  if (!check) return null;
+  const kind =
+    check.state === "passed"
+      ? "ok"
+      : check.state === "failed"
+        ? "error"
+        : "info";
+  const text =
+    check.state === "checking"
+      ? "Ownership proven. Arsune is loading your site in a fresh browser to make sure that it can check claims there…"
+      : check.reason;
+  return (
+    <div data-testid="site-check" data-state={check.state}>
+      <Message kind={kind} text={text} />
+      {check.state === "failed" && (
+        <p className="bo-muted">
+          Hunters cannot start until Arsune loads the page completely. Make the
+          named resources load, then check again.
+        </p>
+      )}
+      <Message kind="error" text={check.note} testId="site-check-note" />
+    </div>
+  );
+}
+
+function PausedBanner({
+  bounty,
+  onChange,
+}: {
+  bounty: OwnerBounty;
+  onChange: Refresh;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const checking = bounty.site_check?.state === "checking";
+
+  async function resume() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api(`/api/bounties/${bounty.id}/verify`, {});
+      await onChange();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section
+      className="sw-panel bo-paused"
+      aria-label="Paused"
+      data-testid="paused-banner"
+    >
+      <div className="sw-error" role="alert">
+        Arsune paused this bounty and takes no new claims, so hunters do not
+        spend time and tokens on claims that it cannot verify.{" "}
+        {bounty.paused_reason}
+      </div>
+      <div className="bo-actions">
+        <button
+          type="button"
+          className="bo-btn"
+          onClick={resume}
+          disabled={busy || checking}
+        >
+          {busy || checking
+            ? "Checking your site…"
+            : "Check the site and resume"}
+        </button>
+      </div>
+      <SiteCheckResult check={bounty.site_check} />
+      <Message kind="error" text={error} testId="resume-error" />
+    </section>
   );
 }
 

@@ -12,6 +12,20 @@ from app.core.models import Base
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import IntegrityError
 
+# The columns of 0010; its foreign key and index also differ until it runs.
+SITE_CHECK_COLUMNS = {
+    ("bounties", "site_check_job_id"),
+    ("bounties", "paused_reason"),
+    ("bounties", "unchecked_claims"),
+}
+
+
+def added_columns(connection):
+    """(table, column) for each model column that the schema does not have yet."""
+    later = compare_metadata(MigrationContext.configure(connection), Base.metadata)
+    assert {d[0] for d in later} <= {"add_column", "add_index", "add_fk"}
+    return {(d[2], d[3].name) for d in later if d[0] == "add_column"}
+
 
 def test_empty_schema_upgrade_downgrade_upgrade():
     schema = f"arsune_migration_test_{uuid4().hex}"
@@ -149,14 +163,14 @@ def test_migration_0008_marks_closed_bounties_as_closed_by_a_spent_budget():
             reasons = connection.execute(text("SELECT id, closed_reason FROM bounties ORDER BY id"))
             # Before 0008 a spent budget was the only reason for which a bounty closed.
             assert list(reasons) == [("b1", "budget_spent"), ("b2", None), ("b3", None)]
-            # Only the evidence columns of 0009 differ from the models.
-            later = compare_metadata(MigrationContext.configure(connection), Base.metadata)
-            assert {(change, table, column.name) for change, _, table, column in later} == {
-                ("add_column", "claims", "evidence_hash"),
-                ("add_column", "claims", "evidence_bundle"),
+            # Only the evidence columns of 0009 and the site check columns of 0010 differ.
+            assert added_columns(connection) == {
+                ("claims", "evidence_hash"),
+                ("claims", "evidence_bundle"),
+                *SITE_CHECK_COLUMNS,
             }
             command.upgrade(config, "0009")
-            assert not compare_metadata(MigrationContext.configure(connection), Base.metadata)
+            assert added_columns(connection) == SITE_CHECK_COLUMNS
             command.downgrade(config, "0008")
             claim_columns = inspect(connection).get_columns("claims", schema=schema)
             assert not {"evidence_hash", "evidence_bundle"} & {c["name"] for c in claim_columns}
@@ -196,6 +210,52 @@ def test_migration_0006_downgrade_survives_an_unfunded_and_a_paid_claim_for_one_
             command.downgrade(config, "0005")
             rows = connection.execute(text("SELECT id, outcome FROM claims ORDER BY id"))
             assert list(rows) == [("paid", "proven"), ("unfunded", "unfunded")]
+    finally:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def test_migration_0010_adds_the_site_check_and_downgrade_opens_paused_bounties():
+    schema = f"arsune_site_check_test_{uuid4().hex}"
+    config = Config("alembic.ini")
+    try:
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+            connection.exec_driver_sql(f'SET LOCAL search_path TO "{schema}"')
+            config.attributes["connection"] = connection
+            command.upgrade(config, "0009")
+            connection.execute(
+                text("""INSERT INTO bounties (id, url, origin, owner_account, proof_token, status,
+                    reward_amount, bond_amount, fee_bps, budget_amount, budget_target,
+                    created_at, updated_at) VALUES ('b1', 'https://site.test/',
+                    'https://site.test:443', 'owner.near', 'token', 'open', 1, 1, 0, 0, 1,
+                    now(), now())""")
+            )
+            command.upgrade(config, "0010")
+            assert not compare_metadata(MigrationContext.configure(connection), Base.metadata)
+            row = connection.execute(
+                text("SELECT site_check_job_id, paused_reason, unchecked_claims FROM bounties")
+            ).one()
+            assert tuple(row) == (None, None, 0)
+            connection.execute(
+                text("""INSERT INTO jobs (id, kind, url, mode, inject_demo, status, generation,
+                    created_at, updated_at, deadline, checkpoint, progress, comparison_mapping,
+                    incident_input) VALUES ('j1', 'site_check', 'https://site.test/', 'scripted',
+                    false, 'queued', 0, now(), now(), now(), '{}', '{}', '{}', '{}')""")
+            )
+            connection.execute(text("INSERT INTO pending_actions VALUES ('j1:scan', 'j1', now())"))
+            connection.execute(
+                text(
+                    "UPDATE bounties SET status = 'paused', paused_reason = 'x', site_check_job_id = 'j1'"
+                )
+            )
+            command.downgrade(config, "0009")
+            assert connection.execute(text("SELECT status FROM bounties")).scalar() == "open"
+            assert connection.execute(text("SELECT status FROM jobs")).scalar() == "failed"
+            assert not connection.execute(text("SELECT count(*) FROM pending_actions")).scalar()
+            assert added_columns(connection) == SITE_CHECK_COLUMNS
+            command.upgrade(config, "head")
+            assert not compare_metadata(MigrationContext.configure(connection), Base.metadata)
     finally:
         with engine.begin() as connection:
             connection.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

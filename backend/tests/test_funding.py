@@ -23,9 +23,21 @@ from app.bounty import crosschain, settlement
 from app.browser.policy import origin
 from app.core.config import settings
 from app.core.db import Session, engine
-from app.core.models import Base, Bounty, FundingRequest, LedgerEntry, utcnow
+from app.core.models import (
+    Attempt,
+    Base,
+    Bounty,
+    Event,
+    FundingRequest,
+    Job,
+    LedgerEntry,
+    PendingAction,
+    Record,
+    utcnow,
+)
 from app.main import app
 from app.workers import coordinator
+from app.workers.tasks import scan
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from sqlalchemy import delete, inspect, select, text
@@ -183,9 +195,16 @@ def client(monkeypatch):
     test_client.created = created
     yield test_client
     with Session.begin() as session:
+        urls = select(Bounty.url).where(Bounty.id.in_(created))
+        checks = session.scalars(
+            select(Job.id).where(Job.kind == "site_check", Job.url.in_(urls))
+        ).all()
         session.execute(delete(FundingRequest).where(FundingRequest.bounty_id.in_(created)))
         session.execute(delete(LedgerEntry).where(LedgerEntry.bounty_id.in_(created)))
         session.execute(delete(Bounty).where(Bounty.id.in_(created)))
+        for model in (Record, Event, Attempt, PendingAction):
+            session.execute(delete(model).where(model.job_id.in_(checks)))
+        session.execute(delete(Job).where(Job.id.in_(checks)))
 
 
 @pytest.fixture
@@ -639,8 +658,9 @@ def demo_site():
             process.wait(timeout=5)
 
 
-def test_demo_site_proof_then_verify(client, demo_site, monkeypatch):
+def test_demo_site_proof_then_verify(client, demo_site, monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "demo_url", demo_site)
+    monkeypatch.setattr(settings, "evidence_dir", tmp_path)
     options = client.get("/api/funding/options").json()
     assert options["demo_site_url"] == demo_site
     assert options["demo_site_origin"] == origin(demo_site)
@@ -661,7 +681,13 @@ def test_demo_site_proof_then_verify(client, demo_site, monkeypatch):
     assert response.status_code == 200, response.text
     assert response.json()["proof_url"] == demo_site + "/.well-known/arsune-bounty.txt"
     assert httpx.get(response.json()["proof_url"]).text.strip() == bounty["proof_token"]
-    assert client.post(f"/api/bounties/{bounty['id']}/verify").json()["status"] == "open"
+    response = client.post(f"/api/bounties/{bounty['id']}/verify")
+    assert response.status_code == 202 and response.json()["status"] == "pending_proof"
+    # The worker's real browser loads the demo shop: Arsune can check it, so the bounty opens.
+    with Session() as session:
+        scan.run(session.get(Bounty, bounty["id"]).site_check_job_id)
+    view = client.get(f"/api/bounties/{bounty['id']}").json()
+    assert (view["status"], view["site_check"]["state"]) == ("open", "passed"), view["site_check"]
     assert client.post(f"/api/bounties/{bounty['id']}/demo-proof").status_code == 409
 
     other = add_bounty(client, status="pending_proof")
@@ -682,13 +708,18 @@ def test_migration_0007_adds_and_removes_funding_requests():
             assert "funding_requests" not in inspect(connection).get_table_names(schema=schema)
             command.upgrade(config, "0007")
             assert "funding_requests" in inspect(connection).get_table_names(schema=schema)
-            # Only the columns of later revisions (0008, 0009) differ from the models.
+            # Only the columns of later revisions (0008 to 0010) differ from the models, with
+            # the index and foreign key of 0010's site check column.
             later = compare_metadata(MigrationContext.configure(connection), Base.metadata)
-            assert {(change, table, column.name) for change, _, table, column in later} == {
-                ("add_column", "bounties", "closed_reason"),
-                ("add_column", "claims", "evidence_hash"),
-                ("add_column", "claims", "evidence_bundle"),
+            assert {(d[2], d[3].name) for d in later if d[0] == "add_column"} == {
+                ("bounties", "closed_reason"),
+                ("bounties", "site_check_job_id"),
+                ("bounties", "paused_reason"),
+                ("bounties", "unchecked_claims"),
+                ("claims", "evidence_hash"),
+                ("claims", "evidence_bundle"),
             }
+            assert {d[0] for d in later} <= {"add_column", "add_index", "add_fk"}
             connection.execute(
                 text("""INSERT INTO bounties (id, url, origin, owner_account, proof_token, status,
                     reward_amount, bond_amount, fee_bps, budget_amount, budget_target,

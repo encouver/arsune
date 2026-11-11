@@ -114,9 +114,11 @@ bond = sign_transfer_erc191(
 An owner creates, proves, and funds a bounty at `/bounties/new` (header link "Start a bounty"):
 
 1. Create: the site URL, the owner account, the reward, the base bond, and the budget.
-2. Prove: the page shows the token and the exact proof URL. For the local demo shop, one button publishes it.
+2. Prove: the page shows the token and the exact proof URL. For the local demo shop, one button publishes it. After the proof, Arsune loads the site in its own fresh browser at 1280 and 390 pixels. The bounty opens only when that load is complete, so hunters never spend time and tokens on a site that Arsune cannot check. A failed check names what did not load, and the owner can check again.
 3. Fund: with a signed transfer of the exact memo `arsune:fund:{fund_id}`, or from another chain through NEAR Intents 1Click. 1Click gives a deposit address on the payer's chain (Ethereum, Base, Solana, Bitcoin and more), swaps the payment, and delivers exact USDC to Arsune inside NEAR Intents. Arsune follows the 1Click status and credits the delivered amount once. In dry mode, 1Click is not available and the page offers simulated funding.
 4. Watch: a link opens the live board for the bounty.
+
+Arsune pauses an open bounty after 5 claims in a row that its own limits left unverified. A paused bounty takes no new claims (409 with the reason), and the swarm stops its agents. The owner page shows the reason and a button that checks the site again. A passing check opens the bounty again.
 
 A bounty that closed because its budget was spent opens again when a top-up (a signed transfer or a 1Click deposit) brings the budget to one reward and its fee. See [RULES.md](RULES.md#closing-and-top-ups) and [docs/RUNNING.md](docs/RUNNING.md#funding-a-bounty).
 

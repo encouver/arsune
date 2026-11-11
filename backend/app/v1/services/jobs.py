@@ -90,9 +90,11 @@ def list_jobs(limit: int = 10, cursor: str | None = None):
         Job.created_at,
         Job.updated_at,
     )
-    # Claim checks belong to bounties and are listed there, not in the operator history.
+    # Claim and site checks belong to bounties and are shown there, not in the operator history.
     query = (
-        select(*columns).where(Job.kind != "claim").order_by(Job.created_at.desc(), Job.id.desc())
+        select(*columns)
+        .where(Job.kind.not_in(("claim", "site_check")))
+        .order_by(Job.created_at.desc(), Job.id.desc())
     )
     if cursor is not None:
         try:
