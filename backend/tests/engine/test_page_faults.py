@@ -263,9 +263,9 @@ def test_scripted_proposes_only_provable_images_and_errors():
     ]
     assert "HTTP 404" in found[0]["explanation"]
     assert "does not decode" in found[1]["explanation"]
-    assert len(validate_candidates(found, [PAGE])) == 3
-    with pytest.raises(ValueError, match="unselected"):
-        validate_candidates([dict(found[2], urls=[other])], [other])
+    assert len(validate_candidates(found, [PAGE])[0]) == 3
+    valid, dropped = validate_candidates([dict(found[2], urls=[other])], [other])
+    assert valid == [] and dropped == ["names a page outside the checked pages"]
 
 
 async def test_bounty_scope_for_page_faults(monkeypatch):

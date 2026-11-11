@@ -19,36 +19,57 @@ def candidate(role, claim_type, urls, explanation, details, injected=False):
     }
 
 
+def in_scope(url, selected):
+    """Map a trailing-slash variant of a selected URL to the selected URL."""
+    if not isinstance(url, str) or url in selected:
+        return url
+    for variant in (url.rstrip("/"), url.rstrip("/") + "/"):
+        if variant in selected:
+            return variant
+    return url
+
+
+def candidate_problem(item, selected):
+    """Return a short reason when the candidate is invalid, else None. Fixes URL variants."""
+    if not isinstance(item, dict) or item.get("role") not in ROLES:
+        return "has an invalid role"
+    for key in ["claim_type", "explanation", "expected_behavior", "observed_behavior"]:
+        if not isinstance(item.get(key), str) or not 1 <= len(item[key]) <= 2000:
+            return f"has an invalid {key}"
+    urls = item.get("urls")
+    if not isinstance(urls, list) or not urls or len(urls) > 5:
+        return "has an invalid page list"
+    item["urls"] = [in_scope(u, selected) for u in urls]
+    if any(not isinstance(u, str) or u not in selected for u in item["urls"]):
+        return "names a page outside the checked pages"
+    steps = item.get("reproduction_steps")
+    if (
+        not isinstance(steps, list)
+        or not steps
+        or len(steps) > 12
+        or any(not isinstance(s, str) or len(s) > 2000 for s in steps)
+    ):
+        return "has invalid reproduction steps"
+    details = item.get("details", {})
+    if not isinstance(details, dict):
+        return "has invalid details"
+    for key in ["source", "target", "url", "page"]:
+        if key in details:
+            details[key] = in_scope(details[key], selected)
+            if not isinstance(details[key], str) or details[key] not in selected:
+                return "names a page outside the checked pages"
+    return None
+
+
 def validate_candidates(items, selected):
-    valid = []
+    """Return (valid candidates, reasons for the dropped ones)."""
+    valid, dropped = [], []
     for item in items:
-        if not isinstance(item, dict) or item.get("role") not in ROLES:
-            raise ValueError("Invalid specialist role.")
-        for key in ["claim_type", "explanation", "expected_behavior", "observed_behavior"]:
-            if not isinstance(item.get(key), str) or not 1 <= len(item[key]) <= 2000:
-                raise ValueError(f"Invalid candidate {key}.")
-        urls = item.get("urls")
-        if (
-            not isinstance(urls, list)
-            or not urls
-            or len(urls) > 5
-            or any(u not in selected for u in urls)
-        ):
-            raise ValueError("Candidate references a page outside the selected scope.")
-        steps = item.get("reproduction_steps")
-        if (
-            not isinstance(steps, list)
-            or not steps
-            or len(steps) > 12
-            or any(not isinstance(s, str) or len(s) > 2000 for s in steps)
-        ):
-            raise ValueError("Candidate needs bounded reproduction steps.")
-        details = item.get("details", {})
-        if not isinstance(details, dict):
-            raise TypeError("Invalid candidate details.")
-        for key in ["source", "target", "url", "page"]:
-            if key in details and details[key] not in selected:
-                raise ValueError("Candidate details reference an unselected page.")
+        problem = candidate_problem(item, selected)
+        if problem:
+            dropped.append(problem)
+            continue
+        urls, details = item["urls"], item.get("details", {})
         item["id"] = hashlib.sha256(
             json.dumps(
                 [item["role"], item["claim_type"], sorted(urls), details],
@@ -57,7 +78,7 @@ def validate_candidates(items, selected):
         ).hexdigest()[:20]
         if not any(c["id"] == item["id"] for c in valid):
             valid.append(item)
-    return valid
+    return valid, dropped
 
 
 def scripted(observations):

@@ -31,13 +31,25 @@ async def propose_candidates(state, mode, inject, url, save, event):
                 role_candidates, provider = await generate_candidates(
                     completed_loads(state["observations"]), role=role
                 )
-                if any(c.get("role") != role for c in role_candidates):
-                    raise ValueError("Model specialist returned another role's candidate.")
+                wrong = [
+                    c for c in role_candidates if not isinstance(c, dict) or c.get("role") != role
+                ]
+                role_candidates = [c for c in role_candidates if c not in wrong]
+                dropped = ["belongs to another role"] * len(wrong)
                 state.setdefault("model_providers", {})[role] = provider
             else:
                 role_candidates = [c for c in scripted(state["observations"]) if c["role"] == role]
-            state["role_outputs"][role] = validate_candidates(role_candidates, state["selected"])
-            await event(role, f"Proposed {len(role_candidates)} candidates.")
+                dropped = []
+            valid, invalid = validate_candidates(role_candidates, state["selected"])
+            dropped += invalid
+            if dropped and mode != "model":
+                raise ValueError(f"Scripted candidate {dropped[0]}.")
+            state["role_outputs"][role] = valid
+            state.setdefault("dropped_suggestions", {})[role] = len(dropped)
+            if dropped:
+                reasons = ", ".join(sorted(set(dropped)))
+                await event(role, f"Dropped {len(dropped)} suggestions: {reasons}.")
+            await event(role, f"Proposed {len(valid)} candidates.")
             await save()
         candidates.extend(state["role_outputs"][role])
     if mode == "model":
@@ -62,6 +74,6 @@ async def propose_candidates(state, mode, inject, url, save, event):
                     True,
                 )
             )
-    state["candidates"] = validate_candidates(candidates, state["selected"])
+    state["candidates"], _ = validate_candidates(candidates, state["selected"])
     state["provider"] = provider
     await save()

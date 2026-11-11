@@ -316,30 +316,97 @@ async def test_exhausted_request_budget_survives_resume(demo_server, tmp_path):
     assert report["confirmed"] == []
 
 
-async def test_model_specialist_cannot_claim_another_role(demo_server, tmp_path, monkeypatch):
+PAGE = "https://example.com/x"
+
+
+def suggestion(**changes):
+    return {
+        "role": "navigation",
+        "claim_type": "broken_link",
+        "urls": [PAGE],
+        "explanation": "Broken",
+        "expected_behavior": "Works",
+        "observed_behavior": "Fails",
+        "reproduction_steps": ["Open"],
+        **changes,
+    }
+
+
+def test_out_of_scope_suggestion_is_dropped_and_the_rest_kept():
+    items = [suggestion(urls=["http://private/"]), suggestion()]
+    valid, dropped = validate_candidates(items, [PAGE])
+    assert [c["urls"] for c in valid] == [[PAGE]]
+    assert dropped == ["names a page outside the checked pages"]
+
+
+def test_out_of_scope_details_target_is_dropped():
+    item = suggestion(details={"source": PAGE, "target": "http://private/"})
+    assert validate_candidates([item], [PAGE]) == (
+        [],
+        ["names a page outside the checked pages"],
+    )
+
+
+@pytest.mark.parametrize("selected, written", [(PAGE, PAGE + "/"), (PAGE + "/", PAGE)])
+def test_trailing_slash_variant_maps_to_the_selected_page(selected, written):
+    item = suggestion(urls=[written], details={"page": written})
+    valid, dropped = validate_candidates([item], [selected])
+    assert dropped == []
+    assert valid[0]["urls"] == [selected] and valid[0]["details"]["page"] == selected
+
+
+def test_other_url_variants_are_not_mapped():
+    valid, dropped = validate_candidates([suggestion(urls=[PAGE + "?a=1"])], [PAGE])
+    assert valid == [] and len(dropped) == 1
+
+
+def specialist_state():
+    return {"selected": [PAGE], "observations": []}
+
+
+async def run_specialists(monkeypatch, state, output):
     from app.agents import specialists
 
-    async def wrong_role(*args, **kwargs):
-        return [{"role": "mobile"}], {}
+    async def fake_provider(*args, **kwargs):
+        return output, {"reserved_cost_usd": 0}
 
-    monkeypatch.setattr(specialists, "generate_candidates", wrong_role)
-    with pytest.raises(ValueError, match="another role"):
-        await run_scan("http://127.0.0.1:18541/faulty/", tmp_path, mode="model")
+    async def nothing(*args):
+        pass
+
+    events = []
+
+    async def event(role, message):
+        events.append((role, message))
+
+    monkeypatch.setattr(specialists, "generate_candidates", fake_provider)
+    await specialists.propose_candidates(state, "model", False, PAGE, nothing, event)
+    return events
 
 
-def test_model_cannot_expand_scope():
-    with pytest.raises(ValueError):
-        validate_candidates(
-            [
-                {
-                    "role": "navigation",
-                    "claim_type": "broken_link",
-                    "urls": ["http://private/"],
-                    "explanation": "Broken",
-                    "expected_behavior": "Works",
-                    "observed_behavior": "Fails",
-                    "reproduction_steps": ["Open"],
-                }
-            ],
-            ["https://example.com/"],
-        )
+async def test_model_specialist_wrong_role_is_dropped(monkeypatch):
+    state = specialist_state()
+    events = await run_specialists(monkeypatch, state, [suggestion(role="mobile")])
+    assert [c["role"] for c in state["candidates"]] == ["mobile"]
+    assert any("Dropped 1 suggestions: belongs to another role" in m for _, m in events)
+    assert sum(state["dropped_suggestions"].values()) == 2
+
+
+async def test_all_invalid_model_output_gives_no_candidates(monkeypatch):
+    state = specialist_state()
+    await run_specialists(monkeypatch, state, [suggestion(urls=["http://private/"])])
+    assert state["candidates"] == []
+    assert sum(state["dropped_suggestions"].values()) == 3
+
+
+async def test_scan_completes_when_every_model_suggestion_is_invalid(
+    demo_server, tmp_path, monkeypatch
+):
+    from app.agents import specialists
+
+    async def invalid(*args, **kwargs):
+        return [suggestion(urls=["http://private/"])], {"reserved_cost_usd": 0}
+
+    monkeypatch.setattr(specialists, "generate_candidates", invalid)
+    report = await run_scan("http://127.0.0.1:18541/faulty/", tmp_path, mode="model")
+    assert report["confirmed"] == []
+    assert report["coverage"]["dropped_suggestions"] == 3

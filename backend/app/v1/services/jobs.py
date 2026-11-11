@@ -159,7 +159,8 @@ async def rerun_job(baseline_id: str, request: RerunJob):
                 for f in claims
             ):
                 raise ValueError("Invalid baseline claims")
-            validate_candidates(deepcopy(claims), selected)
+            if validate_candidates(deepcopy(claims), selected)[1]:
+                raise ValueError("Invalid baseline claims")
         except (ValueError, TypeError, KeyError):
             raise HTTPException(409, "The baseline has invalid saved pages or claims.") from None
         url, mapping = baseline.url, {}

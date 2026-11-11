@@ -54,6 +54,7 @@ def build_report(url, mode, state, blocked):
                     o["url"] for o in desktop if o.get("price_extraction_truncated")
                 ],
             },
+            "dropped_suggestions": sum(state.get("dropped_suggestions", {}).values()),
             "incomplete_pages": [o["url"] for o in state["observations"] if o.get("error")],
         },
     }
