@@ -1,1267 +1,309 @@
 "use client";
 
-import { FormEvent, useEffect, useRef, useState } from "react";
-import RecentChecks from "./recent-checks";
+import { useRouter } from "next/navigation";
+import { FormEvent, ReactNode, useEffect, useState } from "react";
+import AgentChoice from "./bounties/agent-choice";
+import {
+  ACCOUNT,
+  api,
+  DEFAULT_FEE_BPS,
+  errorText,
+  Options,
+  OwnerBounty,
+  parseUsdc,
+  settlementBadge,
+  usdc,
+} from "./bounties/api";
+import { Message, SimTag } from "./bounties/ui";
+import { getHost, type Host } from "./race-host";
 import SiteHeader from "./site-header";
 
-type Mode = "scripted" | "model";
-type FindingState = "confirmed" | "rejected" | "unverified";
-type PriceFact = {
-  screenshot?: string;
-  key: string;
-  value: string;
-  context?:
-    | string
-    | {
-        name?: string;
-        currency?: string;
-        period?: string;
-        unit?: string;
-        product_context?: string[];
-        qualifiers?: string[];
-      };
-  quote?: string;
-  selector?: string;
-  source_position?: unknown;
-};
-type Evidence = {
-  url?: string;
-  screenshot?: string;
-  screenshot_ref?: string;
-  viewport?: { width: number; height: number };
-  captured_at?: string;
-  observations?: unknown;
-  facts?: PriceFact[];
-  text?: string;
-  selector?: string;
-};
-type Finding = {
-  id: string;
-  status: FindingState;
-  role: string;
-  claim_type: string;
-  explanation?: string;
-  title?: string;
-  urls?: string[];
-  affected_urls?: string[];
-  expected_behavior?: string;
-  observed_behavior?: string;
-  reproduction_steps?: string[];
-  visitor_impact?: string;
-  suggested_correction?: string;
-  reason?: string;
-  checker_reason?: string;
-  evidence?: Evidence[];
-  details?: { key?: string };
-  candidate?: Partial<Finding>;
-  checker?: { reason?: string; evidence?: Evidence[] };
-  demo_injected?: boolean;
-  injected?: boolean;
-};
-type Coverage = {
-  page_limit?: number;
-  selected_count?: number;
-  roles?: string[];
-  requests?: number;
-  blocked_requests?: number;
-  scope?: string;
-  external_resources?: string;
-  redirect_policy?: string;
-  browser_limits?: string;
-  consistency_scope?: string;
-  price_consistency?: {
-    supported_scope: string;
-    extracted_count: number;
-    excluded_count: number;
-    comparable_contexts: number;
-    extraction_truncated_pages?: string[];
-    exclusions: {
-      url: string;
-      quote: string;
-      reason: string;
-      selector?: string;
-      source_position?: unknown;
-    }[];
-  };
-  incomplete_pages?: string[];
-  redirects?: {
-    url: string;
-    target: string;
-    resource_type: string;
-    status: number;
-    allowed: boolean;
-    reason?: string;
-  }[];
-  resource_issues?: {
-    url: string;
-    page_url: string;
-    resource_type: string;
-    reason: string;
-  }[];
-  incomplete_layout_pages?: string[];
-};
-type ComparisonState = "remaining" | "resolved" | "new" | "could_not_recheck";
-type Comparison = {
-  baseline_job_id: string;
-  summary: Record<ComparisonState, number>;
-  remaining: ComparisonEntry[];
-  resolved: ComparisonEntry[];
-  new: ComparisonEntry[];
-  could_not_recheck: ComparisonEntry[];
-};
-type ComparisonEntry = {
-  baseline_finding_id: string | null;
-  finding: Finding;
-  current_finding: Finding | null;
-  reason: string;
-};
-type Report = {
-  comparison?: Comparison;
-  findings?: Finding[];
-  selected_pages?: string[];
-  inspected_pages?: string[];
-  viewports?: Record<string, { width: number; height: number }>;
-  coverage?: Coverage;
-  observations?: { url: string; final_url?: string }[];
-  incomplete_checks?: unknown[];
-  mode?: string;
-  provider?: unknown;
-  started_at?: string;
-  completed_at?: string;
-  [key: string]: unknown;
-};
-type Job = {
-  id: string;
+type Form = {
   url: string;
-  mode: Mode;
-  status: "queued" | "running" | "completed" | "failed";
-  progress: { stage: string; message: string };
-  events: { id: string; role: string; message: string; created_at: string }[];
-  report: Report | null;
-  findings: Finding[];
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-  baseline_job_id?: string | null;
-};
-type Config = {
-  modes: string[];
-  demo_urls: { faulty: string; corrected: string };
-  max_pages: number;
-};
-const roles = ["navigation", "mobile", "consistency", "checker"];
-const names: Record<string, string> = {
-  navigation: "Navigation",
-  mobile: "Mobile layout",
-  consistency: "Page consistency",
-  checker: "Independent checker",
-  coordinator: "Coordinator",
+  owner: string;
+  reward: string;
+  bond: string;
+  budget: string;
 };
 
-function displayMessage(message: string): string {
-  return message
-    .replaceAll("broken_link", "broken link")
-    .replaceAll("horizontal_overflow", "mobile overflow")
-    .replaceAll("price_mismatch", "price consistency");
+const START: Form = {
+  url: "",
+  owner: "",
+  reward: "1",
+  bond: "0.1",
+  budget: "10",
+};
+
+const ADVANCED: (keyof Form)[] = ["reward", "bond", "budget"];
+
+function problems(form: Form): Partial<Record<keyof Form, string>> {
+  const out: Partial<Record<keyof Form, string>> = {};
+  const reward = parseUsdc(form.reward);
+  const bond = parseUsdc(form.bond);
+  const budget = parseUsdc(form.budget);
+  if (!/^https?:\/\/\S+$/i.test(form.url.trim()))
+    out.url = "Enter the full address, starting with https:// or http://.";
+  if (!ACCOUNT.test(form.owner.trim()))
+    out.owner = "Enter a NEAR account ID, for example you.near.";
+  if (!reward) out.reward = "Enter an amount above 0, with at most 6 decimals.";
+  if (!bond) out.bond = "Enter an amount above 0, with at most 6 decimals.";
+  if (!budget) out.budget = "Enter an amount above 0, with at most 6 decimals.";
+  else if (
+    reward &&
+    budget < reward + Math.floor((reward * DEFAULT_FEE_BPS) / 10_000)
+  )
+    out.budget = "The budget must cover at least one reward and its fee.";
+  return out;
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(path, { ...init, cache: "no-store" });
-  let body;
-  try {
-    body = await response.json();
-  } catch {
-    throw new Error(
-      "The check service did not return a valid response. Try again.",
-    );
-  }
-  if (!response.ok) {
-    const detail = body.detail || body.error;
-    throw new Error(
-      typeof detail === "string"
-        ? detail
-        : "The check service could not accept this request.",
-    );
-  }
-  return body as T;
-}
-
-function readable(value: unknown): string {
-  if (value === undefined || value === null) return "Not recorded";
-  if (typeof value === "string") return value;
-  if (Array.isArray(value)) return value.map(readable).join(" · ");
-  if (typeof value === "object")
-    return Object.entries(value)
-      .map(([key, item]) => `${key.replaceAll("_", " ")}: ${readable(item)}`)
-      .join("; ");
-  return String(value);
-}
-
-function priceContext(fact: PriceFact): string {
-  const context = fact.context;
-  if (!context || typeof context === "string") return context || fact.key;
-  return [
-    context.name,
-    ...(context.product_context || []),
-    context.currency,
-    context.period && `per ${context.period}`,
-    context.unit &&
-      (context.unit === "offer" ? "whole offer" : `per ${context.unit}`),
-    ...(context.qualifiers || []),
-  ]
-    .filter(Boolean)
-    .join(" · ");
-}
-
-function CoveragePanel({
-  report,
-  pages,
-  mode,
-}: {
-  report: Report;
-  pages: string[];
-  mode: Mode;
-}) {
-  const provider = report.provider as
-    { name?: string; live_call?: boolean } | undefined;
-  const coverage = report.coverage;
-  const addresses = report.observations?.filter(
-    (item, index, all) =>
-      item.final_url &&
-      all.findIndex(
-        (other) => other.url === item.url && other.final_url === item.final_url,
-      ) === index,
-  );
-  return (
-    <div className="coverage">
-      <h3>What this check covered</h3>
-      <p>
-        <strong>Mode:</strong>{" "}
-        {mode === "scripted"
-          ? "Scripted browser checks"
-          : "Model-assisted checks"}
-      </p>
-      <p>
-        <strong>Provider:</strong>{" "}
-        {typeof report.provider === "string"
-          ? report.provider
-          : provider?.name || "Not recorded"}
-        {provider?.live_call === true
-          ? " · Live model call"
-          : mode === "model"
-            ? " · No live model call recorded"
-            : ""}
-      </p>
-      <h4>Inspected pages ({pages.length})</h4>
-      {pages.length ? (
-        <ul>
-          {pages.map((page, index) => (
-            <li key={index} className="url">
-              {page}
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p>No page list was recorded.</p>
-      )}
-      {!!addresses?.length && (
-        <>
-          <h4>Page addresses</h4>
-          <ul>
-            {addresses.map((item, index) => (
-              <li key={index}>
-                <strong>Original URL:</strong>{" "}
-                <span className="url">{item.url}</span>
-                <br />
-                <strong>Final URL:</strong>{" "}
-                <span className="url">{item.final_url}</span>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      <h4>Viewports</h4>
-      {report.viewports ? (
-        <ul>
-          {Object.entries(report.viewports).map(([name, size]) => (
-            <li key={name}>
-              {name === "mobile" ? "Mobile" : "Desktop"}: {size.width} ×{" "}
-              {size.height} pixels
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p>No viewport sizes were recorded.</p>
-      )}
-      <h4>Checks performed</h4>
-      <p>
-        {coverage?.roles?.map((role) => names[role] || role).join(" · ") ||
-          "No check list was recorded."}
-      </p>
-      <p>{coverage?.scope || "Results apply only to the selected pages."}</p>
-      {coverage?.consistency_scope && <p>{coverage.consistency_scope}</p>}
-      {coverage?.price_consistency && (
-        <>
-          <h4>Price checks</h4>
-          <p>{coverage.price_consistency.supported_scope}</p>
-          <p>
-            {coverage.price_consistency.extracted_count} prices recorded ·{" "}
-            {coverage.price_consistency.comparable_contexts} comparable contexts
-            · {coverage.price_consistency.excluded_count} prices excluded
-          </p>
-          {!!coverage.price_consistency.extraction_truncated_pages?.length && (
-            <>
-              <p className="notice">
-                The price search limit was reached on these pages. Some prices
-                were not checked.
-              </p>
-              <ul>
-                {coverage.price_consistency.extraction_truncated_pages.map(
-                  (url) => (
-                    <li className="url" key={url}>
-                      {url}
-                    </li>
-                  ),
-                )}
-              </ul>
-            </>
-          )}
-          {!!coverage.price_consistency.exclusions.length && (
-            <>
-              <p>
-                Excluded prices were not checked. This does not mean that they
-                passed.
-              </p>
-              <ul>
-                {coverage.price_consistency.exclusions.map((item, index) => (
-                  <li key={index}>
-                    <span className="url">{item.url}</span>
-                    <q>{item.quote}</q>: {item.reason}
-                    {item.selector && <p>Page location: {item.selector}</p>}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </>
-      )}
-      {coverage?.redirect_policy && <p>{coverage.redirect_policy}</p>}
-      {coverage?.browser_limits && <p>{coverage.browser_limits}</p>}
-      {coverage?.external_resources && (
-        <p className="notice">{coverage.external_resources}</p>
-      )}
-      {coverage?.redirects && (
-        <>
-          <h4>Redirect history</h4>
-          {coverage.redirects.length ? (
-            <ul>
-              {coverage.redirects.map((item, index) => (
-                <li key={index}>
-                  <strong>{item.allowed ? "Followed" : "Blocked"}:</strong>{" "}
-                  <span className="url">{item.url}</span> →{" "}
-                  <span className="url">{item.target}</span> (HTTP {item.status}
-                  ){item.reason && <>. {item.reason}</>}
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>No redirects were recorded.</p>
-          )}
-        </>
-      )}
-      {coverage?.resource_issues && (
-        <>
-          <h4>Missing or blocked resources</h4>
-          {coverage.resource_issues.length ? (
-            <>
-              <p>
-                These files could not load. Page appearance can be incomplete.
-              </p>
-              <ul>
-                {coverage.resource_issues.map((item, index) => (
-                  <li key={index}>
-                    <span className="url">{item.url}</span>: {item.reason}
-                    <br />
-                    Page: <span className="url">{item.page_url}</span>
-                  </li>
-                ))}
-              </ul>
-            </>
-          ) : (
-            <p>No missing or blocked resources were recorded.</p>
-          )}
-        </>
-      )}
-      <h4>Incomplete checks</h4>
-      {!!coverage?.incomplete_layout_pages?.length && (
-        <>
-          <p>
-            Mobile layout checks are incomplete for these pages because required
-            files did not load. These pages have not passed the layout check.
-          </p>
-          <ul>
-            {coverage.incomplete_layout_pages.map((page) => (
-              <li key={page} className="url">
-                {page}
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
-      {coverage?.incomplete_pages?.length ? (
-        <>
-          <p>
-            These pages could not be fully inspected. This does not mean that
-            they passed.
-          </p>
-          <ul>
-            {coverage.incomplete_pages.map((page) => (
-              <li key={page} className="url">
-                {page}
-              </li>
-            ))}
-          </ul>
-        </>
-      ) : (
-        <p>No incomplete page loads were recorded.</p>
-      )}
-      {report.incomplete_checks?.map((item, index) => (
-        <p key={index}>{readable(item)}</p>
-      ))}
-      <p>
-        Site repairs are performed by you or your website builder. Start a new
-        check after repairs to create a separate report.
-      </p>
-    </div>
-  );
-}
-
-function FindingCard({
-  finding: raw,
-  jobId,
-}: {
-  finding: Finding;
-  jobId: string;
-}) {
-  const finding = { ...raw.candidate, ...raw };
-  const evidence = raw.checker?.evidence || raw.evidence || [];
-  const reason = raw.checker?.reason || raw.checker_reason || raw.reason;
-  return (
-    <article className="finding">
-      <div className="finding-top">
-        <span className={`badge ${finding.status}`}>{finding.status}</span>
-        <span className="eyebrow">{names[finding.role] || finding.role}</span>
-        {(finding.demo_injected || finding.injected) && (
-          <span className="demo-label">Demo-only claim</span>
-        )}
-      </div>
-      <h3>
-        {finding.title ||
-          finding.explanation ||
-          finding.claim_type.replaceAll("_", " ")}
-      </h3>
-      {finding.title && finding.explanation && <p>{finding.explanation}</p>}
-      {reason && (
-        <p className="check-reason">
-          <strong>Checker result:</strong> {reason}
-        </p>
-      )}
-      <div className="finding-details">
-        {finding.visitor_impact && (
-          <div>
-            <h4>Visitor impact</h4>
-            <p>{finding.visitor_impact}</p>
-          </div>
-        )}
-        {finding.suggested_correction && (
-          <div>
-            <h4>Suggested correction</h4>
-            <p>{finding.suggested_correction}</p>
-          </div>
-        )}
-        {finding.expected_behavior && (
-          <div>
-            <h4>Expected</h4>
-            <p>{finding.expected_behavior}</p>
-          </div>
-        )}
-        {finding.observed_behavior && (
-          <div>
-            <h4>Observed</h4>
-            <p>{finding.observed_behavior}</p>
-          </div>
-        )}
-      </div>
-      {(finding.affected_urls || finding.urls || []).map((url) => (
-        <a
-          className="url"
-          key={url}
-          href={url}
-          target="_blank"
-          rel="noreferrer"
-        >
-          {url} ↗
-        </a>
-      ))}
-      {finding.claim_type === "price_mismatch" && (
-        <div className="price-evidence">
-          <h4>Compared prices</h4>
-          {evidence.map((item, index) => {
-            const facts = (item.facts || []).filter(
-              (fact) =>
-                !finding.details?.key || fact.key === finding.details.key,
-            );
-            return facts.length ? (
-              <div key={index} className="price-source">
-                <p className="url">{item.url}</p>
-                {facts.map((fact, factIndex) => (
-                  <div key={factIndex}>
-                    <p>
-                      <strong>Price:</strong>{" "}
-                      {typeof fact.context === "object" && fact.context.currency
-                        ? `${fact.context.currency} ${fact.value}`
-                        : fact.value}
-                    </p>
-                    <p>
-                      <strong>Context:</strong> {priceContext(fact)}
-                    </p>
-                    {fact.quote && <blockquote>{fact.quote}</blockquote>}
-                    {fact.screenshot && (
-                      <a
-                        href={`/api/jobs/${encodeURIComponent(jobId)}/evidence/${encodeURIComponent(fact.screenshot.split("/").pop()!)}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        <img
-                          className="price-capture"
-                          src={`/api/jobs/${encodeURIComponent(jobId)}/evidence/${encodeURIComponent(fact.screenshot.split("/").pop()!)}`}
-                          alt={`Price source: ${fact.value}`}
-                          loading="lazy"
-                        />
-                      </a>
-                    )}
-                    {fact.selector && (
-                      <p>
-                        <strong>Page location:</strong> {fact.selector}
-                      </p>
-                    )}
-                    {fact.source_position !== undefined && (
-                      <p>
-                        <strong>Page element position:</strong>{" "}
-                        {readable(fact.source_position)}
-                      </p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            ) : null;
-          })}
-        </div>
-      )}
-      <details>
-        <summary>Evidence and steps to repeat</summary>
-        {finding.reproduction_steps?.length ? (
-          <ol>
-            {finding.reproduction_steps.map((step, index) => (
-              <li key={index}>{step}</li>
-            ))}
-          </ol>
-        ) : (
-          <p>No steps were recorded.</p>
-        )}
-        {evidence.map((item, index) => {
-          const shot = item.screenshot || item.screenshot_ref;
-          const source = shot
-            ? `/api/jobs/${encodeURIComponent(jobId)}/evidence/${encodeURIComponent(shot.split("/").pop()!)}`
-            : null;
-          return (
-            <figure key={index}>
-              {item.url && <p className="url">{item.url}</p>}
-              {(item.observations !== undefined || item.text) && (
-                <p>{readable(item.observations || item.text)}</p>
-              )}
-              {source && (
-                <a href={source} target="_blank" rel="noreferrer">
-                  <img
-                    src={source}
-                    alt={`Evidence for ${finding.title || finding.claim_type}`}
-                    loading="lazy"
-                  />
-                </a>
-              )}
-              <figcaption>
-                {item.viewport
-                  ? `${item.viewport.width} × ${item.viewport.height}`
-                  : "Viewport not recorded"}
-                {item.captured_at
-                  ? ` · ${new Date(item.captured_at).toLocaleString()}`
-                  : ""}
-              </figcaption>
-            </figure>
-          );
-        })}
-      </details>
-    </article>
-  );
-}
-
-function reportAddress(id: string) {
-  return `/?job=${encodeURIComponent(id)}`;
-}
-
-function ComparisonPanel({
-  comparison,
-  jobId,
-}: {
-  comparison: Comparison;
-  jobId: string;
-}) {
-  const sections: { key: ComparisonState; label: string }[] = [
-    { key: "remaining", label: "Still present" },
-    { key: "resolved", label: "Resolved" },
-    { key: "new", label: "New" },
-    { key: "could_not_recheck", label: "Could not recheck" },
-  ];
-  return (
-    <section className="comparison" aria-label="Before and after comparison">
-      <div className="report-heading">
-        <h3>Before and after</h3>
-        <div className="report-links">
-          <a href={reportAddress(comparison.baseline_job_id)}>Before report</a>
-          <a href={reportAddress(jobId)}>After report</a>
-        </div>
-      </div>
-      <p className="report-scope">
-        Only repeat checks with evidence can show a fault as resolved. A missing
-        finding does not prove a repair.
-      </p>
-      <div className="comparison-counts">
-        {sections.map(({ key, label }) => (
-          <a key={key} href={`#comparison-${key}`}>
-            <strong>{comparison.summary[key]}</strong> {label}
-          </a>
-        ))}
-      </div>
-      {sections.map(({ key, label }) => (
-        <section
-          key={key}
-          id={`comparison-${key}`}
-          className="comparison-group"
-        >
-          <h4>
-            {label} ({comparison.summary[key]})
-          </h4>
-          {(comparison[key] || []).map((entry, index) => (
-            <article
-              className="comparison-entry"
-              key={entry.baseline_finding_id || entry.finding.id || index}
-            >
-              <h5>
-                {entry.finding.title ||
-                  entry.finding.explanation ||
-                  displayMessage(entry.finding.claim_type)}
-              </h5>
-              <p>{entry.reason}</p>
-              <details>
-                <summary>
-                  {key === "new"
-                    ? "View new evidence"
-                    : "View before and after evidence"}
-                </summary>
-                <h5>{key === "new" ? "New finding" : "Before check"}</h5>
-                <FindingCard
-                  finding={entry.finding}
-                  jobId={key === "new" ? jobId : comparison.baseline_job_id}
-                />
-                {key !== "new" && (
-                  <>
-                    <h5>After check</h5>
-                    {entry.current_finding ? (
-                      <FindingCard
-                        finding={entry.current_finding}
-                        jobId={jobId}
-                      />
-                    ) : (
-                      <p>
-                        No repeat finding was recorded. See the reason above.
-                      </p>
-                    )}
-                  </>
-                )}
-              </details>
-            </article>
-          ))}
-          {!comparison[key]?.length && (
-            <p className="comparison-empty">No findings in this group.</p>
-          )}
-        </section>
-      ))}
-    </section>
-  );
-}
-
-export default function Home() {
-  const [config, setConfig] = useState<Config | null>(null);
-  const [url, setUrl] = useState("");
-  const [mode, setMode] = useState<Mode>("scripted");
-  const [job, setJob] = useState<Job | null>(null);
+export default function StartRacePage() {
+  const router = useRouter();
+  const [options, setOptions] = useState<Options | null>(null);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [host, setHost] = useState<Host | null | undefined>(undefined);
+  const [form, setForm] = useState<Form>(START);
+  const [ai, setAi] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
+  const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [connectionError, setConnectionError] = useState("");
-  const [tab, setTab] = useState<FindingState | "coverage">("confirmed");
-  const [demo, setDemo] = useState(false);
-  const reportRef = useRef<HTMLElement>(null);
-  const active = job?.status === "queued" || job?.status === "running";
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    request<Config>("/api/config")
-      .then(setConfig)
-      .catch((err: Error) => setError(err.message));
+    api<Options>("/api/funding/options")
+      .then(setOptions)
+      .catch((e) => setOptionsError(errorText(e)));
+    getHost().then(setHost);
   }, []);
 
-  useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get("job");
-    if (!id) return;
-    const controller = new AbortController();
-    setBusy(true);
-    request<Job>(`/api/jobs/${encodeURIComponent(id)}`, {
-      signal: controller.signal,
-    })
-      .then((saved) => {
-        if (controller.signal.aborted) return;
-        setJob(saved);
-        setUrl(saved.url);
-        setMode(saved.mode);
-        setTimeout(
-          () => reportRef.current?.scrollIntoView({ block: "start" }),
-          100,
-        );
-      })
-      .catch((err: Error) => {
-        if (!controller.signal.aborted) setError(err.message);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setBusy(false);
-      });
-    return () => controller.abort();
-  }, []);
+  const issues = problems(form);
+  const shown = touched ? issues : {};
+  const reward = parseUsdc(form.reward) ?? 0;
+  const fee = Math.floor((reward * DEFAULT_FEE_BPS) / 10_000);
+  const budget = parseUsdc(form.budget) ?? 0;
+  const bugs = reward ? Math.floor(budget / (reward + fee)) : 0;
+  const dry = options?.settlement_mode === "dry";
 
-  useEffect(() => {
-    if (!active || !job?.id) return;
-    const controller = new AbortController();
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      try {
-        const next = await request<Job>(
-          `/api/jobs/${encodeURIComponent(job!.id)}`,
-          { signal: controller.signal },
-        );
-        if (controller.signal.aborted) return;
-        setJob(next);
-        setConnectionError("");
-        if (next.status === "completed" || next.status === "failed") return;
-      } catch (err) {
-        if (controller.signal.aborted) return;
-        setConnectionError(
-          `${(err as Error).message} Progress will update when the connection returns.`,
-        );
-      }
-      timer = setTimeout(poll, 1500);
-    }
-    timer = setTimeout(poll, 750);
-    return () => {
-      controller.abort();
-      clearTimeout(timer);
-    };
-  }, [active, job?.id]);
+  function set(key: keyof Form) {
+    return (e: { target: { value: string } }) =>
+      setForm((f) => ({ ...f, [key]: e.target.value }));
+  }
 
-  async function start(target: string, inject = false, scanMode: Mode = mode) {
-    setError("");
-    setConnectionError("");
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    setTouched(true);
+    setError(null);
+    if (ADVANCED.some((k) => issues[k])) setAdvanced(true);
+    if (Object.keys(issues).length) return;
     setBusy(true);
     try {
-      const next = await request<Job>("/api/jobs", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          url: target,
-          mode: inject ? "scripted" : scanMode,
-          demo_fault_injection: inject,
-        }),
+      const bounty = await api<OwnerBounty>("/api/bounties", {
+        url: form.url.trim(),
+        owner_account: form.owner.trim(),
+        reward_amount: parseUsdc(form.reward),
+        bond_amount: parseUsdc(form.bond),
+        budget: parseUsdc(form.budget),
       });
-      setJob(next);
-      window.history.replaceState(null, "", reportAddress(next.id));
-      setDemo(inject);
-      setTab("confirmed");
-      setTimeout(
-        () =>
-          reportRef.current?.scrollIntoView({
-            behavior: "smooth",
-            block: "start",
-          }),
-        100,
-      );
+      router.push(`/bounties/${bounty.id}${ai ? "?agents=ai" : ""}`);
     } catch (err) {
-      setError((err as Error).message);
-    } finally {
+      setError(errorText(err));
       setBusy(false);
     }
   }
 
-  async function rerun(demoCorrected = false) {
-    if (!job || busy || active) return;
-    setBusy(true);
-    setError("");
-    setConnectionError("");
-    try {
-      const next = await request<Job>(
-        `/api/jobs/${encodeURIComponent(job.id)}/rerun`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ demo_corrected: demoCorrected }),
-        },
-      );
-      setJob(next);
-      setUrl(next.url);
-      setDemo(false);
-      setTab("confirmed");
-      window.history.replaceState(null, "", reportAddress(next.id));
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setBusy(false);
-    }
+  function field(
+    key: keyof Form,
+    label: string,
+    hint: string,
+    input: ReactNode,
+  ) {
+    return (
+      <label className="bo-field">
+        {label}
+        {input}
+        {shown[key] ? (
+          <small className="bo-invalid" id={`${key}-error`} role="alert">
+            {shown[key]}
+          </small>
+        ) : (
+          <small>{hint}</small>
+        )}
+      </label>
+    );
   }
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    void start(url.trim());
+  function money(key: "reward" | "bond" | "budget", name: string) {
+    return (
+      <span className="bo-unit">
+        <input
+          name={name}
+          inputMode="decimal"
+          value={form[key]}
+          onChange={set(key)}
+          aria-invalid={!!shown[key]}
+        />
+        <span>USDC</span>
+      </span>
+    );
   }
-  function download() {
-    if (!job?.report) return;
-    const file = new Blob([JSON.stringify(job.report, null, 2)], {
-      type: "application/json",
-    });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(file);
-    link.download = `arsune-${job.id}.json`;
-    link.click();
-    URL.revokeObjectURL(link.href);
-  }
-
-  const findings = job?.report?.findings || job?.findings || [];
-  const pages =
-    job?.report?.inspected_pages || job?.report?.selected_pages || [];
-  const count = (state: FindingState) =>
-    findings.filter((item) => item.status === state).length;
 
   return (
     <>
       <SiteHeader current="/" />
       <main>
-        <section className="intro">
+        <section className="intro start-intro">
           <div className="intro-copy">
             <p className="eyebrow">
-              <span className="short-line" /> CHECK. VERIFY. UNDERSTAND.
+              <span className="short-line" /> PROOF-PAID BUG RACE
             </p>
             <h1>
-              A second look.
+              Find the bugs your visitors hit.
               <br />
-              <span>A clearer website.</span>
+              <span>Pay only for bugs Arsune proves.</span>
             </h1>
             <p className="lead">
-              Find broken links, mobile layout faults, and conflicting
-              information. Each reported fault gets a separate check, with
-              evidence you can inspect.
+              Agents search your site and claim bugs. Arsune checks each claim
+              again in a fresh browser. A false claim costs the agent its bond.
+              It costs you nothing.
             </p>
-            <div className="scope-note">
-              <span aria-hidden="true">↳</span> Up to five pages. Desktop and
-              mobile. Your site stays unchanged.
-            </div>
+            <ol className="start-steps" aria-label="How a race works">
+              <li>
+                <strong>Arsune loads your site</strong>
+                <span>On desktop and mobile, before any agent starts.</span>
+              </li>
+              <li>
+                <strong>Agents search</strong>
+                <span>Each claim needs a bond from the agent.</span>
+              </li>
+              <li>
+                <strong>Arsune checks each claim</strong>
+                <span>
+                  Proven bugs get paid. False claims lose the bond. Repeats get
+                  the bond back.
+                </span>
+              </li>
+            </ol>
           </div>
-          <div className="scan-panel">
+
+          <div className="scan-panel start-panel">
             <div className="panel-title">
-              <span className="step-number">01</span>
-              <h2>Start a website check</h2>
-            </div>
-            <form onSubmit={submit}>
-              <label htmlFor="website">Website URL</label>
-              <input
-                id="website"
-                type="url"
-                placeholder="https://your-website.com"
-                value={url}
-                onChange={(event) => setUrl(event.target.value)}
-                required
-                disabled={busy || active}
-                autoComplete="url"
-              />
-              <fieldset disabled={busy || active}>
-                <legend>Check mode</legend>
-                <div className="mode-options">
-                  <label className={mode === "scripted" ? "selected" : ""}>
-                    <input
-                      type="radio"
-                      name="mode"
-                      value="scripted"
-                      checked={mode === "scripted"}
-                      onChange={() => setMode("scripted")}
-                    />
-                    <span>
-                      <strong>Scripted</strong>
-                      <small>Repeatable browser checks</small>
-                    </span>
-                  </label>
-                  <label className={mode === "model" ? "selected" : ""}>
-                    <input
-                      type="radio"
-                      name="mode"
-                      value="model"
-                      disabled={!config?.modes.includes("model")}
-                      checked={mode === "model"}
-                      onChange={() => setMode("model")}
-                    />
-                    <span>
-                      <strong>Model</strong>
-                      <small>
-                        {config?.modes.includes("model")
-                          ? "Model suggests findings"
-                          : "Not configured"}
-                      </small>
-                    </span>
-                  </label>
-                </div>
-              </fieldset>
-              <button
-                className="primary"
-                type="submit"
-                disabled={busy || active}
-              >
-                {busy
-                  ? "Starting check…"
-                  : active
-                    ? "Check in progress…"
-                    : "Check website"}
-                <span aria-hidden="true">↗</span>
-              </button>
-            </form>
-            <div className="demo-block" id="website-demo">
-              <p>Try the controlled demo</p>
-              <div className="demo-actions">
-                <button
-                  disabled={!config || busy || active}
-                  onClick={() => {
-                    setUrl(config!.demo_urls.faulty);
-                    void start(config!.demo_urls.faulty, true);
-                  }}
-                >
-                  Site with faults <span aria-hidden="true">↗</span>
-                </button>
-                <button
-                  disabled={!config || busy || active}
-                  onClick={() => {
-                    setUrl(config!.demo_urls.corrected);
-                    void start(config!.demo_urls.corrected, false, "scripted");
-                  }}
-                >
-                  Corrected site <span aria-hidden="true">↗</span>
-                </button>
-              </div>
-              <small>
-                The faulty demo adds one labeled false claim to test the
-                checker. Both demo scans use scripted mode.
-              </small>
-            </div>
-            {error && (
-              <p className="error" role="alert">
-                {error}
-              </p>
-            )}
-          </div>
-        </section>
-        <section className="method" aria-label="How a check works">
-          <div>
-            <span>01 / OBSERVE</span>
-            <p>
-              Three specialists inspect navigation, mobile layout, and page
-              consistency.
-            </p>
-          </div>
-          <div>
-            <span>02 / REPEAT</span>
-            <p>
-              A separate checker repeats each supported check against the
-              website.
-            </p>
-          </div>
-          <div>
-            <span>03 / REVIEW</span>
-            <p>
-              See confirmed faults, rejected claims, and checks that need more
-              evidence.
-            </p>
-          </div>
-        </section>
-        <RecentChecks updated={`${job?.id || ""}:${job?.status || ""}`} />
-        {job && (
-          <section
-            className="workspace"
-            ref={reportRef}
-            aria-label="Website check results"
-          >
-            <div className="section-top">
-              <div>
-                <p className="eyebrow">YOUR WEBSITE CHECK</p>
-                <h2>
-                  {job.status === "completed"
-                    ? "Evidence, before advice."
-                    : job.status === "failed"
-                      ? "The check could not finish."
-                      : "A closer look is in progress."}
-                </h2>
-                <p className="url">{job.url}</p>
-              </div>
-              <span className={`badge job-${job.status}`}>{job.status}</span>
-            </div>
-            <div className="job-meta">
-              <span>
-                {job.mode === "scripted"
-                  ? "Scripted browser checks"
-                  : "Model-assisted checks"}
-              </span>
-              <span>Started {new Date(job.created_at).toLocaleString()}</span>
-              <span>Job {job.id.slice(0, 8)}</span>
-            </div>
-            {(demo ||
-              findings.some(
-                (finding) => finding.demo_injected || finding.injected,
-              )) && (
-              <p className="notice">
-                Controlled demo: one false claim was added to test the
-                independent checker.
-              </p>
-            )}
-            {connectionError && (
-              <p className="error" role="alert">
-                {connectionError}
-              </p>
-            )}
-            {job.baseline_job_id && !job.report?.comparison && (
-              <p className="notice">
-                This check will compare results with the{" "}
-                <a href={reportAddress(job.baseline_job_id)}>before report</a>.
-                The before report stays unchanged.
-              </p>
-            )}
-            {job.error && (
-              <p className="error" role="alert">
-                {job.error}
-              </p>
-            )}
-            <div className="activity">
-              <div className="activity-heading">
-                <h3>Check activity</h3>
-                <p role="status" aria-live="polite">
-                  {active && <span className="spinner" />}
-                  {displayMessage(job.progress?.message || job.status)}
-                </p>
-              </div>
-              <div className="roles">
-                {roles.map((role) => {
-                  const event = [...(job.events || [])]
-                    .reverse()
-                    .find((item) => item.role.toLowerCase() === role);
-                  return (
-                    <div key={role} className={event ? "role started" : "role"}>
-                      <span className="role-icon" aria-hidden="true">
-                        {role === "navigation"
-                          ? "↗"
-                          : role === "mobile"
-                            ? "▯"
-                            : role === "consistency"
-                              ? "≋"
-                              : "✓"}
-                      </span>
-                      <h4>{names[role]}</h4>
-                      <p>
-                        {event
-                          ? displayMessage(event.message)
-                          : active
-                            ? "Waiting for observations"
-                            : "No activity recorded"}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-              {job.events?.length > 0 && (
-                <details className="activity-log">
-                  <summary>View activity log ({job.events.length})</summary>
-                  <ol>
-                    {job.events.map((event) => (
-                      <li key={event.id}>
-                        <time>
-                          {new Date(event.created_at).toLocaleTimeString()}
-                        </time>
-                        <strong>{names[event.role] || event.role}</strong>
-                        <span>{displayMessage(event.message)}</span>
-                      </li>
-                    ))}
-                  </ol>
-                </details>
+              <h2>Start a bug race</h2>
+              <SimTag show={dry} />
+              {options && !dry && (
+                <span className="sw-real">
+                  {settlementBadge(options.settlement_mode)}
+                </span>
               )}
             </div>
-            {job.report && (
-              <div className="report">
-                <div className="report-heading">
-                  <div>
-                    <p className="eyebrow">REPORT</p>
-                    <h3>
-                      {count("confirmed")} confirmed{" "}
-                      {count("confirmed") === 1 ? "fault" : "faults"}
-                    </h3>
-                  </div>
-                  <div className="report-downloads">
-                    <a
-                      className="text-button"
-                      href={`/api/jobs/${encodeURIComponent(job.id)}/repair-report`}
-                      download
-                    >
-                      Download repair report ↓
-                    </a>
-                    <button className="text-button" onClick={download}>
-                      Download report JSON ↓
-                    </button>
-                  </div>
-                </div>
-                <p className="report-scope">
-                  Results apply to the pages and checks recorded below. They do
-                  not establish that the whole website is fault-free.
-                </p>
-                {job.status === "completed" && (
-                  <div className="rescan-actions">
-                    <button
-                      disabled={busy || active}
-                      onClick={() => void rerun()}
-                    >
-                      Check again and compare
-                    </button>
-                    {config && job.url === config.demo_urls.faulty && (
-                      <button
-                        disabled={busy || active}
-                        onClick={() => void rerun(true)}
-                      >
-                        Compare with corrected demo
-                      </button>
-                    )}
-                    <p>
-                      A new check keeps this report and repeats its checks. The
-                      demo comparison uses the corrected demo site.
-                    </p>
-                  </div>
-                )}
-                {job.report.comparison && (
-                  <ComparisonPanel
-                    comparison={job.report.comparison}
-                    jobId={job.id}
-                  />
-                )}
-                <div
-                  className="tabs"
-                  role="tablist"
-                  aria-label="Report sections"
-                >
-                  {(
-                    ["confirmed", "rejected", "unverified", "coverage"] as const
-                  ).map((state) => (
-                    <button
-                      id={`tab-${state}`}
-                      key={state}
-                      role="tab"
-                      aria-selected={tab === state}
-                      aria-controls="report-panel"
-                      tabIndex={tab === state ? 0 : -1}
-                      onClick={() => setTab(state)}
-                      onKeyDown={(event) => {
-                        if (
-                          event.key === "ArrowRight" ||
-                          event.key === "ArrowLeft"
-                        ) {
-                          const states = [
-                            "confirmed",
-                            "rejected",
-                            "unverified",
-                            "coverage",
-                          ] as const;
-                          const next =
-                            states[
-                              (states.indexOf(state) +
-                                (event.key === "ArrowRight" ? 1 : 3)) %
-                                4
-                            ];
-                          setTab(next);
-                          document.getElementById(`tab-${next}`)?.focus();
-                        }
-                      }}
-                    >
-                      {state === "coverage"
-                        ? "Coverage"
-                        : state[0].toUpperCase() + state.slice(1)}
-                      {state !== "coverage" && <span>{count(state)}</span>}
-                    </button>
-                  ))}
-                </div>
-                <div
-                  id="report-panel"
-                  role="tabpanel"
-                  aria-labelledby={`tab-${tab}`}
-                  tabIndex={0}
-                >
-                  {tab === "coverage" ? (
-                    <CoveragePanel
-                      report={job.report}
-                      pages={pages}
-                      mode={job.mode}
-                    />
-                  ) : findings.filter((item) => item.status === tab).length ? (
-                    findings
-                      .filter((item) => item.status === tab)
-                      .map((item) => (
-                        <FindingCard
-                          key={item.id}
-                          finding={item}
-                          jobId={job.id}
-                        />
-                      ))
-                  ) : (
-                    <div className="empty-state">
-                      <span aria-hidden="true">
-                        {tab === "confirmed" ? "✓" : "—"}
-                      </span>
-                      <h3>No {tab} findings in this report</h3>
-                      <p>
-                        {tab === "confirmed"
-                          ? "Review coverage for the pages and checks that were completed."
-                          : tab === "rejected"
-                            ? "No candidate claim received this result."
-                            : "Review coverage for any incomplete checks."}
-                      </p>
-                    </div>
+            <Message kind="error" text={optionsError} />
+            <form className="bo-form" onSubmit={submit} noValidate>
+              {field(
+                "url",
+                "Site URL",
+                "Arsune pays only for bugs on this site.",
+                <input
+                  name="url"
+                  type="url"
+                  placeholder="https://your-site.com"
+                  value={form.url}
+                  onChange={set("url")}
+                  aria-invalid={!!shown.url}
+                />,
+              )}
+              {field(
+                "owner",
+                "Your NEAR account",
+                "You prove that you own the site in the next step.",
+                <input
+                  name="owner"
+                  placeholder="you.near"
+                  autoComplete="off"
+                  value={form.owner}
+                  onChange={set("owner")}
+                  aria-invalid={!!shown.owner}
+                />,
+              )}
+              <AgentChoice host={host} ai={ai} onChange={setAi} />
+              <details
+                className="bo-details start-advanced"
+                open={advanced}
+                onToggle={(e) => setAdvanced(e.currentTarget.open)}
+              >
+                <summary>Advanced: reward, bond, budget</summary>
+                <div className="bo-row">
+                  {field(
+                    "reward",
+                    "Reward per proven bug",
+                    "Paid to the agent.",
+                    money("reward", "reward"),
+                  )}
+                  {field(
+                    "bond",
+                    "Base bond per claim",
+                    "An agent loses it for a false claim.",
+                    money("bond", "bond"),
+                  )}
+                  {field(
+                    "budget",
+                    "Budget",
+                    "The most that you pay in total.",
+                    money("budget", "budget"),
                   )}
                 </div>
+                <div className="bo-preview" aria-label="Cost preview">
+                  <div>
+                    <span>
+                      Arsune fee per proven bug ({DEFAULT_FEE_BPS / 100}%)
+                    </span>
+                    <strong data-testid="preview-fee">{usdc(fee)} USDC</strong>
+                  </div>
+                  <div>
+                    <span>The budget pays for</span>
+                    <strong data-testid="preview-bugs">
+                      {bugs} proven bug{bugs === 1 ? "" : "s"}
+                    </strong>
+                  </div>
+                </div>
+              </details>
+              <p className="bo-muted" data-testid="start-terms">
+                {usdc(reward)} USDC per proven bug · at most {usdc(budget)} USDC
+                in total
+              </p>
+              <Message kind="error" text={error} testId="create-error" />
+              <button type="submit" className="primary" disabled={busy}>
+                {busy ? "Creating the race…" : "Start a bug race"}
+                <span aria-hidden="true">→</span>
+              </button>
+              <p className="bo-muted">
+                Nothing is charged now. Next, you prove that you own the site
+                and fund the race.
+              </p>
+            </form>
+            {options && (
+              <div className="demo-block">
+                <p>No site at hand?</p>
+                <div className="demo-actions">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm((f) => ({
+                        ...f,
+                        url: `${options.demo_site_url}/shop/`,
+                        owner: f.owner || "demo-owner.near",
+                      }))
+                    }
+                  >
+                    Use the local demo shop
+                  </button>
+                </div>
+                <small>
+                  A small shop with known bugs. Arsune can set its proof for
+                  you.
+                </small>
               </div>
             )}
-          </section>
-        )}
+          </div>
+        </section>
       </main>
-      <footer>
-        <a href="/" className="brand">
-          arsune.
-        </a>
-        <p>Useful checks. Visible evidence. Clear next steps.</p>
-        <span>Local prototype · Five-page limit</span>
-      </footer>
     </>
   );
 }

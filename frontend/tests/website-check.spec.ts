@@ -5,7 +5,7 @@ test("a real job shows checked faults, rejected demo claim, evidence, and correc
 }) => {
   const failures: string[] = [];
   page.on("pageerror", (error) => failures.push(error.message));
-  await page.goto("/");
+  await page.goto("/checks");
   await expect(
     page.getByRole("heading", { name: "Start a website check" }),
   ).toBeVisible();
@@ -35,7 +35,7 @@ test("a real job shows checked faults, rejected demo claim, evidence, and correc
       ),
     )
     .toBe(true);
-  await page.getByRole("tab", { name: /Rejected/ }).click();
+  await page.getByRole("tab", { name: /False claims/ }).click();
   await expect(
     page.getByText("Demo-only claim", { exact: true }),
   ).toBeVisible();
@@ -51,9 +51,9 @@ test("a real job shows checked faults, rejected demo claim, evidence, and correc
       ),
     )
     .toBe(true);
-  await page.getByRole("tab", { name: /Unverified/ }).click();
+  await page.getByRole("tab", { name: /Could not check/ }).click();
   await expect(page.getByRole("tabpanel")).toBeVisible();
-  await page.getByRole("tab", { name: "Coverage" }).click();
+  await page.getByRole("tab", { name: "What was checked" }).click();
   await expect(
     page.getByRole("heading", { name: "What this check covered" }),
   ).toBeVisible();
@@ -77,7 +77,7 @@ test("a real job shows checked faults, rejected demo claim, evidence, and correc
     page.getByRole("heading", { name: "0 confirmed faults" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "No confirmed findings in this report" }),
+    page.getByRole("heading", { name: "No confirmed faults in this report" }),
   ).toBeVisible();
   expect(failures).toEqual([]);
 });
@@ -90,7 +90,7 @@ test("coverage shows real redirects and incomplete layout checks", async ({
   expect(response.ok()).toBe(true);
   const config = await response.json();
   const target = new URL("/network/start", config.demo_urls.faulty).href;
-  await page.goto("/");
+  await page.goto("/checks");
   await page.getByLabel("Website URL").fill(target);
   await page
     .getByRole("button", { name: "Check website", exact: true })
@@ -98,7 +98,7 @@ test("coverage shows real redirects and incomplete layout checks", async ({
   await expect(
     page.getByRole("heading", { name: /\d+ confirmed faults/ }),
   ).toBeVisible();
-  await page.getByRole("tab", { name: "Coverage" }).click();
+  await page.getByRole("tab", { name: "What was checked" }).click();
   const coverage = page.getByRole("tabpanel");
   await expect(coverage).toContainText(`Original URL: ${target}`);
   await expect(coverage).toContainText(
@@ -123,7 +123,7 @@ test("coverage shows real redirects and incomplete layout checks", async ({
   await expect(
     page.getByRole("heading", { name: /\d+ confirmed faults/ }),
   ).toBeVisible();
-  await page.getByRole("tab", { name: "Coverage" }).click();
+  await page.getByRole("tab", { name: "What was checked" }).click();
   await expect(coverage).toContainText("Mobile layout checks are incomplete");
   await expect(coverage).toContainText(
     "These pages have not passed the layout check.",
@@ -171,9 +171,9 @@ test("coverage can display a report from the old format", async ({ page }) => {
       },
     }),
   );
-  await page.goto("/");
+  await page.goto("/checks");
   await page.getByRole("button", { name: "Site with faults" }).click();
-  await page.getByRole("tab", { name: "Coverage" }).click();
+  await page.getByRole("tab", { name: "What was checked" }).click();
   await expect(page.getByRole("tabpanel")).toContainText(
     "Redirects are blocked in this saved report.",
   );
@@ -189,7 +189,7 @@ test("invalid target shows service error and mobile layout fits", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
+  await page.goto("/checks");
   await page.getByLabel("Website URL").fill("http://127.0.0.1:12345/");
   await page
     .getByRole("button", { name: "Check website", exact: true })
@@ -212,7 +212,7 @@ test("invalid target shows service error and mobile layout fits", async ({
 test("lost progress connection keeps last state and reports the failure", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/checks");
   await expect(
     page.getByRole("button", { name: "Site with faults" }),
   ).toBeEnabled();

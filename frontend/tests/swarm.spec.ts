@@ -97,10 +97,15 @@ function bounty(mode: Mode) {
         id: "c1",
         hunter_account: "hunter1.testnet",
         claim_type: "broken_link",
-        urls: ["https://shop.example/cart"],
+        urls: ["https://shop.example/cart", "https://shop.example/checkout"],
+        details: {
+          source: "https://shop.example/cart",
+          target: "https://shop.example/checkout",
+        },
         status: "paid",
         checker_reason: "Link returned 404 in a fresh browser.",
         evidence_hash: HASH,
+        evidence_url: "/api/claims/c1/evidence",
         scout: { account: "scout-a.testnet", share_bps: 1500, tip_id: "t1" },
         created_at: "2026-11-09T10:01:00Z",
       },
@@ -279,7 +284,7 @@ test("dry mode labels money as simulation and has no NearBlocks links", async ({
   await page.getByTestId("agent-tile").first().click();
   await expect(page.getByTestId("agent-detail")).toContainText("crawl forms");
   await expect(
-    page.getByRole("link", { name: "Swarm", exact: true }),
+    page.getByRole("link", { name: "Live board", exact: true }),
   ).toHaveAttribute("aria-current", "page");
 });
 
@@ -312,18 +317,116 @@ test("escrow mode names the escrow contract and links its transactions", async (
   await expect(page.getByRole("link", { name: "NearBlocks" })).toHaveCount(3);
 });
 
-test("a decided claim shows the short evidence hash", async ({ page }) => {
+test("claim rows use plain titles and keep the evidence hash in a tooltip", async ({
+  page,
+}) => {
   await mock(page);
   await page.goto("/swarm");
   const paid = page.locator('[data-testid="claim-row"][data-status="paid"]');
-  const hash = paid.getByTestId("claim-hash");
-  await expect(hash).toHaveText(`${HASH.slice(0, 12)}…`);
-  await expect(hash).toHaveAttribute("title", HASH);
-  await expect(paid).toContainText("evidence");
+  await expect(paid.getByTestId("claim-title")).toHaveText(
+    "Broken link to /checkout",
+  );
+  await expect(paid).toContainText("Proven, paid");
+  await expect(paid).toContainText("/cart · by hunter-01 hunter1.testnet");
+  const evidence = paid.getByTestId("claim-evidence");
+  await expect(evidence).toHaveAttribute("href", "/api/claims/c1/evidence");
+  await expect(evidence).toHaveAttribute("title", HASH);
+  expect(await paid.innerText()).not.toContain(HASH.slice(0, 12));
   const rejected = page.locator(
     '[data-testid="claim-row"][data-status="rejected"]',
   );
-  await expect(rejected.getByTestId("claim-hash")).toHaveCount(0);
+  await expect(rejected).toContainText("False claim");
+  await expect(rejected.getByTestId("claim-evidence")).toHaveCount(0);
+});
+
+test("agents show by name; a 64-hex account stays in the tooltip", async ({
+  page,
+}) => {
+  const hex =
+    "97458f5d4323cefe365ad6800a0238978bcbe69741fbe2371090389e6458d088";
+  const unnamed =
+    "3ed88b639dc1beca261344b1d2d962c9ccdbdbedcc8a442c32613904e3191d75";
+  const sw = swarm();
+  sw.agents[0] = { ...sw.agents[0], id: "hunter-048", account: hex };
+  const claims = bounty("dry").claims;
+  await mock(page, {
+    swarm: sw,
+    bounty: {
+      claims: [
+        {
+          ...claims[0],
+          hunter_account: hex,
+          claim_type: "horizontal_overflow",
+          urls: ["https://shop.example/roi"],
+          details: { url: "https://shop.example/roi" },
+          checker_reason:
+            "Fresh measurement: content width 601 pixels; viewport width 390 pixels.",
+        },
+        { ...claims[1], hunter_account: unnamed },
+      ],
+      hunters: [],
+      ledger: [],
+    },
+  });
+  await page.goto("/swarm");
+  const paid = page.locator('[data-testid="claim-row"][data-status="paid"]');
+  await expect(paid).toContainText("hunter-048");
+  await expect(paid.getByTestId("claim-title")).toHaveText(
+    "Too wide on mobile (601 px on a 390 px screen)",
+  );
+  await expect(
+    page.locator('[data-testid="claim-row"][data-status="rejected"]'),
+  ).toContainText("Unnamed agent");
+  const stream = await page.getByTestId("claim-stream").innerText();
+  expect(stream).not.toContain(hex.slice(0, 12));
+  expect(stream).not.toContain(unnamed.slice(0, 12));
+  await expect(
+    page.getByTestId("claim-stream").locator(`[title="${hex}"]`),
+  ).toHaveCount(1);
+  await page.getByTestId("agent-tile").first().click();
+  await expect(page.getByTestId("agent-detail")).not.toContainText(hex);
+});
+
+test("a board for one bounty says so when the race runs for another", async ({
+  page,
+}) => {
+  await mock(page, { swarm: { ...swarm(), bounty_id: "other" } });
+  await page.goto("/swarm?bounty=b1");
+  const banner = page.getByTestId("other-race-banner");
+  await expect(banner).toContainText(
+    "The race that runs now is for another bounty.",
+  );
+  await expect(
+    banner.getByRole("link", { name: "Watch the race that runs now" }),
+  ).toHaveAttribute("href", "/swarm?bounty=other");
+  await expect(
+    banner.getByRole("link", { name: "Start a race for this bounty" }),
+  ).toHaveAttribute("href", "/bounties/b1");
+  // Tiles come from this bounty's records, not from the other race.
+  await expect(page.getByTestId("agent-tile")).toHaveCount(2);
+  await expect(page.getByTestId("tips")).toContainText("No scout tips yet.");
+  await expect(page.getByText("No race for this bounty now")).toBeVisible();
+});
+
+test("an idle race host before the first race shows no race", async ({
+  page,
+}) => {
+  await mock(page, {
+    swarm: {
+      ...swarm(0),
+      run_id: null,
+      bounty_id: null,
+      finished: true,
+      tips: [],
+      log: [],
+    },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByText("No race has run yet").first()).toBeVisible();
+  // Tiles come from the newest bounty's records; no result colors without a race.
+  await expect(page.getByTestId("agent-tile")).toHaveCount(2);
+  await expect(page.getByTestId("race-results")).toHaveCount(0);
+  await expect(page.getByTestId("error-banner")).toHaveCount(0);
 });
 
 test("works without the swarm runner", async ({ page }) => {

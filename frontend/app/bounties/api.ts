@@ -26,6 +26,7 @@ export type Options = {
 
 export type LedgerRow = {
   id: string;
+  claim_id?: string | null;
   kind: string;
   amount: number;
   account: string;
@@ -41,11 +42,19 @@ export type OwnerClaim = {
   id: string;
   hunter_account: string;
   claim_type: string;
+  urls?: string[];
+  details?: Record<string, unknown> | null;
+  // Equal faults have equal fingerprints; a second claim on one is a duplicate.
+  fingerprint?: string | null;
   status: string;
   outcome: string | null;
+  checker_reason?: string | null;
+  settlement_note?: string | null;
+  scout?: { account: string; share_bps: number } | null;
   // Set once the claim is decided: sha256 of the public evidence bundle.
   evidence_hash: string | null;
   evidence_url: string | null;
+  created_at?: string;
 };
 
 // Arsune's answer to "can the checker load this site?". The worker loads the bounty URL at
@@ -61,7 +70,8 @@ export type SiteCheck = {
   fresh_until: string | null;
 };
 
-export type OwnerBounty = {
+// One row of GET /api/bounties.
+export type BountySummary = {
   id: string;
   url: string;
   origin: string;
@@ -71,17 +81,21 @@ export type OwnerBounty = {
   closed_reason: string | null;
   // Why Arsune paused the bounty: claims that its own limits left unverified.
   paused_reason: string | null;
-  site_check: SiteCheck | null;
   reward_amount: number;
   bond_amount: number;
   fee_bps: number;
   fee_amount: number;
+  // What is left to pay with; budget_target is what the owner planned to fund.
   budget_amount: number;
   budget_target: number;
   settlement_mode: SettlementMode;
+  created_at: string;
+};
+
+export type OwnerBounty = BountySummary & {
+  site_check: SiteCheck | null;
   proof_token: string;
   proof_url: string;
-  created_at: string;
   claims: OwnerClaim[];
   ledger: LedgerRow[];
 };
@@ -200,6 +214,40 @@ export function usdc(units: number): string {
   const text = (units / 1e6).toFixed(6).replace(/0+$/, "");
   const [whole, frac = ""] = text.split(".");
   return `${whole}.${frac.padEnd(2, "0")}`;
+}
+
+const BOUNTY_LABELS: Record<string, string> = {
+  pending_proof: "Waiting for proof",
+  open: "Open",
+  paused: "Paused",
+  closed: "Closed",
+};
+
+export function bountyLabel(b: {
+  status: string;
+  closed_reason: string | null;
+}) {
+  if (b.status === "closed" && b.closed_reason === "budget_spent")
+    return "Budget spent";
+  return BOUNTY_LABELS[b.status] ?? b.status;
+}
+
+/** "staging.example.com/" for a bounty URL. */
+export function siteName(url: string): string {
+  return url.replace(/^https?:\/\//, "");
+}
+
+/** What a proven bug costs the owner: the reward and Arsune's fee. */
+export function perBug(b: { reward_amount: number; fee_amount: number }) {
+  return b.reward_amount + b.fee_amount;
+}
+
+/** All completed funding, not what is left after payouts. */
+export function fundedTotal(b: { budget_amount: number; ledger: LedgerRow[] }) {
+  const funds = b.ledger
+    .filter((r) => r.kind === "fund" && r.status === "completed")
+    .reduce((sum, r) => sum + r.amount, 0);
+  return Math.max(funds, b.budget_amount);
 }
 
 export function fundedFraction(b: {

@@ -11,7 +11,7 @@ test("a visible price report opens from saved history with readable evidence", a
   ).toBe(true);
   const target = new URL("/prices/different/first", config.demo_urls.faulty)
     .href;
-  await page.goto("/");
+  await page.goto("/checks");
   await page.getByLabel("Website URL").fill(target);
   await page
     .getByRole("button", { name: "Check website", exact: true })
@@ -48,11 +48,11 @@ test("a visible price report opens from saved history with readable evidence", a
   const downloadEvent = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download report JSON" }).click();
   await downloadEvent;
-  await page.goto("/");
+  await page.goto("/checks");
   const history = page.getByRole("region", { name: "Recent checks" });
   const saved = history
     .locator("li")
-    .filter({ has: page.locator(`a[href='/?job=${id}']`) });
+    .filter({ has: page.locator(`a[href='/checks?job=${id}']`) });
   await expect(saved).toContainText("completed");
   await expect(saved.locator("time")).toBeVisible();
   await saved.getByRole("link", { name: target, exact: true }).click();
@@ -65,13 +65,13 @@ test("a visible price report opens from saved history with readable evidence", a
     page.getByRole("heading", { name: "Before and after", exact: true }),
   ).toBeVisible();
   const afterId = new URL(page.url()).searchParams.get("job")!;
-  await page.goto("/");
+  await page.goto("/checks");
   const repeat = history
     .locator("li")
-    .filter({ has: page.locator(`a[href='/?job=${afterId}']`) });
+    .filter({ has: page.locator(`a[href='/checks?job=${afterId}']`) });
   await expect(
     repeat.getByRole("link", { name: "Baseline report" }),
-  ).toHaveAttribute("href", `/?job=${id}`);
+  ).toHaveAttribute("href", `/checks?job=${id}`);
   await repeat.getByRole("link", { name: "Baseline report" }).click();
   await expect(
     page.getByRole("heading", { name: /\d+ confirmed faults?/ }),
@@ -102,7 +102,7 @@ test("history loads bounded older pages and can refresh", async ({ page }) => {
       },
     });
   });
-  await page.goto("/");
+  await page.goto("/checks");
   const history = page.getByRole("region", { name: "Recent checks" });
   await expect(
     history.getByRole("link", { name: "https://recent.test/" }),
@@ -129,7 +129,7 @@ test("ambiguous prices show exclusions instead of a passed price check", async (
     "/prices/ambiguous-dollar/first",
     config.demo_urls.faulty,
   ).href;
-  await page.goto("/");
+  await page.goto("/checks");
   await page.getByLabel("Website URL").fill(target);
   await page
     .getByRole("button", { name: "Check website", exact: true })
@@ -137,7 +137,7 @@ test("ambiguous prices show exclusions instead of a passed price check", async (
   await expect(
     page.getByRole("heading", { name: /\d+ confirmed faults?/ }),
   ).toBeVisible();
-  await page.getByRole("tab", { name: "Coverage" }).click();
+  await page.getByRole("tab", { name: "What was checked" }).click();
   const panel = page.getByRole("tabpanel");
   await expect(panel).toContainText("prices excluded");
   await expect(panel).toContainText(

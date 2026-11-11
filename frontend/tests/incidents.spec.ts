@@ -13,6 +13,7 @@ test("synthetic incident has checked evidence and opens from saved history", asy
   const failures: string[] = [];
   page.on("pageerror", (error) => failures.push(error.message));
   await page.goto("/");
+  await page.getByText("More tools", { exact: true }).click();
   await page
     .getByRole("link", { name: "Incident investigation", exact: true })
     .click();
@@ -55,7 +56,7 @@ test("synthetic incident has checked evidence and opens from saved history", asy
     supported.getByLabel("Exact source record").last(),
   ).toContainText("deploy-v2");
   const id = new URL(page.url()).searchParams.get("job")!;
-  await page.goto("/");
+  await page.goto("/checks");
   const saved = page
     .getByRole("region", { name: "Recent checks" })
     .locator("li")

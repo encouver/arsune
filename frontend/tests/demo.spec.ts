@@ -19,12 +19,13 @@ test("local demo uses real website and incident checks with a timeout control", 
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
+  await page.getByText("More tools", { exact: true }).click();
   await page.getByRole("link", { name: "Local demo", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: /Try both checks/ }),
   ).toBeVisible();
   await expect(
-    page.getByText(/All demo checks use scripted mode/),
+    page.getByText(/All demo checks use browser checks only/),
   ).toBeVisible();
   await page.getByRole("link", { name: "Open website demo" }).click();
   await page.getByRole("button", { name: "Site with faults" }).click();
@@ -182,26 +183,35 @@ test("download keeps unsafe source text inert offline and shows server errors", 
   }
 });
 
-test("every page shows the same brand and task links", async ({ page }) => {
-  const tasks = [
-    ["/", "Website checks"],
+test("every page shows the same brand, the main path, and a tools menu", async ({
+  page,
+}) => {
+  const main = [
+    ["/", "Start a race"],
+    ["/races", "Races"],
+    ["/swarm", "Live board"],
+  ];
+  const tools = [
+    ["/checks", "Website check"],
     ["/incidents", "Incident investigation"],
-    ["/bounties/new", "Start a bounty"],
-    ["/swarm", "Swarm"],
     ["/demo", "Local demo"],
   ];
   // /swarm renders its header inside <main>, so it has no banner landmark to check here.
-  for (const [path, current] of tasks.filter(([p]) => p !== "/swarm")) {
+  for (const [path, current] of [...main, ...tools].filter(
+    ([p]) => p !== "/swarm",
+  )) {
     await page.goto(path);
     await expect(
       page.getByRole("banner").getByRole("link", { name: "Arsune home" }),
     ).toBeVisible();
     await expect(page.getByRole("banner").locator(".brand-mark")).toBeVisible();
     const nav = page.getByRole("navigation", { name: "Tasks" });
+    await expect(nav.getByRole("link")).toHaveText(main.map(([, l]) => l));
+    await nav.getByText("More tools", { exact: true }).click();
     await expect(nav.getByRole("link")).toHaveText(
-      tasks.map(([, label]) => label),
+      [...main, ...tools].map(([, l]) => l),
     );
-    for (const [href, label] of tasks)
+    for (const [href, label] of [...main, ...tools])
       await expect(
         nav.getByRole("link", { name: label, exact: true }),
       ).toHaveAttribute("href", href);

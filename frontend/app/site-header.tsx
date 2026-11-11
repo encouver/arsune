@@ -1,12 +1,5 @@
-const tasks = [
-  ["/", "Website checks"],
-  ["/incidents", "Incident investigation"],
-  ["/bounties/new", "Start a bounty"],
-  ["/swarm", "Swarm"],
-  ["/demo", "Local demo"],
-] as const;
-
-type TaskPath = (typeof tasks)[number][0];
+import MoreTools from "./more-tools";
+import { tasks, type TaskPath } from "./nav";
 
 export default function SiteHeader({ current }: { current: TaskPath }) {
   return (
@@ -27,6 +20,7 @@ export default function SiteHeader({ current }: { current: TaskPath }) {
             {label}
           </a>
         ))}
+        <MoreTools current={current} />
       </nav>
     </header>
   );

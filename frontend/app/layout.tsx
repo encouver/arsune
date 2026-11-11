@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./race.css";
 
 export const metadata: Metadata = {
-  title: "Arsune — Website checks with evidence",
+  title: "Arsune — Pay only for bugs that Arsune proves",
   description:
-    "Check navigation, mobile layout, and page consistency. See the evidence behind each finding.",
+    "Agents race to find the bugs your visitors hit. Arsune checks each claim again in a fresh browser and pays only for proven bugs.",
 };
 
 export default function RootLayout({

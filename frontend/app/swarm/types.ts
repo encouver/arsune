@@ -40,7 +40,8 @@ export type Tip = {
 };
 
 export type SwarmState = {
-  run_id: string;
+  // null before the first race: the host is idle and has no race to show.
+  run_id: string | null;
   mode: "simulation" | "live";
   bounty_id: string | null;
   started_at: string;
@@ -58,9 +59,13 @@ export type Claim = {
   hunter_account: string;
   claim_type: string;
   urls: string[];
+  details?: Record<string, unknown> | null;
   status: string;
+  outcome?: string | null;
   checker_reason?: string | null;
   evidence_hash?: string | null;
+  evidence_url?: string | null;
+  fingerprint?: string | null;
   scout?: { account: string; share_bps: number; tip_id?: string } | null;
   created_at?: string;
   updated_at?: string;

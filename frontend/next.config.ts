@@ -16,10 +16,23 @@ const config: NextConfig = {
     // JSON can expand escaped source text to six times its original size.
     proxyClientMaxBodySize: 60 * 1024 * 1024 + 64 * 1024,
   },
+  async redirects() {
+    return [
+      // The website check moved from / to /checks; saved report links keep working.
+      {
+        source: "/",
+        has: [{ type: "query", key: "job" }],
+        destination: "/checks",
+        permanent: false,
+      },
+      { source: "/bounties/new", destination: "/", permanent: false },
+    ];
+  },
   async rewrites() {
     return [
       { source: "/api/:path*", destination: `${api}/api/:path*` },
       { source: "/swarm-state", destination: `${swarm}/state` },
+      { source: "/swarm-api/:path*", destination: `${swarm}/:path*` },
     ];
   },
 };

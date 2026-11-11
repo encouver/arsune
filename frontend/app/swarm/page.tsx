@@ -1,7 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { settlementBadge, shortHash } from "../bounties/api";
+import { settlementBadge } from "../bounties/api";
+import {
+  claimGroup,
+  claimKind,
+  claimPage,
+  claimReason,
+  titler,
+  GROUPS,
+  isHexAccount,
+} from "../claim-text";
 import SiteHeader from "../site-header";
 import { clock, pagePath, share, usdc } from "./format";
 import styles from "./swarm.module.css";
@@ -24,10 +33,6 @@ const LEDGER_LABELS: Record<string, string> = {
   bond_forfeit: "Bond forfeited",
   fee: "Arsune fee",
   scout_share: "Scout share",
-};
-const STATUS_LABELS: Record<string, string> = {
-  unfunded: "proven, unfunded",
-  needs_review: "needs review",
 };
 const GLYPHS: Record<string, string> = {
   searching: "◌",
@@ -54,9 +59,9 @@ const RESULT_LABELS: Record<string, string> = {
 };
 const CLAIM_FILTERS: [string, string][] = [
   ["all", "All"],
-  ["paid", "Paid"],
-  ["rejected", "Rejected"],
-  ["duplicate", "Duplicate"],
+  ["paid", "Proven"],
+  ["rejected", "False"],
+  ["duplicate", "Repeats"],
 ];
 
 type Result = "earned" | "lost" | "broke" | "none";
@@ -80,25 +85,40 @@ function resultOf(a: Agent): Result {
   return "none";
 }
 
+const FILTER_GROUPS: Record<string, string> = {
+  paid: "proven",
+  rejected: "false",
+  duplicate: "repeat",
+};
+
 function matchesFilter(c: Claim, f: string) {
-  if (f === "paid") return c.status === "proven" || c.status === "paid";
-  return f === "all" || c.status === f;
+  return f === "all" || claimGroup(c) === FILTER_GROUPS[f];
 }
 
 type Flash = Record<string, { kind: "paid" | "lost"; until: number }>;
 type Names = Map<string, string>;
 
-// Agent name first (hunter-057), then the account, so 64-hex accounts stay readable.
+function nameOf(account: string, names: Names): string {
+  return (
+    names.get(account) ?? (isHexAccount(account) ? "an unnamed agent" : account)
+  );
+}
+
+// The agent name (hunter-057); a 64-hex account shows only in the tooltip.
 function Who({ account, names }: { account: string; names: Names }) {
   const name = names.get(account);
+  const readable = !isHexAccount(account);
   return (
     <span className="sw-acct" title={account}>
       {name ? (
         <>
-          <b>{name}</b> {account}
+          <b>{name}</b>
+          {readable && ` ${account}`}
         </>
-      ) : (
+      ) : readable ? (
         account
+      ) : (
+        "Unnamed agent"
       )}
     </span>
   );
@@ -206,7 +226,9 @@ function useFlashes(agents: Agent[]): Flash {
 }
 
 export default function SwarmPage() {
-  const [swarm, setSwarm] = useState<SwarmState | null>(null);
+  const [rawSwarm, setSwarm] = useState<SwarmState | null>(null);
+  // The bounty named in ?bounty=; the race that runs now can be for another one.
+  const [wanted, setWanted] = useState<string | null>(null);
   const [swarmDown, setSwarmDown] = useState(false);
   const [bounty, setBounty] = useState<Bounty | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
@@ -221,6 +243,7 @@ export default function SwarmPage() {
     async function tick() {
       const errs: string[] = [];
       const wanted = new URLSearchParams(window.location.search).get("bounty");
+      if (!stop) setWanted(wanted);
       try {
         const s = await getJson<SwarmState>("/swarm-state");
         swarmRef.current = s;
@@ -269,6 +292,14 @@ export default function SwarmPage() {
     };
   }, []);
 
+  const other = !!(
+    wanted &&
+    rawSwarm?.bounty_id &&
+    rawSwarm.bounty_id !== wanted
+  );
+  const idle = !!rawSwarm && !rawSwarm.run_id;
+  // Agents, tips and activity of another bounty's race do not belong on this board.
+  const swarm = other || idle ? null : rawSwarm;
   const hunters = useMemo(() => deriveHunters(bounty), [bounty]);
   const agents = useMemo(
     () => (swarm?.agents?.length ? swarm.agents : agentsFromHunters(hunters)),
@@ -276,8 +307,8 @@ export default function SwarmPage() {
   );
   const flash = useFlashes(agents);
   const names: Names = useMemo(
-    () => new Map((swarm?.agents ?? []).map((a) => [a.account, a.id])),
-    [swarm],
+    () => new Map((rawSwarm?.agents ?? []).map((a) => [a.account, a.id])),
+    [rawSwarm],
   );
   const claims = useMemo(
     () =>
@@ -295,10 +326,9 @@ export default function SwarmPage() {
     scouts: sum(rows, "scout_share"),
     fees: sum(rows, "fee"),
     forfeited: sum(rows, "bond_forfeit"),
-    proven: (bounty?.claims ?? []).filter(
-      (c) => c.status === "proven" || c.status === "paid",
-    ).length,
-    rejected: (bounty?.claims ?? []).filter((c) => c.status === "rejected")
+    proven: (bounty?.claims ?? []).filter((c) => claimGroup(c) === "proven")
+      .length,
+    rejected: (bounty?.claims ?? []).filter((c) => claimGroup(c) === "false")
       .length,
   };
   const byAccount = useMemo(
@@ -359,6 +389,7 @@ export default function SwarmPage() {
   const counts = { earned: 0, lost: 0, broke: 0, none: 0 };
   for (const a of agents) counts[resultOf(a)]++;
   const shownClaims = claims.filter((c) => matchesFilter(c, filter));
+  const titleOf = titler(claims);
   const selected = agents.find((a) => a.id === picked) ?? null;
 
   return (
@@ -369,7 +400,8 @@ export default function SwarmPage() {
           <div>
             <p className="eyebrow">Live swarm board</p>
             <h1>
-              {agents.length || "No"} agents racing to break{" "}
+              {agents.length || "No"} agents{" "}
+              {swarm && !swarm.finished ? "racing to break" : "raced on"}{" "}
               <span className="sw-site">
                 {bounty ? bounty.url.replace(/^https?:\/\//, "") : "a site"}
               </span>
@@ -388,17 +420,37 @@ export default function SwarmPage() {
             )}
             <span className="sw-live" aria-live="polite">
               <i className={swarm && !swarm.finished ? "sw-pulse" : ""} />
-              {swarm
-                ? swarm.finished
-                  ? "Run finished"
-                  : "Live"
-                : swarmDown
-                  ? "Swarm runner offline"
-                  : "Connecting"}
+              {other
+                ? "No race for this bounty now"
+                : idle
+                  ? "No race has run yet"
+                  : swarm
+                    ? swarm.finished
+                      ? "Run finished"
+                      : "Live"
+                    : swarmDown
+                      ? "Swarm runner offline"
+                      : "Connecting"}
             </span>
           </div>
         </div>
 
+        {other && (
+          <div className="notice" role="status" data-testid="other-race-banner">
+            The race that runs now is for another bounty. This board shows{" "}
+            {bounty ? bounty.url.replace(/^https?:\/\//, "") : "this bounty"}{" "}
+            from Arsune&apos;s records only.{" "}
+            <a
+              href={`/swarm?bounty=${encodeURIComponent(rawSwarm?.bounty_id ?? "")}`}
+            >
+              Watch the race that runs now
+            </a>{" "}
+            ·{" "}
+            <a href={`/bounties/${encodeURIComponent(wanted ?? "")}`}>
+              Start a race for this bounty
+            </a>
+          </div>
+        )}
         {errors.length > 0 && (
           <div className="sw-error" role="status" data-testid="error-banner">
             {errors.join(" ")}
@@ -421,7 +473,7 @@ export default function SwarmPage() {
         )}
         {loaded && !bounty && errors.length === 0 && (
           <div className="notice">
-            No bounty found yet. Create one through the API, then reload.
+            No race yet. <a href="/">Start a race</a>, then come back here.
           </div>
         )}
 
@@ -500,8 +552,12 @@ export default function SwarmPage() {
             )}
             {swarm == null && agents.length > 0 && (
               <p className="sw-hint">
-                Swarm runner not connected. Tiles come from Arsune hunter
-                records.
+                {other
+                  ? "No race runs for this bounty now."
+                  : idle
+                    ? "No race has run yet."
+                    : "Swarm runner not connected."}{" "}
+                Tiles come from Arsune&apos;s records of the agents.
               </p>
             )}
             <div className="sw-tiles" data-testid="agent-grid">
@@ -569,14 +625,16 @@ export default function SwarmPage() {
               <dl className="sw-detail" data-testid="agent-detail">
                 <div>
                   <dt>Agent</dt>
-                  <dd>
+                  <dd title={selected.account}>
                     {selected.id} · {selected.role}
                   </dd>
                 </div>
-                <div>
-                  <dt>Account</dt>
-                  <dd>{selected.account}</dd>
-                </div>
+                {!isHexAccount(selected.account) && (
+                  <div>
+                    <dt>Account</dt>
+                    <dd>{selected.account}</dd>
+                  </div>
+                )}
                 <div>
                   <dt>Strategy</dt>
                   <dd>
@@ -648,7 +706,12 @@ export default function SwarmPage() {
                 </li>
               )}
               {shownClaims.slice(0, 60).map((c) => (
-                <ClaimRow key={c.id} claim={c} names={names} />
+                <ClaimRow
+                  key={c.id}
+                  claim={c}
+                  title={titleOf(c)}
+                  names={names}
+                />
               ))}
             </ol>
           </section>
@@ -700,8 +763,8 @@ export default function SwarmPage() {
               {swarm?.tips.map((t) => (
                 <li key={t.id} data-status={t.status}>
                   <div>
-                    <strong>{t.scout}</strong> offers a <em>{t.claim_type}</em>{" "}
-                    tip
+                    <strong>{t.scout}</strong> offers a tip:{" "}
+                    <em>{claimKind(t.claim_type)}</em>
                     <span className="sw-muted"> {pagePath(t.urls)}</span>
                   </div>
                   <div className="sw-tip-flow">
@@ -779,34 +842,52 @@ export default function SwarmPage() {
   );
 }
 
-function ClaimRow({ claim: c, names }: { claim: Claim; names: Names }) {
-  const good = c.status === "proven" || c.status === "paid";
+function ClaimRow({
+  claim: c,
+  title,
+  names,
+}: {
+  claim: Claim;
+  title: string;
+  names: Names;
+}) {
+  const group = claimGroup(c);
+  const reason = claimReason(c);
   return (
     <li
-      className={`sw-claim${good ? " sw-claim-good" : ""}${c.status === "rejected" ? " sw-claim-bad" : ""}`}
+      className={`sw-claim${group === "proven" ? " sw-claim-good" : ""}${group === "false" ? " sw-claim-bad" : ""}`}
       data-testid="claim-row"
       data-status={c.status}
     >
       <div className="sw-claim-top">
-        <Who account={c.hunter_account} names={names} />
+        <strong className="sw-claim-title" data-testid="claim-title">
+          {title}
+        </strong>
         <span className={`sw-chip sw-s-${c.status}`}>
-          {STATUS_LABELS[c.status] ?? c.status.replace("_", " ")}
+          {c.status === "unfunded" ? "Proven, not paid" : GROUPS[group].chip}
         </span>
       </div>
-      <div className="sw-muted">
-        {c.claim_type} · {pagePath(c.urls)}
+      <div className="sw-muted sw-claim-meta">
+        <code>{claimPage(c)}</code> · by{" "}
+        <Who account={c.hunter_account} names={names} />
         {c.scout &&
-          ` · tip from ${names.get(c.scout.account) ?? c.scout.account} (${share(c.scout.share_bps)})`}
-        {c.evidence_hash && (
+          ` · tip from ${nameOf(c.scout.account, names)} (${share(c.scout.share_bps)})`}
+        {c.evidence_url && (
           <>
-            {" · evidence "}
-            <span title={c.evidence_hash} data-testid="claim-hash">
-              {shortHash(c.evidence_hash)}
-            </span>
+            {" · "}
+            <a
+              href={c.evidence_url}
+              target="_blank"
+              rel="noreferrer"
+              title={c.evidence_hash ?? undefined}
+              data-testid="claim-evidence"
+            >
+              Evidence
+            </a>
           </>
         )}
       </div>
-      {c.checker_reason && <p className="sw-reason">{c.checker_reason}</p>}
+      {reason && <p className="sw-reason">{reason}</p>}
     </li>
   );
 }

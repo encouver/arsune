@@ -84,7 +84,7 @@ export default function RecentChecks({ updated }: { updated?: string }) {
           <li key={item.id}>
             <a
               className="url"
-              href={`${item.kind === "incident" ? "/incidents" : "/"}?job=${encodeURIComponent(item.id)}`}
+              href={`${item.kind === "incident" ? "/incidents" : "/checks"}?job=${encodeURIComponent(item.id)}`}
             >
               {item.kind === "incident"
                 ? item.title || "Incident investigation"
@@ -96,10 +96,16 @@ export default function RecentChecks({ updated }: { updated?: string }) {
                 {new Date(item.created_at).toLocaleString()}
               </time>
               <span>{item.kind === "incident" ? "Incident" : "Website"}</span>
-              <span>{item.mode === "scripted" ? "Scripted" : "Model"}</span>
+              <span>
+                {item.mode === "scripted"
+                  ? "Browser checks"
+                  : "Browser checks + AI suggestions"}
+              </span>
               <span>Job {item.id.slice(0, 8)}</span>
               {item.baseline_job_id && (
-                <a href={`/?job=${encodeURIComponent(item.baseline_job_id)}`}>
+                <a
+                  href={`/checks?job=${encodeURIComponent(item.baseline_job_id)}`}
+                >
                   Baseline report
                 </a>
               )}

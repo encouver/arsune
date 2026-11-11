@@ -15,7 +15,7 @@ export default function Demo() {
             </h1>
             <p className="lead">
               Run real checks on safe local examples. All demo checks use
-              scripted mode. No model key is required.
+              browser checks only. No model key is required.
             </p>
             <p className="notice">
               Results come from each new check. Incident records can support a
@@ -34,7 +34,7 @@ export default function Demo() {
               resolved and download the repair report.
             </p>
             <p>
-              <a href="/#website-demo">Open website demo</a>
+              <a href="/checks#website-demo">Open website demo</a>
             </p>
             <hr />
             <h2>2. Incident cause and control</h2>

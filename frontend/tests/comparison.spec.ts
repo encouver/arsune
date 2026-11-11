@@ -39,7 +39,7 @@ test("real demo comparison retains both reports and downloads a repair report", 
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/");
+  await page.goto("/checks");
   await page.getByRole("button", { name: "Site with faults" }).click();
   const before = await completed(page);
   const savedReport = JSON.stringify(before.report);
@@ -62,7 +62,7 @@ test("real demo comparison retains both reports and downloads a repair report", 
   ).toContainText(String(after.report.comparison.summary.resolved));
   await expect(
     page.getByRole("link", { name: "Before report", exact: true }),
-  ).toHaveAttribute("href", `/?job=${before.id}`);
+  ).toHaveAttribute("href", `/checks?job=${before.id}`);
   await page.reload();
   await expect(
     page.getByRole("heading", { name: "Before and after", exact: true }),
@@ -109,7 +109,7 @@ test("real repeat keeps faults and marks an incomplete repeat as unknown", async
   await setFixture(request, config.demo_urls.faulty, "faulty");
   try {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/");
+    await page.goto("/checks");
     await page
       .getByLabel("Website URL")
       .fill(new URL("/comparison/", config.demo_urls.faulty).href);
@@ -215,7 +215,9 @@ test("a saved report from the old format opens by its URL", async ({
       },
     }),
   );
+  // The website check moved to /checks; an old report link still opens the report.
   await page.goto("/?job=old-saved-report");
+  await expect(page).toHaveURL(/\/checks\?job=old-saved-report$/);
   await expect(
     page.getByRole("heading", { name: "0 confirmed faults" }),
   ).toBeVisible();
@@ -225,7 +227,7 @@ test("a saved report from the old format opens by its URL", async ({
   await expect(
     page.getByRole("heading", { name: "Before and after", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("tab", { name: "Coverage" }).click();
+  await page.getByRole("tab", { name: "What was checked" }).click();
   await expect(page.getByRole("tabpanel")).toContainText(
     "http://example.test/missing",
   );

@@ -58,7 +58,7 @@ ARSUNE_UI_PORT=3740 ARSUNE_API_PORT=8740 ARSUNE_DEMO_PORT=8741 ARSUNE_SWARM_PORT
 
 Then open http://127.0.0.1:3740/swarm, and add `-p arsune-int` to the other commands.
 
-The same stack also serves the owner page at `/bounties/new`, website checks at `/`, incident investigation at `/incidents`, and a guided demo at `/demo`. See [docs/RUNNING.md](docs/RUNNING.md).
+The same stack also serves the owner's main path at `/` (start a race), the list of races at `/races`, website checks at `/checks`, incident investigation at `/incidents`, and a guided demo at `/demo`. Old `/?job=<id>` links open `/checks?job=<id>`, and `/bounties/new` opens `/`. See [docs/RUNNING.md](docs/RUNNING.md).
 
 ## How the money works
 
@@ -112,12 +112,14 @@ bond = sign_transfer_erc191(
 
 ### Owner page and funding from any chain
 
-An owner creates, proves, and funds a bounty at `/bounties/new` (header link "Start a bounty"):
+An owner starts a race at `/` (header link "Start a race"): the site URL, the owner account, and the agents (free scripted agents, or scripted plus AI agents). The reward, the base bond, and the budget wait under "Advanced". The race page `/bounties/<id>` shows the results first (proven bugs, false claims, repeats, and claims that Arsune could not check, in plain words), then four steps:
 
-1. Create: the site URL, the owner account, the reward, the base bond, and the budget.
-2. Prove: the page shows the token and the exact proof URL. For the local demo shop, one button publishes it. After the proof, Arsune loads the site in its own fresh browser at 1280 and 390 pixels. The bounty opens only when that load is complete, so hunters never spend time and tokens on a site that Arsune cannot check. A failed check names what did not load, and the owner can check again.
-3. Fund: with a signed transfer of the exact memo `arsune:fund:{fund_id}`, or from another chain through NEAR Intents 1Click. 1Click gives a deposit address on the payer's chain (Ethereum, Base, Solana, Bitcoin and more), swaps the payment, and delivers exact USDC to Arsune inside NEAR Intents. Arsune follows the 1Click status and credits the delivered amount once. In dry mode, 1Click is not available and the page offers simulated funding.
-4. Watch: a link opens the live board for the bounty.
+1. Prove that you own the site: the page shows the token and the exact proof URL. For the local demo shop, one button publishes it.
+2. Arsune loads your site: after the proof, Arsune loads the site in its own fresh browser at 1280 and 390 pixels. The bounty opens only when that load is complete, so hunters never spend time and tokens on a site that Arsune cannot check. A failed check names what did not load, and the owner can check again.
+3. Fund the race: with a signed transfer of the exact memo `arsune:fund:{fund_id}`, or from another chain through NEAR Intents 1Click. 1Click gives a deposit address on the payer's chain (Ethereum, Base, Solana, Bitcoin and more), swaps the payment, and delivers exact USDC to Arsune inside NEAR Intents. Arsune follows the 1Click status and credits the delivered amount once. In dry mode, 1Click is not available and one button adds simulated money.
+4. Start the race: the page asks the race host (`/swarm-api/host`) and starts the race (`POST /swarm-api/races`). While the race runs, the step shows this race's agents, claims, and verdicts, a link to the live board, and a stop button.
+
+Claim IDs, evidence hashes, fingerprints, and bonds are in the "Details" of each result and in "Technical details".
 
 Arsune pauses an open bounty after 5 claims in a row that its own limits left unverified. A paused bounty takes no new claims (409 with the reason), and the swarm stops its agents. The owner page shows the reason and a button that checks the site again. A passing check opens the bounty again.
 
@@ -287,7 +289,7 @@ Live mode is optional. It refuses to start without an explicit `--i-approve-main
 ```text
                        signed fund intent or 1Click deposit
   site owner ──────────────────────────────────────┐
-  (/bounties/new)                                  ▼
+  (/bounties/<id>)                                 ▼
   swarm (own process, HTTP only)          ┌──────────── Arsune ─────────────┐
   ┌──────────────────────────────┐ claim  │ API (FastAPI)                   │
   │ 100 hunters ◀── tips ── 10   │ + bond │   checks signed intents         │
