@@ -75,6 +75,43 @@ def page_errors(page, site_url):
     return results[:MAX_PAGE_ERRORS], len(errors) > MAX_PAGE_ERRORS
 
 
+def mark_third_party_data(issue, site_url):
+    """Mark a data request that a script from another site sends to another site.
+
+    Arsune's policy blocks every data request (connect-src). Requests such as analytics and
+    advertising beacons serve the other site, not the page, so their block alone is not a limit
+    that changed what a visitor sees. A data request that the site's own script makes, or that
+    goes to the site, still counts as blocked.
+    """
+
+    def other_site(url):
+        return (
+            isinstance(url, str)
+            and urlsplit(url).scheme in {"http", "https"}
+            and not document_scope(site_url, url)
+        )
+
+    issue["third_party_data"] = (
+        issue.get("directive") == "connect-src"
+        and other_site(issue.get("url"))
+        and other_site(issue.get("source"))
+    )
+    return issue
+
+
+LAYOUT_ISSUE_TYPES = {"Document", "Stylesheet", "Script", "Image", "Font", "Readiness", "Policy"}
+
+
+def stops_layout(issue):
+    """A resource issue that can leave the layout unlike the one a visitor's browser shows."""
+    if issue.get("third_party_data"):
+        return False
+    if issue["resource_type"] == "Image" and issue.get("http_status"):
+        # The server answered the image with an error, so a visitor gets the same layout.
+        return False
+    return issue["resource_type"] in LAYOUT_ISSUE_TYPES
+
+
 async def observe_page(context, target, viewport, output_dir, site_url):
     page = await context.new_page()
     await page.set_viewport_size(viewport)
@@ -142,7 +179,8 @@ async def observe_page(context, target, viewport, output_dir, site_url):
             )
         )
         page._arsune_resource_issues.extend(
-            await page.evaluate("() => window.__arsunePolicyIssues || []")
+            mark_third_party_data(issue, site_url)
+            for issue in await page.evaluate("() => window.__arsunePolicyIssues || []")
         )
         filename = f"capture-{uuid.uuid4().hex}.png"
         await page.screenshot(path=str(output_dir / filename), full_page=False, timeout=5000)
@@ -166,9 +204,7 @@ async def observe_page(context, target, viewport, output_dir, site_url):
         for issue in observation["resource_issues"]:
             issue["viewport"] = viewport
         observation["layout_complete"] = not observation.get("error") and not any(
-            issue["resource_type"]
-            in {"Document", "Stylesheet", "Script", "Image", "Font", "Readiness", "Policy"}
-            for issue in observation["resource_issues"]
+            stops_layout(issue) for issue in observation["resource_issues"]
         )
         await page.close()
         pending = list(page._arsune_pending)

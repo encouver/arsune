@@ -65,17 +65,25 @@ def matching_errors(observation, message, first_party=True):
 
 
 def load_reproduced(observation):
-    """Arsune's own limits blocked nothing that a visitor's browser would load."""
+    """Arsune's own limits blocked nothing that a visitor's browser would load.
+
+    Data requests that another site's script sends to another site do not count (see
+    app.browser.observations.mark_third_party_data).
+    """
     return not any(
-        issue["resource_type"] != "Readiness" and not issue.get("http_status")
+        issue["resource_type"] != "Readiness"
+        and not issue.get("http_status")
+        and not issue.get("third_party_data")
         for issue in observation.get("resource_issues", [])
     )
 
 
 def load_complete(observation):
-    """Every resource loaded, except images that the site answered with an HTTP error."""
+    """Every resource loaded, except images that the site answered with an HTTP error and
+    data requests that another site's script sends to another site."""
     return not any(
-        issue["resource_type"] != "Image" or not issue.get("http_status")
+        (issue["resource_type"] != "Image" or not issue.get("http_status"))
+        and not issue.get("third_party_data")
         for issue in observation.get("resource_issues", [])
     )
 

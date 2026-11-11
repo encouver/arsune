@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 
+import brotli
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
@@ -113,6 +114,33 @@ async def network_fixture(page: str, request: Request):
         return Response(
             "throw new Error('Partner widget crashed on load');", media_type="text/javascript"
         )
+    if page.startswith("parallel/"):
+        # Slow enough that every stylesheet of the page is in flight at the same time.
+        await asyncio.sleep(0.5)
+        return Response("body{margin:16px}", media_type="text/css")
+    if page == "brotli.js":
+        # Like a CDN cache that answers brotli whatever the request accepts.
+        return Response(
+            brotli.compress(b"document.body.dataset.brotliScript = 'loaded';"),
+            media_type="text/javascript",
+            headers={"content-encoding": "br"},
+        )
+    if page == "undecoded.js":
+        # An encoding that Arsune's HTTP client does not decode.
+        return Response(
+            b"\x28\xb5\x2f\xfd\x00\x58\x61\x00\x00\x01\x02",
+            media_type="text/javascript",
+            headers={"content-encoding": "zstd"},
+        )
+    if page == "beacon.js":
+        # An analytics tag: a data request to its own site, then an image fallback.
+        return Response(
+            f"fetch('{external}/collect', {{method: 'POST', body: 'hit'}}).catch(() => {{}});"
+            f"new Image().src = '{external}/pixel';",
+            media_type="text/javascript",
+        )
+    if page == "pixel":
+        return Response("Method Not Allowed", status_code=405, media_type="text/plain")
     if page == "image.svg":
         return Response(
             '<svg xmlns="http://www.w3.org/2000/svg" width="7" height="9"><rect width="7" height="9"/></svg>',
@@ -140,13 +168,30 @@ async def network_fixture(page: str, request: Request):
     elif page in {"delayed-style", "missing-style"}:
         css = "slow.css" if page == "delayed-style" else "missing.css"
         content = f'<link rel="stylesheet" href="{external}/{css}">'
+    elif page == "parallel-styles":
+        content = "".join(f'<link rel="stylesheet" href="parallel/{n}.css">' for n in range(16))
+    elif page == "brotli-script":
+        content = '<script src="brotli.js"></script>'
+    elif page == "undecoded-script":
+        content = '<script src="undecoded.js"></script>'
+    elif page == "third-party-beacon":
+        content = (
+            f'<script src="{external}/beacon.js"></script><a href="healthy">Healthy</a>'
+            "<script>throw new Error('Site menu failed on load')</script>"
+        )
+    elif page == "site-data":
+        content = (
+            "<script>fetch('/network/data').catch(() => {});"
+            "throw new Error('Site menu failed on load')</script>"
+        )
     elif page == "many-pages":
         content = "".join(f'<a href="/network/page/{n}">{n}</a>' for n in range(8))
     elif page.startswith("page/"):
         content = "Healthy child page"
     else:
         content = "Healthy page"
-    width = "900px" if page in {"delayed-style", "missing-style", "failed-font"} else "auto"
+    wide = {"delayed-style", "missing-style", "failed-font", "third-party-beacon", "site-data"}
+    width = "900px" if page in wide else "auto"
     return HTMLResponse(
         '<!doctype html><html><head><meta name="viewport" '
         'content="width=device-width, initial-scale=1"></head>'

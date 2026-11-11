@@ -15,6 +15,11 @@ MAX_REDIRECTS = 3
 RESOURCE_READY_TIMEOUT_MS = 3000
 MAX_PAGE_ERRORS = 20
 MAX_IMAGE_REQUESTS = 200
+MAX_RESOURCE_BYTES = 2_000_000
+MAX_TRANSFER_BYTES = 20_000_000
+# Content encodings that httpx decodes here (br needs the brotli package). A body in any other
+# encoding would reach the browser still encoded, so the request stops as an Arsune limit.
+DECODED_ENCODINGS = {"identity", "gzip", "deflate", "br"}
 
 
 def exception_record(details):
@@ -44,6 +49,14 @@ async def inspection_browser(url, demo, state, save):
     issues = state.setdefault("resource_issues", [])
     redirects = state.setdefault("redirects", [])
     lock = asyncio.Lock()
+    # Each request in flight holds a reservation of MAX_RESOURCE_BYTES until it finishes.
+    budget = asyncio.Condition(lock)
+    in_flight = 0
+
+    def reservation_fits():
+        used = state.get("transfer_reserved_bytes", 0)
+        return used + MAX_RESOURCE_BYTES <= MAX_TRANSFER_BYTES
+
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(
             headless=True,
@@ -63,7 +76,8 @@ async def inspection_browser(url, demo, state, save):
                     if (window.__arsunePolicyIssues.length < 100) {
                         window.__arsunePolicyIssues.push({url: event.blockedURI,
                             page_url: location.href, resource_type: 'Policy',
-                            reason: 'Browser policy blocked ' + event.effectiveDirective + '.'});
+                            reason: 'Browser policy blocked ' + event.effectiveDirective + '.',
+                            directive: event.effectiveDirective, source: event.sourceFile});
                     }
                 });
             })();""")
@@ -107,6 +121,7 @@ async def inspection_browser(url, demo, state, save):
             page.on("requestfailed", failed)
 
             async def intercept(event):
+                nonlocal in_flight
                 request = event["request"]
                 target = request["url"]
                 kind = event.get("resourceType", "Other")
@@ -139,11 +154,14 @@ async def inspection_browser(url, demo, state, save):
                             raise TargetPolicyError(
                                 "Navigation target is outside the selected page set."
                             )
-                    async with lock:
-                        reserved = 2_000_000
-                        if state.get("transfer_reserved_bytes", 0) + reserved > 20_000_000:
-                            reserved = 0
+                    async with budget:
+                        # A full budget stops a request only when no request in flight can
+                        # return part of its reservation; a busy page waits instead.
+                        await budget.wait_for(lambda: reservation_fits() or not in_flight)
+                        if not reservation_fits():
                             raise TargetPolicyError("Resource budget exceeded.")
+                        reserved = MAX_RESOURCE_BYTES
+                        in_flight += 1
                         state["transfer_reserved_bytes"] = (
                             state.get("transfer_reserved_bytes", 0) + reserved
                         )
@@ -238,11 +256,16 @@ async def inspection_browser(url, demo, state, save):
                                 },
                             )
                             return
+                        encodings = response.headers.get_list("content-encoding", split_commas=True)
+                        if any(e.strip().lower() not in DECODED_ENCODINGS for e in encodings):
+                            raise TargetPolicyError(
+                                "Resource uses an unsupported content encoding."
+                            )
                         body = bytearray()
                         async for chunk in response.aiter_bytes():
                             body.extend(chunk)
                             consumed += len(chunk)
-                            if len(body) > 2_000_000:
+                            if len(body) > MAX_RESOURCE_BYTES:
                                 raise TargetPolicyError("Resource budget exceeded.")
                         if kind != "Document" and response.status_code >= 400:
                             raise TargetPolicyError(
@@ -311,8 +334,10 @@ async def inspection_browser(url, demo, state, save):
                     if kind == "Image" and (start in images or len(images) < MAX_IMAGE_REQUESTS):
                         images[start] = {"final_url": target, "status": status, "failure": failure}
                     if reserved:
-                        async with lock:
+                        async with budget:
                             state["transfer_reserved_bytes"] -= max(0, reserved - consumed)
+                            in_flight -= 1
+                            budget.notify_all()
                             await save()
 
             def paused(event):

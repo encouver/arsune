@@ -4,6 +4,7 @@ import pytest
 from app.agents.candidates import scripted, validate_candidates
 from app.bounty.claims import ClaimError, final_fingerprint, fingerprint, scoped_claim
 from app.browser.checker import check_candidate
+from app.browser.observations import mark_third_party_data, stops_layout
 from app.browser.policy import origin
 from app.core.scan import VIEWPORTS
 
@@ -28,6 +29,16 @@ POLICY = {
     "page_url": PAGE,
     "resource_type": "Policy",
     "reason": "Browser policy blocked connect-src.",
+}
+# An analytics tag on another site sends a data request to its own site.
+THIRD_PARTY_DATA = {
+    "url": "https://www.google.com/ccm/collect?v=1",
+    "page_url": PAGE,
+    "resource_type": "Policy",
+    "reason": "Browser policy blocked connect-src.",
+    "directive": "connect-src",
+    "source": "https://www.googletagmanager.com/gtag/js",
+    "third_party_data": True,
 }
 UNREADY = {
     "url": PAGE,
@@ -146,6 +157,8 @@ async def test_confirmed_broken_image_explains_impact_and_repair():
         ([error()], [UNREADY], "reading 'items'", "confirmed"),
         ([error()], [BLOCKED], "reading 'items'", "unverified"),
         ([error()], [POLICY], "reading 'items'", "unverified"),
+        ([error()], [THIRD_PARTY_DATA], "reading 'items'", "confirmed"),
+        ([error()], [THIRD_PARTY_DATA, BLOCKED], "reading 'items'", "unverified"),
         ([error(first_party=False, source="")], [], "reading 'items'", "unverified"),
         ([error()], [], "Recommendation feed returned no plans", "unverified"),
         ([], [], "Recommendation feed returned no plans", "rejected"),
@@ -153,6 +166,8 @@ async def test_confirmed_broken_image_explains_impact_and_repair():
         ([], [SITE_404], "Recommendation feed returned no plans", "rejected"),
         ([], [UNREADY], "Recommendation feed returned no plans", "unverified"),
         ([], [BLOCKED], "Recommendation feed returned no plans", "unverified"),
+        ([], [POLICY], "Recommendation feed returned no plans", "unverified"),
+        ([], [THIRD_PARTY_DATA], "Recommendation feed returned no plans", "rejected"),
         ([error()], [], "items'", "unverified"),
         ([error()], [], 42, "unverified"),
     ],
@@ -162,6 +177,48 @@ async def test_page_error_states(errors, issues, message, expected):
         "page_error", {"page": PAGE, "message": message}, page(errors=errors, issues=issues)
     )
     assert result["status"] == expected, result["checker_reason"]
+
+
+TAG = "https://www.googletagmanager.com/gtag/js"
+BEACON = "https://www.google.com/ccm/collect?v=1"
+
+
+@pytest.mark.parametrize(
+    ("directive", "url", "source", "expected"),
+    [
+        ("connect-src", BEACON, TAG, True),
+        # The site's own script, or a request to the site, can feed the page.
+        ("connect-src", BEACON, SITE + "/shop/app.js", False),
+        ("connect-src", BEACON, PAGE, False),
+        ("connect-src", SITE + "/api/plans", TAG, False),
+        ("connect-src", BEACON, "", False),
+        ("connect-src", "", TAG, False),
+        ("connect-src", BEACON, None, False),
+        ("frame-src", BEACON, TAG, False),
+        (None, BEACON, TAG, False),
+    ],
+)
+def test_only_another_sites_data_request_is_third_party_data(directive, url, source, expected):
+    issue = {"url": url, "resource_type": "Policy", "directive": directive, "source": source}
+    assert mark_third_party_data(issue, PAGE)["third_party_data"] is expected
+    assert stops_layout(issue) is not expected
+
+
+@pytest.mark.parametrize(
+    ("issue", "expected"),
+    [
+        (SITE_404, False),
+        (THIRD_PARTY_DATA, False),
+        (POLICY, True),
+        (BLOCKED, True),
+        (UNREADY, True),
+        ({**SITE_404, "resource_type": "Stylesheet"}, True),
+        ({k: v for k, v in SITE_404.items() if k != "http_status"}, True),
+        ({**BLOCKED, "resource_type": "Fetch"}, False),
+    ],
+)
+def test_layout_stops_only_for_arsune_limits_on_rendering_resources(issue, expected):
+    assert stops_layout(issue) is expected
 
 
 async def test_page_error_cannot_be_rejected_from_a_truncated_list():

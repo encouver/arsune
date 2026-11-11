@@ -13,6 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import httpx
 import pytest
+from app.bounty.worker import browser_check
 from app.browser import session
 from app.browser.checker import check_candidate
 from app.browser.observations import observe_page
@@ -327,3 +328,95 @@ async def test_errors_from_another_origins_script_do_not_count(public_network, t
     ]
     assert results["Partner widget crashed on load"]["status"] == "unverified"
     assert results["Site menu failed on load"]["status"] == "confirmed"
+
+
+def claim(claim_type, *urls, **details):
+    keys = {
+        "broken_link": ("source", "target"),
+        "horizontal_overflow": ("url",),
+        "page_error": ("page",),
+    }[claim_type]
+    return {
+        "id": "test-claim",
+        "claim_type": claim_type,
+        "urls": list(urls),
+        "details": dict(zip(keys, urls, strict=False)) | details,
+    }
+
+
+async def test_parallel_resources_wait_for_the_transfer_budget(public_network, tmp_path):
+    # Each request in flight reserves 2 MB of the 20 MB budget; the 11th used to fail at once.
+    base, calls = public_network
+    url = f"{base}/parallel-styles"
+    result = await browser_check("job", claim("horizontal_overflow", url), base, tmp_path)
+    observation = result["evidence"][0]
+    assert sum("/network/parallel/" in request for _, request in calls) == 16
+    assert observation["resource_issues"] == []
+    assert observation["layout_complete"] is True
+    assert result["status"] == "rejected", result["checker_reason"]
+
+
+async def test_brotli_resource_reaches_the_browser_decoded(public_network, tmp_path):
+    base, _ = public_network
+    url = f"{base}/brotli-script"
+    state = {"selected": [url]}
+
+    async def save():
+        pass
+
+    async with inspection_browser(url, "http://127.0.0.1:8541", state, save) as (context, blocked):
+        page = await context.new_page()
+        await context._arsune_prepare_page(page)
+        await page.goto(url, wait_until="load")
+        assert await page.evaluate("document.body.dataset.brotliScript") == "loaded"
+        assert page._arsune_errors[0] == []
+        assert not blocked
+
+
+async def test_undecoded_resource_is_an_arsune_limit_not_a_page_error(public_network, tmp_path):
+    # A body still in an encoding that Arsune cannot decode must never run as the page's script.
+    base, _ = public_network
+    url = f"{base}/undecoded-script"
+    item = claim("page_error", url, message="SyntaxError: Invalid or unexpected token")
+    result = await browser_check("job", item, base, tmp_path)
+    observation = result["evidence"][0]
+    assert observation["page_errors"] == []
+    [issue] = observation["resource_issues"]
+    assert issue["resource_type"] == "Script" and "http_status" not in issue
+    assert "content encoding" in issue["reason"]
+    assert result["status"] == "unverified"
+
+
+async def test_third_party_beacons_do_not_stop_verdicts(public_network, tmp_path):
+    base, _ = public_network
+    url = f"{base}/third-party-beacon"
+    overflow = await browser_check("job", claim("horizontal_overflow", url), base, tmp_path)
+    assert overflow["status"] == "confirmed", overflow["checker_reason"]
+    assert overflow["evidence"][0]["layout_complete"] is True
+    issues = overflow["evidence"][0]["resource_issues"]
+    [beacon] = [i for i in issues if i["resource_type"] == "Policy"]
+    assert beacon["directive"] == "connect-src" and beacon["third_party_data"] is True
+    assert beacon["source"].endswith("/network/beacon.js")
+    # The tag's image fallback: another site answered it with an HTTP error.
+    assert [i.get("http_status") for i in issues if i["resource_type"] == "Image"] == [405]
+    error = await browser_check(
+        "job", claim("page_error", url, message="Site menu failed on load"), base, tmp_path
+    )
+    assert error["status"] == "confirmed", error["checker_reason"]
+    link = await browser_check("job", claim("broken_link", url, f"{base}/healthy"), base, tmp_path)
+    assert link["status"] == "rejected", link["checker_reason"]
+
+
+async def test_site_data_requests_still_count_as_blocked(public_network, tmp_path):
+    base, _ = public_network
+    url = f"{base}/site-data"
+    overflow = await browser_check("job", claim("horizontal_overflow", url), base, tmp_path)
+    [blocked] = overflow["evidence"][0]["resource_issues"]
+    assert blocked["resource_type"] == "Policy" and blocked["third_party_data"] is False
+    assert overflow["evidence"][0]["layout_complete"] is False
+    assert overflow["status"] == "unverified"
+    error = await browser_check(
+        "job", claim("page_error", url, message="Site menu failed on load"), base, tmp_path
+    )
+    assert error["status"] == "unverified"
+    assert "Arsune's limits blocked" in error["checker_reason"]
