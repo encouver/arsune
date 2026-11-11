@@ -188,7 +188,7 @@ For local model work, create `.env` from `.env.example` if `.env` does not alrea
 
 NEAR AI uses the base URL `https://cloud-api.near.ai/v1`. Get the model name, supported features, and current token prices from the service before testing. [NEAR AI quickstart](https://docs.near.ai/cloud/quickstart), [model catalog information](https://docs.near.ai/cloud/models)
 
-Model mode runs three separate specialist requests. Each has at most one third of the job cost ceiling. The adapter checks a conservative input-size and output-token cost estimate before each request. Prices must match the selected model; this is a local request budget, not a provider account spending limit.
+Model mode runs three separate specialist requests. Each has at most one third of the job cost ceiling. The requests do not include page loads that Arsune could not complete (the report's incomplete pages and incomplete layout pages). The adapter checks a conservative input-size and output-token cost estimate before each request. Prices must match the selected model; this is a local request budget, not a provider account spending limit.
 
 The worker saves a reservation before a paid request. It saves successful role output for reuse. If a worker stops while a request may have been charged, the job stops instead of making the same request again. A new paid job requires a new operator action. No live model call has been verified yet.
 

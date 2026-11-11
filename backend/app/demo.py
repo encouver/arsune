@@ -13,6 +13,13 @@ from app.demo_shop import shop_response
 app = FastAPI()
 comparison_state = "faulty"
 bounty_token = os.getenv("ARSUNE_DEMO_BOUNTY_TOKEN", "")
+HEAVY_CSS = b"/*" + b"x" * 1_900_000 + b"*/body{margin:16px}"
+
+
+def heavy_styles(name: str, count: int) -> str:
+    return "".join(
+        f'<link rel="stylesheet" href="/network/heavy-asset/{name}-{n}.css">' for n in range(count)
+    )
 
 
 @app.post("/bounty-proof-control")
@@ -118,6 +125,9 @@ async def network_fixture(page: str, request: Request):
         # Slow enough that every stylesheet of the page is in flight at the same time.
         await asyncio.sleep(0.5)
         return Response("body{margin:16px}", media_type="text/css")
+    if page.startswith("heavy-asset/"):
+        # Just under the 2 MB resource limit, like a large script bundle of a real site.
+        return Response(HEAVY_CSS, media_type="text/css")
     if page == "brotli.js":
         # Like a CDN cache that answers brotli whatever the request accepts.
         return Response(
@@ -170,6 +180,17 @@ async def network_fixture(page: str, request: Request):
         content = f'<link rel="stylesheet" href="{external}/{css}">'
     elif page == "parallel-styles":
         content = "".join(f'<link rel="stylesheet" href="parallel/{n}.css">' for n in range(16))
+    elif page == "heavy" or page.startswith("heavy/"):
+        # 5.7 MB for each page load; five pages at two widths transfer more than 20 MB.
+        links = (
+            "".join(f'<a href="/network/heavy/{n}">{n}</a>' for n in range(1, 5))
+            if page == "heavy"
+            else ""
+        )
+        content = links + heavy_styles(page.replace("/", "-"), 3)
+    elif page == "oversized":
+        # 22.8 MB in one page load.
+        content = heavy_styles("oversized", 12)
     elif page == "brotli-script":
         content = '<script src="brotli.js"></script>'
     elif page == "undecoded-script":

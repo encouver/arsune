@@ -265,10 +265,10 @@ async def test_exhausted_transfer_budget_survives_restart(public_network, tmp_pa
         "observations": [],
         "checks": {},
         "activity": [],
-        "transfer_reserved_bytes": 20_000_000,
+        "transfer_reserved_bytes": session.MAX_SCAN_TRANSFER_BYTES,
     }
     report = await run_scan(url, tmp_path, checkpoint=json.loads(json.dumps(state)))
-    assert report["coverage"]["transfer_bytes"] == 20_000_000
+    assert report["coverage"]["transfer_bytes"] == session.MAX_SCAN_TRANSFER_BYTES
     assert report["coverage"]["incomplete_pages"]
     assert report["confirmed"] == []
     assert calls == []
@@ -345,7 +345,7 @@ def claim(claim_type, *urls, **details):
 
 
 async def test_parallel_resources_wait_for_the_transfer_budget(public_network, tmp_path):
-    # Each request in flight reserves 2 MB of the 20 MB budget; the 11th used to fail at once.
+    # Each request in flight reserves 2 MB of the page load's 20 MB; the 11th used to fail at once.
     base, calls = public_network
     url = f"{base}/parallel-styles"
     result = await browser_check("job", claim("horizontal_overflow", url), base, tmp_path)
@@ -354,6 +354,54 @@ async def test_parallel_resources_wait_for_the_transfer_budget(public_network, t
     assert observation["resource_issues"] == []
     assert observation["layout_complete"] is True
     assert result["status"] == "rejected", result["checker_reason"]
+
+
+async def test_each_page_load_has_its_own_transfer_budget(public_network, tmp_path):
+    # Each load transfers 5.7 MB. One budget for the whole scan stopped the fourth load.
+    base, _ = public_network
+    snapshots = []
+    url = f"{base}/heavy"
+    report = await run_scan(
+        url, tmp_path, save_checkpoint=lambda state: snapshots.append(copy.deepcopy(state))
+    )
+    assert len(report["observations"]) == 10
+    assert all(o["status"] == 200 and o["layout_complete"] for o in report["observations"])
+    assert report["coverage"]["resource_issues"] == []
+    assert report["coverage"]["incomplete_pages"] == []
+    transfer = report["coverage"]["transfer_bytes"]
+    assert session.MAX_TRANSFER_BYTES < transfer <= session.MAX_SCAN_TRANSFER_BYTES
+    # A scan that resumes past 20 MB still gives each new load its own budget.
+    checkpoint = json.loads(json.dumps(next(s for s in snapshots if len(s["observations"]) == 6)))
+    assert checkpoint["transfer_reserved_bytes"] > session.MAX_TRANSFER_BYTES
+    resumed = await run_scan(url, tmp_path, checkpoint=checkpoint)
+    assert all(o["layout_complete"] for o in resumed["observations"])
+    assert resumed["coverage"]["resource_issues"] == []
+    assert resumed["coverage"]["transfer_bytes"] == transfer
+
+
+async def test_one_page_load_over_its_budget_stops_as_an_arsune_limit(public_network, tmp_path):
+    base, _ = public_network
+    url = f"{base}/oversized"
+    result = await browser_check("job", claim("horizontal_overflow", url), base, tmp_path)
+    [observation] = result["evidence"]
+    stopped = [i for i in observation["resource_issues"] if "budget" in i["reason"]]
+    assert stopped
+    for issue in stopped:
+        assert issue["resource_type"] == "Stylesheet" and "http_status" not in issue
+        assert issue["reason"] == "Page load transfer budget exceeded."
+    assert observation["layout_complete"] is False
+    assert result["status"] == "unverified"
+
+
+async def test_scan_transfer_cap_stops_later_page_loads(public_network, tmp_path, monkeypatch):
+    base, _ = public_network
+    monkeypatch.setattr(session, "MAX_SCAN_TRANSFER_BYTES", 12_000_000)
+    report = await run_scan(f"{base}/heavy", tmp_path)
+    assert report["coverage"]["transfer_bytes"] <= 12_000_000
+    assert report["observations"][0]["layout_complete"] is True
+    assert report["coverage"]["incomplete_pages"]
+    reasons = {issue["reason"] for issue in report["coverage"]["resource_issues"]}
+    assert reasons == {"Scan transfer budget exceeded."}
 
 
 async def test_brotli_resource_reaches_the_browser_decoded(public_network, tmp_path):

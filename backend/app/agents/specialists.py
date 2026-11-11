@@ -3,6 +3,16 @@ from app.agents.model import generate_candidates
 from app.core.scan import ROLES
 
 
+def completed_loads(observations):
+    """Page loads that Arsune completed: the model does not see the others.
+
+    A blank or partial page from Arsune's own limits (a blocked resource, a transfer budget, a
+    readiness deadline) is not a site defect. The report lists such loads in
+    `incomplete_pages` and `incomplete_layout_pages`.
+    """
+    return [o for o in observations if not o.get("error") and o.get("layout_complete", True)]
+
+
 async def propose_candidates(state, mode, inject, url, save, event):
     candidates = []
     state.setdefault("role_outputs", {})
@@ -19,7 +29,7 @@ async def propose_candidates(state, mode, inject, url, save, event):
                 state["model_reservations"][role] = True
                 await save()
                 role_candidates, provider = await generate_candidates(
-                    state["observations"], role=role
+                    completed_loads(state["observations"]), role=role
                 )
                 if any(c.get("role") != role for c in role_candidates):
                     raise ValueError("Model specialist returned another role's candidate.")

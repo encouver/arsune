@@ -270,6 +270,37 @@ async def test_uncertain_model_reservation_is_not_repeated(demo_server, tmp_path
     assert calls == []
 
 
+async def test_model_does_not_see_page_loads_that_arsune_did_not_complete(monkeypatch):
+    from app.agents import specialists
+
+    seen = []
+
+    async def fake_provider(observations, *, role):
+        seen.append(observations)
+        return [], {"reserved_cost_usd": 0}
+
+    async def nothing(*args):
+        pass
+
+    monkeypatch.setattr(specialists, "generate_candidates", fake_provider)
+    url = "https://example.com/"
+    desktop, mobile = VIEWPORTS["desktop"], VIEWPORTS["mobile"]
+    complete = {"url": url, "viewport": desktop, "status": 200, "layout_complete": True}
+    # Arsune's own budget stopped these loads: one blank page and one without its styles.
+    blank = {
+        "url": url + "guias",
+        "viewport": desktop,
+        "status": None,
+        "error": "The browser could not complete this page request.",
+        "layout_complete": False,
+    }
+    unstyled = {"url": url, "viewport": mobile, "status": 200, "layout_complete": False}
+    state = {"selected": [url, url + "guias"], "observations": [complete, blank, unstyled]}
+    await specialists.propose_candidates(state, "model", False, url, nothing, nothing)
+    assert seen == [[complete]] * 3
+    assert state["observations"] == [complete, blank, unstyled]
+
+
 async def test_exhausted_request_budget_survives_resume(demo_server, tmp_path):
     url = "http://127.0.0.1:18541/faulty/"
     state = {

@@ -16,7 +16,11 @@ RESOURCE_READY_TIMEOUT_MS = 3000
 MAX_PAGE_ERRORS = 20
 MAX_IMAGE_REQUESTS = 200
 MAX_RESOURCE_BYTES = 2_000_000
+# One page load (one URL at one viewport) has its own budget, because a real page transfers a
+# few MB and a scan makes up to 10 loads plus the checker's loads. The scan-wide cap still
+# stops a hostile site from draining bandwidth over many loads.
 MAX_TRANSFER_BYTES = 20_000_000
+MAX_SCAN_TRANSFER_BYTES = 100_000_000
 # Content encodings that httpx decodes here (br needs the brotli package). A body in any other
 # encoding would reach the browser still encoded, so the request stops as an Arsune limit.
 DECODED_ENCODINGS = {"identity", "gzip", "deflate", "br"}
@@ -49,13 +53,19 @@ async def inspection_browser(url, demo, state, save):
     issues = state.setdefault("resource_issues", [])
     redirects = state.setdefault("redirects", [])
     lock = asyncio.Lock()
-    # Each request in flight holds a reservation of MAX_RESOURCE_BYTES until it finishes.
+    # Each request in flight holds a reservation of MAX_RESOURCE_BYTES until it finishes. The
+    # scan-wide count is saved in state; a page load's count is not, because an interrupted
+    # load starts again on a new page.
     budget = asyncio.Condition(lock)
     in_flight = 0
 
-    def reservation_fits():
-        used = state.get("transfer_reserved_bytes", 0)
-        return used + MAX_RESOURCE_BYTES <= MAX_TRANSFER_BYTES
+    def exceeded_budget(load_bytes):
+        """The transfer budget without room for one more resource, if any."""
+        if load_bytes + MAX_RESOURCE_BYTES > MAX_TRANSFER_BYTES:
+            return "Page load transfer budget exceeded."
+        if state.get("transfer_reserved_bytes", 0) + MAX_RESOURCE_BYTES > MAX_SCAN_TRANSFER_BYTES:
+            return "Scan transfer budget exceeded."
+        return None
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(
@@ -92,6 +102,8 @@ async def inspection_browser(url, demo, state, save):
             page._arsune_images = images
             errors, revoked = [], set()
             page._arsune_errors = (errors, revoked)
+            # Bytes reserved or transferred by this page's one load.
+            load_bytes = 0
 
             def thrown(event):
                 # One record past the bound marks the list as truncated.
@@ -121,7 +133,7 @@ async def inspection_browser(url, demo, state, save):
             page.on("requestfailed", failed)
 
             async def intercept(event):
-                nonlocal in_flight
+                nonlocal in_flight, load_bytes
                 request = event["request"]
                 target = request["url"]
                 kind = event.get("resourceType", "Other")
@@ -157,11 +169,14 @@ async def inspection_browser(url, demo, state, save):
                     async with budget:
                         # A full budget stops a request only when no request in flight can
                         # return part of its reservation; a busy page waits instead.
-                        await budget.wait_for(lambda: reservation_fits() or not in_flight)
-                        if not reservation_fits():
-                            raise TargetPolicyError("Resource budget exceeded.")
+                        await budget.wait_for(
+                            lambda: not exceeded_budget(load_bytes) or not in_flight
+                        )
+                        if exceeded := exceeded_budget(load_bytes):
+                            raise TargetPolicyError(exceeded)
                         reserved = MAX_RESOURCE_BYTES
                         in_flight += 1
+                        load_bytes += reserved
                         state["transfer_reserved_bytes"] = (
                             state.get("transfer_reserved_bytes", 0) + reserved
                         )
@@ -335,7 +350,9 @@ async def inspection_browser(url, demo, state, save):
                         images[start] = {"final_url": target, "status": status, "failure": failure}
                     if reserved:
                         async with budget:
-                            state["transfer_reserved_bytes"] -= max(0, reserved - consumed)
+                            unused = max(0, reserved - consumed)
+                            load_bytes -= unused
+                            state["transfer_reserved_bytes"] -= unused
                             in_flight -= 1
                             budget.notify_all()
                             await save()

@@ -14,7 +14,7 @@ Arsune checks a website for people who build with AI. Specialists propose findin
 
 The coordinator is Python code. Specialists share observation and candidate formats. Scripted mode uses deterministic analysis of real browser observations. It must not return a canned report without inspecting the target. A deliberate false candidate is limited to the labeled demonstration case.
 
-Model mode replaces candidate generation through the same interface. Validate model output before checking it. The checker repeats requests or browser measurements; specialist explanations are not proof. Unsupported claim types remain unverified.
+Model mode replaces candidate generation through the same interface. The model does not see page loads that Arsune could not complete (the report's `incomplete_pages` and `incomplete_layout_pages`), because a blank or partial page from Arsune's own limits is not a site defect. Validate model output before checking it. The checker repeats requests or browser measurements; specialist explanations are not proof. Unsupported claim types remain unverified.
 
 ## Runtime and technology
 
@@ -89,7 +89,7 @@ The first deployment is a local operator tool, not a public scanning service. Ke
 
 Chromium request interception checks each redirect and resource before a connection to a validated numeric address. The browser retains the final URL, so relative links and resources use the correct base address. Document redirect chains permit the same hostname, its `www` counterpart, and HTTPS upgrades. Each chain has at most three redirects; every new document URL counts toward the five-URL limit.
 
-Public styles, scripts, images, and fonts can load under the saved request and byte limits. Frames, workers, popups, forms, sockets, and data requests remain blocked. Added browser restrictions preserve the site's own content security policy. Redirect history and resource failures are saved with progress. Observations record layout completeness, and the checker does not confirm layout faults when essential resources are missing.
+Public styles, scripts, images, and fonts can load under the saved request and byte limits. The byte limits are 2 MB for each resource, 20 MB for each page load (one URL at one viewport), and 100 MB for all loads of one scan, claim check, or site check. A scan saves its 100 MB count with progress. A page load that stops halfway starts again with a new 20 MB budget. Frames, workers, popups, forms, sockets, and data requests remain blocked. Added browser restrictions preserve the site's own content security policy. Redirect history and resource failures are saved with progress. Observations record layout completeness, and the checker does not confirm layout faults when essential resources are missing.
 
 The consistency checker supports matching `data-fact-key` and `data-context` attributes and a limited English visible-price grammar. Ordinary price cards need a plan heading, explicit supported ISO currency, and monthly or yearly period. Product headings, units, and remaining offer terms form the context key; the amount does not. The separate checker reads both pages again and requires unique matching contexts and complete page evidence. Unsupported or ambiguous cards are recorded in price coverage with reasons. This does not provide a general text consistency check.
 
