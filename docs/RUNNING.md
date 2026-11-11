@@ -15,7 +15,7 @@ docker compose up --build --wait
 docker compose ps
 ```
 
-This starts PostgreSQL, Redis, the migrations, the API, the worker (four claim checks at a time), the coordinator, the demo site, the interface, and the swarm. The command returns when every service is healthy. The swarm then runs 100 hunters and 10 scouts on an 80 USDC bounty on `http://demo:8541/shop/`; watch it at http://127.0.0.1:3540/swarm. Start a fresh race with `docker compose restart swarm`, and read it as text with `docker compose logs -f swarm`.
+This starts PostgreSQL, Redis, the migrations, the API, the worker (four claim checks at a time), the coordinator, the demo site, the interface, and the swarm. The command returns when every service is healthy. The swarm then runs 100 hunters and 10 scouts on an 80 USDC bounty on `http://demo:8541/shop/`; watch it at http://127.0.0.1:3540/swarm. The `swarm` service is the race host (`python -m swarm serve`): after the demo race, the interface can start a race on an open bounty, one at a time and always simulated (docs/SWARM.md, "Race host"). Start a fresh demo race with `docker compose restart swarm`, and read it as text with `docker compose logs -f swarm`.
 
 The containers never read `.env`. Compose always uses dry settlement and scripted checks, so it needs no keys and moves no money. For model mode or `near_intents` settlement, use the host processes in [Development setup](#development-setup).
 
@@ -243,7 +243,7 @@ If Chromium is installed in a custom folder, set `PLAYWRIGHT_BROWSERS_PATH` for 
 
 ## Swarm board
 
-Open `/swarm` (optionally `?bounty=<id>`) for the live swarm board. It polls the Arsune API and the swarm runner state every 1.8 seconds. The frontend proxies `/swarm-state` to `ARSUNE_SWARM_URL` (default `http://127.0.0.1:8590`, route `/state`). If the runner is down, the board still works from Arsune data. When the settlement mode is `dry`, every money view shows "Simulation — no real money".
+Open `/swarm` (optionally `?bounty=<id>`) for the live swarm board. It polls the Arsune API and the swarm runner state every 1.8 seconds. The frontend proxies `/swarm-state` to `ARSUNE_SWARM_URL` (default `http://127.0.0.1:8590`, route `/state`). To start races from the interface, run the race host there: `uv run python -m swarm serve` (add `--demo-on-start` for a demo race at once). If the runner is down, the board still works from Arsune data. When the settlement mode is `dry`, every money view shows "Simulation — no real money".
 
 ## Demo shop
 

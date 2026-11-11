@@ -5,8 +5,9 @@ Arsune is only the judge, the escrow and the payer. The agents are clients: they
 only through its public HTTP API, and they never read its database, models or bounty code.
 
 - Code: `backend/swarm/` (importable as `swarm`, the same way as `app`).
-- Tests: `backend/tests/test_swarm.py`.
+- Tests: `backend/tests/test_swarm.py` and `backend/tests/test_swarm_host.py`.
 - Start: `uv run python -m swarm simulate --setup` or `uv run python -m swarm live ...`.
+- Host races for the web UI: `uv run python -m swarm serve` (see [Race host](#race-host-serve)).
 
 The agents import two kinds of shared library code, as any NEAR Intents client could:
 
@@ -425,6 +426,8 @@ The swarm stops at the first of these:
 - The bounty is no longer `open` (for example closed because the budget is spent, or paused
   because Arsune cannot check the site).
 - Every agent is broke or done.
+- A stop request (`POST /races/stop` on the [race host](#race-host-serve)). Then the swarm does
+  not wait for settlement.
 
 At the stop, AI agents make no more model calls.
 
@@ -444,6 +447,124 @@ Other options:
 | `--seed` | Repeatable strategy assignment and agent traits. Timing still varies between runs. |
 | `--hold` | Keeps `/state` served after the run until Ctrl-C. |
 | `--quiet` | Does not print events. |
+
+## Race host (`serve`)
+
+`python -m swarm serve` is a long-running process that lets the web UI start a race. It runs one
+race at a time, keeps the state of the last race, and serves the board and a small control API
+on one port (`--state-host`, `--state-port`, default `127.0.0.1:8590`). Code:
+`backend/swarm/host.py`.
+
+The host only runs simulations. It never starts `live` mode: a request cannot name a mode, the
+host sets dry simulation on every race it starts, and a race refuses to start unless Arsune
+reports `"mode": "dry"`. Like the agents, the host reaches Arsune only through its HTTP API.
+
+```sh
+uv run python -m swarm serve --api http://127.0.0.1:8540
+uv run python -m swarm serve --demo-on-start --budget 80000000   # a demo race at once
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--api` | Arsune API base URL (default `http://127.0.0.1:8540`). |
+| `--demo-on-start` | Starts one demo race at once, the same as `simulate --setup`, so the board is not empty. |
+| `--site`, `--hunters`, `--scouts`, `--budget` | The demo race: bounty site, scripted hunters (100), scripted scouts (10), funding in token units (20 USDC). |
+| `--browser-pages` | Shared Chromium page pool of each race (default 6). |
+| `--ai-budget` | USD for the model calls of one AI race. A UI race uses at most 0.50 USD. |
+| `--quiet` | Does not print events. |
+
+### The race that the UI starts
+
+The profile is a set of constants in `backend/swarm/host.py` (`UI_RACE`, `AI_AGENTS`,
+`UI_AI_BUDGET_USD`):
+
+- 12 scripted hunters and 3 scripted scouts with the default strategy mixes. Careless and
+  copycat hunters take part, so false claims lose their bond and copies are duplicates.
+- Pace 0.5, time limit 240 s, 30 pages per agent, 6 shared browser pages.
+- With `"ai_agents": true`: also 3 AI hunters and 1 AI scout. The AI budget is the smaller of
+  `--ai-budget` and 0.50 USD.
+
+Before any agent starts, the race asks for Arsune's site check, the same as `simulate` (see
+[Site check](#site-check)). When the check fails, no agent starts and no model is called. The
+race ends, and `/state` shows the refusal.
+
+### Control API
+
+All answers are JSON. An error is `{"detail": "<one sentence>"}`.
+
+`GET /state` is the board, with the shape in [`GET /state`](#get-state). It shows the race that
+runs now, or the last race. `bounty_id` is set when the race starts. Before the first race,
+`run_id` and `bounty_id` are `null`, `finished` is `true`, and the log has one line.
+
+`GET /host`:
+
+```json
+{"busy": false, "bounty_id": "…", "run_id": "3f2a9c1b7d4e", "ai_available": false,
+ "ai_model": null, "ai_max_usd": 0.5,
+ "agents": {"hunters": 12, "scouts": 3, "ai_hunters": 3, "ai_scouts": 1}}
+```
+
+- `busy` is `true` while a race runs. `bounty_id` and `run_id` are those of the race that
+  `/state` shows.
+- `agents` is the UI race. `ai_hunters` and `ai_scouts` are what `"ai_agents": true` adds.
+- `ai_available` is `true` when the swarm's model settings are valid (the same check as
+  `--ai-hunters`; see [AI agents](#ai-agents)). `ai_model` is then the model name. The host
+  never shows or logs a key.
+
+`POST /races` with `Content-Type: application/json` and the body
+`{"bounty_id": "<uuid>", "ai_agents": false}` (`ai_agents` is optional):
+
+| Answer | When |
+| --- | --- |
+| 202 `{"run_id": "…", "bounty_id": "…"}` | The race starts. Read `/state` for its progress. |
+| 400 | The body is not JSON, has another field, or has a bad value. Also `"ai_agents": true` when `ai_available` is `false`: "AI agents are not configured on this server." |
+| 404 | Arsune has no bounty with this ID. |
+| 409 | A race runs ("A race is already running."), or Arsune shows the bounty as not `open`, or its budget cannot pay one more reward and its fee. The host reads `GET /api/bounties/{id}` first. |
+| 502 | Arsune's API did not answer. |
+
+`POST /races/stop` stops the race that runs now and answers 202 with its `run_id` and
+`bounty_id`, or 409 ("No race is running.") when no race runs. The agents stop, as at the time
+limit, and the log shows "The swarm stops: the race was stopped on request." The host does not
+wait for Arsune to settle the open claims; the log tells how many are still open, and the
+bounty page shows their results. A stop before the agents start (during the site check) ends
+the race at once. `/host` shows `busy: false` when the race has ended.
+
+The UI calls these through its own server (for example a Next rewrite). `GET` answers allow any
+origin, as `/state` did before. `POST` needs a JSON content type, so a page on another site
+cannot start a race from a browser.
+
+### In Compose
+
+The Compose `swarm` service runs `serve --demo-on-start` with the demo flags (100 hunters, 10
+scouts, 80 USDC). `docker compose restart swarm` starts a fresh demo race.
+
+The containers never read `.env`, so AI agents are off in Compose by default. To turn them on,
+pass the model settings to the `swarm` service in an override file. Docker Compose reads
+`compose.override.yaml` next to `compose.yaml` on its own. Do not commit the file. Put no key
+in it: `${...}` takes the value from your shell when you run `docker compose` (Compose also
+reads a `.env` file in the project folder for these values).
+
+```yaml
+# compose.override.yaml: AI agents on Claude for races that the UI starts
+services:
+  swarm:
+    environment:
+      ARSUNE_SWARM_MODEL_PROVIDER: anthropic
+      ARSUNE_SWARM_MODEL_NAME: claude-haiku-5-5
+      ARSUNE_SWARM_MODEL_INPUT_USD_PER_MILLION: "0.10"
+      ARSUNE_SWARM_MODEL_OUTPUT_USD_PER_MILLION: "0.50"
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?set ANTHROPIC_API_KEY in your shell}
+```
+
+For an OpenAI-compatible API (NEAR AI Cloud, or a local model), pass
+`ARSUNE_SWARM_MODEL_BASE_URL`, `ARSUNE_SWARM_MODEL_NAME`,
+`ARSUNE_SWARM_MODEL_API_KEY: ${ARSUNE_SWARM_MODEL_API_KEY}` and both prices instead. A model on
+your own machine is at `http://host.docker.internal:<port>/v1` from the container; on Linux,
+also add `extra_hosts: ["host.docker.internal:host-gateway"]` to the service.
+
+Then run `docker compose up -d swarm` and read `GET http://127.0.0.1:8590/host`:
+`ai_available` must be `true`. If it is `false`, `docker compose logs swarm` shows the reason
+in the line that starts with "swarm serve: AI agents are off".
 
 ## `GET /state`
 

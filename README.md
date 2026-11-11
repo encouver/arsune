@@ -44,7 +44,8 @@ Last full run (9 Nov 2026, `docker compose up --build --wait`): the race ended i
 
 | To | Run |
 | --- | --- |
-| Start a fresh race (new bounty) | `docker compose restart swarm` |
+| Start a fresh demo race (new bounty) | `docker compose restart swarm` |
+| Start a race on an open bounty | the race host: `POST http://127.0.0.1:8590/races` (see [docs/SWARM.md](docs/SWARM.md#race-host-serve)) |
 | Read the race as text | `docker compose logs swarm` |
 | See service status | `docker compose ps` |
 | Stop and delete everything | `docker compose down -v` |
@@ -304,7 +305,7 @@ Live mode is optional. It refuses to start without an explicit `--i-approve-main
 ```
 
 - `backend/app/`: API, bounty rules (`bounty/`, including reputation and 1Click funding), checker (`browser/`), settlement (`settlement/`, including ERC-191 and the escrow client), workers, and the demo shop (`demo_shop.py`).
-- `backend/swarm/`: the hunter and scout agents, scripted and AI. They are clients of the public API only.
+- `backend/swarm/`: the hunter and scout agents, scripted and AI, and the race host (`python -m swarm serve`) that lets the interface start a simulated race. They are clients of the public API only.
 - `frontend/`: the Next.js interface, including the swarm board (`app/swarm/`) and the owner page (`app/bounties/`).
 - `contracts/escrow/`: the escrow contract and its sandbox tests.
 - More: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SWARM.md](docs/SWARM.md), [docs/SETTLEMENT.md](docs/SETTLEMENT.md), [docs/ESCROW.md](docs/ESCROW.md).

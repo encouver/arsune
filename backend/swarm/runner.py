@@ -35,6 +35,7 @@ AGENT_CLASSES = {"careless": Careless, "copycat": Copycat}
 LIVE_CAP = 1_000_000  # the approved live budget: 1 USDC
 MAX_AI_BUDGET_USD = 5.0  # a typo guard for --ai-budget
 PAUSED = "The bounty is paused: Arsune cannot check this site — agents stop to save tokens."
+STOPPED = "the race was stopped on request"
 
 
 class SwarmError(Exception):
@@ -301,9 +302,11 @@ def build_agents(config: Config, swarm: Swarm, hunters, scouts, rng) -> list:
     return agents + found
 
 
-async def wait_for_end(swarm: Swarm, tasks: list, duration: float) -> str:
+async def wait_for_end(swarm: Swarm, tasks: list, duration: float, stop=None) -> str:
     deadline = time.monotonic() + duration
     while True:
+        if stop is not None and stop.is_set():
+            return STOPPED
         if all(task.done() for task in tasks):
             return "every agent is broke or done"
         if swarm.feed.status not in (None, "open"):
@@ -313,8 +316,11 @@ async def wait_for_end(swarm: Swarm, tasks: list, duration: float) -> str:
         await asyncio.wait(tasks, timeout=0.5, return_when=asyncio.FIRST_COMPLETED)
 
 
-async def wait_for_settlement(feed: BountyFeed, accounts: set, timeout: float, log) -> int:
-    """Let Arsune finish checking the claims already made; return how many stay open."""
+async def wait_for_settlement(
+    feed: BountyFeed, accounts: set, timeout: float, log, stop=None
+) -> int:
+    """Let Arsune finish checking the claims already made; return how many stay open.
+    After a stop request it reads the bounty once and does not wait."""
     deadline = time.monotonic() + timeout
     announced = False
     while True:
@@ -323,7 +329,7 @@ async def wait_for_settlement(feed: BountyFeed, accounts: set, timeout: float, l
         except httpx.HTTPError:
             pass
         waiting = sum(1 for a in accounts for c in feed.claims_by(a) if not resolved(c))
-        if not waiting or time.monotonic() >= deadline:
+        if not waiting or time.monotonic() >= deadline or (stop is not None and stop.is_set()):
             return waiting
         if not announced:
             log("swarm", f"Waiting for Arsune to settle {waiting} open claims.")
@@ -336,9 +342,14 @@ async def run(
     api_transport: httpx.AsyncBaseTransport | None = None,
     site_transport: httpx.AsyncBaseTransport | None = None,
     model_transport: httpx.AsyncBaseTransport | None = None,
+    *,
+    state: SwarmState | None = None,
+    stop: asyncio.Event | None = None,
 ) -> dict:
+    """One race. A caller that hosts races passes its own `state` (served elsewhere) and a
+    `stop` event that ends the race like the time limit does, without waiting for settlement."""
     rng = random.Random(config.seed)
-    state = SwarmState(
+    state = state or SwarmState(
         uuid4().hex[:12], "live" if config.live else "simulation", None if config.quiet else print
     )
     api, site = ArsuneApi(config.api_url, api_transport), SiteReader(site_transport)
@@ -390,7 +401,7 @@ async def run(
         started = time.monotonic()
         feed_task = asyncio.create_task(feed.run(swarm.stop))
         tasks = [asyncio.create_task(agent.run()) for agent in swarm.agents]
-        reason = await wait_for_end(swarm, tasks, config.duration)
+        reason = await wait_for_end(swarm, tasks, config.duration, stop)
         if ai:
             ai.halt()  # before the agents see the stop, so no later model call is made
         swarm.stop.set()
@@ -404,7 +415,13 @@ async def run(
             task.cancel()
         await asyncio.gather(*tasks, feed_task, return_exceptions=True)
         accounts = {agent.account for agent in swarm.agents}
-        await wait_for_settlement(feed, accounts, config.settle_timeout, state.log)
+        waiting = await wait_for_settlement(feed, accounts, config.settle_timeout, state.log, stop)
+        if waiting and reason == STOPPED:
+            state.log(
+                "swarm",
+                f"Arsune still checks {waiting} claims of this race; the bounty page shows "
+                "their results.",
+            )
         for agent in swarm.agents:
             await agent.sync()
             if agent.state != "broke":

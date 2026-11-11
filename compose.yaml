@@ -95,8 +95,10 @@ services:
     depends_on:
       api:
         condition: service_healthy
-  # 100 hunters and 10 scouts race on the demo shop. They are separate clients: they reach
-  # Arsune only through its HTTP API. `docker compose restart swarm` starts a fresh race.
+  # The race host. At start, 100 hunters and 10 scouts race on the demo shop; after that the
+  # UI starts races on open bounties (POST /races), one at a time and always simulated. The
+  # agents are separate clients: they reach Arsune only through its HTTP API.
+  # `docker compose restart swarm` starts a fresh demo race. AI agents: docs/SWARM.md.
   swarm:
     build: .
     init: true
@@ -106,15 +108,14 @@ services:
       - python
       - -m
       - swarm
-      - simulate
-      - --setup
+      - serve
+      - --demo-on-start
       - --api=http://api:8540
       - --site=http://demo:8541/shop/
       - --hunters=100
       - --scouts=10
       - --budget=80000000
       - --state-host=0.0.0.0
-      - --hold
     shm_size: 1gb
     ports: ["127.0.0.1:${ARSUNE_SWARM_PORT:-8590}:8590"]
     healthcheck:

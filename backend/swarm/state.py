@@ -2,11 +2,15 @@
 
 import asyncio
 import json
+import logging
 from collections import Counter, deque
 from datetime import UTC, datetime
 from decimal import Decimal
+from http import HTTPStatus
 
 from swarm.arsune import claim_result
+
+logger = logging.getLogger(__name__)
 
 LOG_SIZE = 200
 NO_AI = {"calls": 0, "usd_spent": 0.0, "budget_usd": 0.0, "model": ""}
@@ -58,32 +62,99 @@ class SwarmState:
         return {"agents": agents, **(self.ai.usage() if self.ai else NO_AI)}
 
 
-async def serve_state(state: SwarmState, host: str, port: int) -> asyncio.Server:
-    """A tiny read-only HTTP server: GET /state returns the board JSON."""
+MAX_BODY = 4096
+NOT_FOUND = {"detail": "Not found"}
+
+
+class BadRequest(Exception):
+    pass
+
+
+async def read_body(reader: asyncio.StreamReader, headers: dict) -> bytes:
+    """The request body, with Content-Length or chunked transfer encoding (a proxy may send
+    either), at most MAX_BODY bytes."""
+    if "chunked" in headers.get("transfer-encoding", "").lower():
+        body = bytearray()
+        while size := int((await reader.readline()).split(b";")[0], 16):
+            if len(body) + size > MAX_BODY:
+                raise BadRequest("The request body is too large.")
+            body += (await reader.readexactly(size + 2))[:-2]
+        while (await reader.readline()).strip():  # trailers
+            pass
+        return bytes(body)
+    length = int(headers.get("content-length") or 0)
+    if not 0 <= length <= MAX_BODY:
+        raise BadRequest("The request body is too large.")
+    return await reader.readexactly(length)
+
+
+async def read_request(reader: asyncio.StreamReader) -> tuple[str, str, dict, bytes]:
+    """(method, path without the query, lower-case headers, body)."""
+    line = (await reader.readline()).decode("latin-1").split()
+    method, target = (line + ["", ""])[:2]
+    headers = {}
+    while header := (await reader.readline()).decode("latin-1").strip():
+        name, _, value = header.partition(":")
+        headers[name.strip().lower()] = value.strip()
+    try:
+        body = await read_body(reader, headers)
+    except ValueError:
+        raise BadRequest("The request body is not readable.") from None
+    return method, target.split("?")[0], headers, body
+
+
+async def serve_http(respond, host: str, port: int) -> asyncio.Server:
+    """A tiny JSON server. `respond(method, path, headers, body)` returns (status, payload).
+    GET answers allow any origin; other methods do not, so another site's page cannot read
+    what a POST did."""
+
+    async def answer(reader: asyncio.StreamReader) -> tuple[str, int, dict]:
+        try:
+            method, path, headers, body = await asyncio.wait_for(read_request(reader), 5)
+        except BadRequest as exc:
+            return "", 400, {"detail": str(exc)}
+        try:
+            status, payload = await respond(method, path, headers, body)
+        except Exception:
+            logger.exception("The swarm's HTTP server failed to answer a request")
+            status, payload = 500, {"detail": "The swarm failed to answer."}
+        return method, status, payload
 
     async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         try:
-            request = (await asyncio.wait_for(reader.readline(), 5)).decode("latin-1").split()
-            while (await asyncio.wait_for(reader.readline(), 5)).strip():
-                pass
-            method, target = (request + ["", ""])[:2]
-            if method == "GET" and target.split("?")[0] == "/state":
-                status, body = "200 OK", json.dumps(state.view()).encode()
-            else:
-                status, body = "404 Not Found", b'{"detail":"Not found"}'
+            method, status, payload = await answer(reader)
+            data = json.dumps(payload).encode()
+            cors = "Access-Control-Allow-Origin: *\r\n" if method == "GET" else ""
             writer.write(
-                f"HTTP/1.1 {status}\r\nContent-Type: application/json\r\n"
-                f"Content-Length: {len(body)}\r\nCache-Control: no-store\r\n"
-                "Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n".encode()
-                + body
+                f"HTTP/1.1 {status} {HTTPStatus(status).phrase}\r\n"
+                f"Content-Type: application/json\r\nContent-Length: {len(data)}\r\n"
+                f"Cache-Control: no-store\r\n{cors}Connection: close\r\n\r\n".encode()
+                + data
             )
             await writer.drain()
-        except (TimeoutError, ConnectionError, UnicodeError):
+        except (
+            TimeoutError,
+            ConnectionError,
+            UnicodeError,
+            ValueError,
+            asyncio.IncompleteReadError,
+        ):
             pass
         finally:
             writer.close()
 
     return await asyncio.start_server(handle, host, port)
+
+
+async def serve_state(state: SwarmState, host: str, port: int) -> asyncio.Server:
+    """A read-only server: GET /state returns the board JSON."""
+
+    async def respond(method, path, headers, body):
+        if method == "GET" and path == "/state":
+            return 200, state.view()
+        return 404, NOT_FOUND
+
+    return await serve_http(respond, host, port)
 
 
 def summarize(state: SwarmState, claims: list[dict], wall_seconds: float) -> dict:
