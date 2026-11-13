@@ -741,6 +741,23 @@ async def test_run_stops_at_the_time_limit_and_settles_open_claims():
     assert summary["claims"] == len(arsune.claims) < 4
 
 
+async def test_a_race_with_no_agents_ends_cleanly_and_says_so():
+    arsune = FakeArsune(budget=20_000_000)
+    state = SwarmState("r0", "simulation")
+    summary = await asyncio.wait_for(
+        run(
+            run_config(hunters=0, scouts=0),
+            httpx.MockTransport(arsune.handler),
+            httpx.MockTransport(site_handler),
+            state=state,
+        ),
+        60,
+    )
+    assert state.finished
+    assert summary["claims"] == 0
+    assert any("no agent" in e["text"].lower() for e in state.events)
+
+
 def built_agents(monkeypatch):
     """Record each call that builds the swarm's agents."""
     from swarm import runner
