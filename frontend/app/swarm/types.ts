@@ -73,6 +73,7 @@ export type Claim = {
 
 export type LedgerRow = {
   id?: string;
+  claim_id?: string | null;
   kind: string;
   amount: number;
   account: string;
