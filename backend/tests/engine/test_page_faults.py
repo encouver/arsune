@@ -7,8 +7,10 @@ from app.browser.checker import check_candidate
 from app.browser.observations import mark_third_party_data, stops_layout
 from app.browser.policy import origin
 from app.core.scan import VIEWPORTS
+from ports import free_port
 
-SITE = "http://127.0.0.1:18541"
+PORT = free_port()
+SITE = f"http://127.0.0.1:{PORT}"
 PAGE = SITE + "/shop/gallery"
 IMAGE = SITE + "/shop/img/gallery/dashboard.png"
 SITE_404 = {

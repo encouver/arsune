@@ -16,10 +16,12 @@ from app.browser.observations import observe_page
 from app.browser.session import inspection_browser
 from app.core.scan import VIEWPORTS
 from app.demo_shop import IMG, build_ground_truth
+from ports import free_port
 from swarm.agents import inspect
 from swarm.site import BrowserPool, Crawl, SiteReader
 
-ORIGIN = "http://127.0.0.1:18541"
+PORT = free_port()
+ORIGIN = f"http://127.0.0.1:{PORT}"
 TRUTH = build_ground_truth(ORIGIN)
 BUGS, DECOYS = TRUTH["bugs"], TRUTH["decoys"]
 
@@ -30,7 +32,7 @@ def demo_server():
 
     old_demo = settings.demo_url
     settings.demo_url = ORIGIN
-    environment = {**os.environ, "ARSUNE_DEMO_PORT": "18541"}
+    environment = {**os.environ, "ARSUNE_DEMO_PORT": str(PORT)}
     with subprocess.Popen(
         [sys.executable, "-m", "app.demo"],
         stdout=subprocess.DEVNULL,
