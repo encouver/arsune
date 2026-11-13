@@ -63,6 +63,9 @@
 .start-panel .bo-field input {
   margin: 0;
 }
+.start-panel .demo-block > small {
+  font-size: 12px;
+}
 .agent-choice {
   margin: 0;
 }

@@ -1106,7 +1106,7 @@ test("results come first, in plain words; hashes and IDs stay in Details", async
   expect(top).toBeLessThan((await page.getByTestId("step-1").boundingBox())!.y);
 
   const proven = page.getByTestId("group-proven");
-  await expect(proven.getByRole("heading")).toHaveText("Proven bugs (paid) 2");
+  await expect(proven.getByRole("heading")).toHaveText("Proven bugs 2");
   await expect(proven.getByTestId("claim-title")).toHaveText([
     "Too wide on mobile (601 px on a 390 px screen)",
     "Script error on load: SyntaxError: Unexpected token '<'",
