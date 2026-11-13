@@ -30,7 +30,7 @@ test("a real race on the demo shop, from the start page to the results", async (
   });
   await page.getByRole("button", { name: "Add simulated money" }).click();
   await expect(page.getByTestId("funded-total")).toHaveText(
-    "Funded 10.00 USDC · pays for 9 bugs · 10.00 USDC left",
+    "Funded 50.00 USDC · pays for 45 bugs · 50.00 USDC left",
   );
 
   const step = page.getByTestId("step-4");

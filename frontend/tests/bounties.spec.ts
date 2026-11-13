@@ -507,6 +507,21 @@ test("start page: validates, creates the race and opens its page", async ({
   await expect(page.getByTestId("step-4-status")).toHaveText("After funding");
 });
 
+test("the demo shop starts with a 50 USDC budget", async ({ page }) => {
+  const api = await mockApi(page, "dry");
+  await page.goto("/");
+  await page.getByRole("button", { name: "Try the demo shop" }).click();
+  await expect(page.getByTestId("start-terms")).toHaveText(
+    "1.00 USDC per proven bug · at most 50.00 USDC in total",
+  );
+  await page.getByRole("button", { name: "Start a bug race" }).click();
+  await expect(page).toHaveURL(new RegExp(`/bounties/${ID}$`));
+  const create = api.calls.find(
+    (c) => c.path === "/api/bounties" && c.method === "POST",
+  );
+  expect(create?.body).toMatchObject({ budget: 50_000_000 });
+});
+
 test("an invalid advanced field opens the advanced section", async ({
   page,
 }) => {

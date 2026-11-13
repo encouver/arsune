@@ -32,6 +32,9 @@ const START: Form = {
   budget: "10",
 };
 
+// 50 USDC pays for 45 bugs at 1.10 each, so a demo race funds every bug it finds.
+const DEMO_BUDGET = "50";
+
 const ADVANCED: (keyof Form)[] = ["reward", "bond", "budget"];
 
 function problems(form: Form): Partial<Record<keyof Form, string>> {
@@ -290,6 +293,8 @@ export default function StartRacePage() {
                         ...f,
                         url: `${options.demo_site_url}/shop/`,
                         owner: f.owner || "demo-owner.near",
+                        budget:
+                          f.budget === START.budget ? DEMO_BUDGET : f.budget,
                       }))
                     }
                   >
