@@ -1,0 +1,141 @@
+<style>
+  .cl-wrap { display:grid; gap:1.5rem; }
+  .cl-pick { cursor:pointer; border-radius:14px; border:2px solid transparent; overflow:hidden; background:var(--bg-secondary); box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  .cl-pick:hover, .cl-pick.selected { border-color:var(--accent); }
+  .cl-cap { padding:.85rem 1.25rem .95rem; }
+  .cl-cap h3 { margin:0 0 .15rem; }
+  .cl-cap p { margin:0; color:var(--text-secondary); font-size:.9rem; }
+
+  .cl { --bg:#fbfaf6; --ink:#1d2420; --mute:#6b746f; --line:#d6dad4; --node:#ffffff; --nodeb:#c9d0ca; --paid:#3c8c2f; --lost:#c8453a; --rep:#8a938d; --bond:#c99a2e; --dot:#1d2420; --bar:#e7e9e4; --pill:#f1ead2; --pillink:#5a4a12;
+    background:var(--bg); color:var(--ink); padding:22px 30px 20px; font:14px/1.4 system-ui, sans-serif; }
+  .cl.dark { --bg:#17231d; --ink:#e7efe9; --mute:#8fa597; --line:#34493c; --node:#213128; --nodeb:#3f574a; --paid:#8fd16a; --lost:#ff7a6e; --rep:#a9b3ad; --bond:#e9c46a; --dot:#e7efe9; --bar:#2b3b32; --pill:#3a3418; --pillink:#f3e3a3; }
+
+  .cl-head { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .cl-site { font:italic 600 22px Georgia, serif; }
+  .cl-live { font-size:12.5px; color:var(--mute); display:flex; align-items:center; gap:6px; }
+  .cl-live i { width:8px; height:8px; border-radius:50%; background:var(--paid); animation:cl-pulse 1.4s ease-in-out infinite; }
+  @keyframes cl-pulse { 50% { opacity:.3; } }
+  .cl-sim { margin-left:auto; font-size:11.5px; font-weight:600; background:var(--pill); color:var(--pillink); border-radius:999px; padding:3px 10px; }
+
+  .cl-pool { display:flex; align-items:center; gap:14px; margin:14px 0 18px; font-size:13px; color:var(--mute); }
+  .cl-pool .bar { flex:1; height:6px; border-radius:3px; background:var(--bar); overflow:hidden; }
+  .cl-pool .bar i { display:block; height:100%; background:var(--paid); animation:cl-drain 14s linear infinite; }
+  @keyframes cl-drain { from { width:100%; } to { width:34%; } }
+  .cl-pool b { color:var(--ink); font-weight:600; }
+
+  .cl-stage { position:relative; height:215px; }
+  .cl-svg { position:absolute; inset:0; width:100%; height:100%; }
+  .cl-svg path { fill:none; stroke:var(--line); stroke-width:2; vector-effect:non-scaling-stroke; }
+  .cl-node { position:absolute; top:105px; transform:translate(-50%,-50%); width:46px; height:46px; border-radius:50%; background:var(--node); border:2px solid var(--nodeb);
+    display:flex; align-items:center; justify-content:center; font:700 17px Georgia, serif; z-index:3; }
+  .cl-lab { position:absolute; top:136px; transform:translateX(-50%); text-align:center; width:160px; }
+  .cl-lab b { display:block; font-size:14.5px; }
+  .cl-lab span { font-size:12.5px; color:var(--mute); }
+
+  .cl-res { position:absolute; z-index:1; left:78.5%; transform:translateY(-50%); display:flex; align-items:center; gap:10px; white-space:nowrap; }
+  .cl-res .sw { width:12px; height:12px; border-radius:50%; }
+  .cl-res .nm { font-weight:600; width:78px; }
+  .cl-res .ct { font:700 26px Georgia, serif; width:44px; text-align:right; }
+  .cl-res .mn { font-size:12.5px; color:var(--mute); }
+
+  .cl-dot { position:absolute; z-index:2; width:12px; height:12px; margin:-6px 0 0 -6px; border-radius:50%; background:var(--dot); opacity:0;
+    animation-duration:12s; animation-iteration-count:infinite; animation-timing-function:ease-in-out; }
+  .cl-dot.p { animation-name:cl-p; } .cl-dot.l { animation-name:cl-l; } .cl-dot.r { animation-name:cl-r; }
+  @keyframes cl-p { 0% { left:8%; top:105px; opacity:0; } 5% { opacity:1; }
+    22%,30% { left:31%; top:105px; background:var(--bond); } 48%,58% { left:54%; top:105px; background:var(--bond); }
+    70% { left:66%; top:105px; } 84%,94% { left:calc(78.5% + 6px); top:32px; background:var(--paid); opacity:1; } 100% { left:calc(78.5% + 6px); top:32px; opacity:0; } }
+  @keyframes cl-l { 0% { left:8%; top:105px; opacity:0; } 5% { opacity:1; }
+    22%,30% { left:31%; top:105px; background:var(--bond); } 48%,58% { left:54%; top:105px; background:var(--bond); }
+    70% { left:66%; top:105px; } 84%,94% { left:calc(78.5% + 6px); top:105px; background:var(--lost); opacity:1; } 100% { left:calc(78.5% + 6px); top:105px; opacity:0; } }
+  @keyframes cl-r { 0% { left:8%; top:105px; opacity:0; } 5% { opacity:1; }
+    22%,30% { left:31%; top:105px; background:var(--bond); } 48%,58% { left:54%; top:105px; background:var(--rep); }
+    70% { left:66%; top:105px; background:var(--rep); } 84%,94% { left:calc(78.5% + 6px); top:178px; background:var(--rep); opacity:1; } 100% { left:calc(78.5% + 6px); top:178px; opacity:0; } }
+
+  .cl-latest { display:flex; gap:14px; align-items:center; border-top:1px solid var(--line); margin-top:8px; padding-top:12px; font-size:13.5px; }
+  .cl-latest .k { font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; color:var(--mute); }
+  .cl-rot { position:relative; height:20px; flex:1; }
+  .cl-rot p { position:absolute; inset:0; margin:0; opacity:0; animation:cl-rot 12s infinite; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cl-rot p:nth-child(2) { animation-delay:4s; } .cl-rot p:nth-child(3) { animation-delay:8s; }
+  @keyframes cl-rot { 0% { opacity:0; } 3%,30% { opacity:1; } 33%,100% { opacity:0; } }
+  .cl-rot b.p { color:var(--paid); } .cl-rot b.l { color:var(--lost); } .cl-rot b.r { color:var(--rep); }
+  .cl-all { font-size:13px; color:var(--mute); white-space:nowrap; }
+</style>
+
+<h2>A cleaner line</h2>
+<p class="subtitle">Fewer words. Three steps. All results in one place at the end. Each dot is one claim. It goes into each step and comes out gold when the bond is locked, then drops into Paid, Bond lost or Repeat. Same design in light and dark. Click the one you prefer.</p>
+
+<div class="cl-wrap">
+
+  <div class="cl-pick" data-choice="clean-light" onclick="toggleSelect(this)">
+    <div class="cl">
+      <div class="cl-head">
+        <span class="cl-site">demo:8541/shop/</span>
+        <span class="cl-live"><i></i>Race running · 110 agents</span>
+        <span class="cl-sim">Simulation · no real money</span>
+      </div>
+      <div class="cl-pool"><span>Bounty pool</span><div class="bar"><i></i></div><span><b>27.19</b> of 80.00 USDC left</span></div>
+      <div class="cl-stage">
+        <svg class="cl-svg" viewBox="0 0 1000 215" preserveAspectRatio="none">
+          <path d="M80 105 L660 105"/><path d="M660 105 L785 32"/><path d="M660 105 L785 105"/><path d="M660 105 L785 178"/>
+        </svg>
+        <div class="cl-node" style="left:8%">1</div><div class="cl-lab" style="left:8%"><b>Find</b><span>Agents search the site</span></div>
+        <div class="cl-node" style="left:31%">2</div><div class="cl-lab" style="left:31%"><b>Claim</b><span>158 claims · bond locked</span></div>
+        <div class="cl-node" style="left:54%">3</div><div class="cl-lab" style="left:54%"><b>Check</b><span>New? True? Fresh browser</span></div>
+        <div class="cl-res" style="top:32px"><span class="sw" style="background:var(--paid)"></span><span class="nm">Paid</span><span class="ct">66</span><span class="mn">+52.81 USDC</span></div>
+        <div class="cl-res" style="top:105px"><span class="sw" style="background:var(--lost)"></span><span class="nm">Bond lost</span><span class="ct">40</span><span class="mn">not true</span></div>
+        <div class="cl-res" style="top:178px"><span class="sw" style="background:var(--rep)"></span><span class="nm">Repeat</span><span class="ct">52</span><span class="mn">bond back</span></div>
+        <div class="cl-dot p" style="animation-delay:0s"></div>
+        <div class="cl-dot r" style="animation-delay:-2.4s"></div>
+        <div class="cl-dot l" style="animation-delay:-4.8s"></div>
+        <div class="cl-dot p" style="animation-delay:-7.2s"></div>
+        <div class="cl-dot p" style="animation-delay:-9.6s"></div>
+      </div>
+      <div class="cl-latest"><span class="k">Latest</span>
+        <div class="cl-rot">
+          <p>hunter-045 proved “Too wide on mobile” on /shop/c/support → <b class="p">paid +2.14 USDC</b></p>
+          <p>hunter-020 claimed a broken link on /shop/p/12 → it was not true, <b class="l">bond lost</b></p>
+          <p>hunter-007 sent a bug that was already proven → <b class="r">bond back</b></p>
+        </div>
+        <span class="cl-all">See all 158 claims ↓</span>
+      </div>
+    </div>
+    <div class="cl-cap"><h3>Light</h3><p>Matches the rest of the site. Calm and easy to read.</p></div>
+  </div>
+
+  <div class="cl-pick" data-choice="clean-dark" onclick="toggleSelect(this)">
+    <div class="cl dark">
+      <div class="cl-head">
+        <span class="cl-site">demo:8541/shop/</span>
+        <span class="cl-live"><i></i>Race running · 110 agents</span>
+        <span class="cl-sim">Simulation · no real money</span>
+      </div>
+      <div class="cl-pool"><span>Bounty pool</span><div class="bar"><i></i></div><span><b>27.19</b> of 80.00 USDC left</span></div>
+      <div class="cl-stage">
+        <svg class="cl-svg" viewBox="0 0 1000 215" preserveAspectRatio="none">
+          <path d="M80 105 L660 105"/><path d="M660 105 L785 32"/><path d="M660 105 L785 105"/><path d="M660 105 L785 178"/>
+        </svg>
+        <div class="cl-node" style="left:8%">1</div><div class="cl-lab" style="left:8%"><b>Find</b><span>Agents search the site</span></div>
+        <div class="cl-node" style="left:31%">2</div><div class="cl-lab" style="left:31%"><b>Claim</b><span>158 claims · bond locked</span></div>
+        <div class="cl-node" style="left:54%">3</div><div class="cl-lab" style="left:54%"><b>Check</b><span>New? True? Fresh browser</span></div>
+        <div class="cl-res" style="top:32px"><span class="sw" style="background:var(--paid)"></span><span class="nm">Paid</span><span class="ct">66</span><span class="mn">+52.81 USDC</span></div>
+        <div class="cl-res" style="top:105px"><span class="sw" style="background:var(--lost)"></span><span class="nm">Bond lost</span><span class="ct">40</span><span class="mn">not true</span></div>
+        <div class="cl-res" style="top:178px"><span class="sw" style="background:var(--rep)"></span><span class="nm">Repeat</span><span class="ct">52</span><span class="mn">bond back</span></div>
+        <div class="cl-dot p" style="animation-delay:0s"></div>
+        <div class="cl-dot r" style="animation-delay:-2.4s"></div>
+        <div class="cl-dot l" style="animation-delay:-4.8s"></div>
+        <div class="cl-dot p" style="animation-delay:-7.2s"></div>
+        <div class="cl-dot p" style="animation-delay:-9.6s"></div>
+      </div>
+      <div class="cl-latest"><span class="k">Latest</span>
+        <div class="cl-rot">
+          <p>hunter-045 proved “Too wide on mobile” on /shop/c/support → <b class="p">paid +2.14 USDC</b></p>
+          <p>hunter-020 claimed a broken link on /shop/p/12 → it was not true, <b class="l">bond lost</b></p>
+          <p>hunter-007 sent a bug that was already proven → <b class="r">bond back</b></p>
+        </div>
+        <span class="cl-all">See all 158 claims ↓</span>
+      </div>
+    </div>
+    <div class="cl-cap"><h3>Dark</h3><p>Looks more like a live control screen. The colored dots stand out more.</p></div>
+  </div>
+
+</div>
