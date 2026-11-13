@@ -114,9 +114,9 @@
   position: absolute;
   top: 0;
   left: calc(80px + (100% - 80px) * 0.88);
-  right: 0;
+  /* From the end of the wire to the left edge of the result swatches. */
+  width: calc((100% - 80px) * 0.12);
   height: 174px;
-  width: auto;
   overflow: visible;
 }
 .rv-fork path {

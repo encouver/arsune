@@ -271,7 +271,7 @@ function LiveRace({
         agentCount={swarm ? swarm.agents.length : null}
         nameOf={nameOf}
         titleOf={titleOf}
-        finished={false}
+        finished={!!swarm?.finished}
         seeAllHref={`/swarm?bounty=${encodeURIComponent(bounty.id)}`}
         // Claims that exist when the race state arrives are old: they get no dot.
         resetKey={swarm ? `${bounty.id}:${swarm.run_id}` : bounty.id}

@@ -142,13 +142,14 @@ export function latestSentence(
   const c = newest;
   const who = nameOf(c.hunter_account);
   const title = `"${titleOf(c)}"`;
-  const page = claimPage(c);
+  const p = claimPage(c);
+  const on = p && p !== "—" ? ` on ${p}` : "";
   const stage = stageOf(c);
   let text: string;
   if (stage === "paid")
-    text = paidSentence(c, ledger, nameOf, `${who} proved ${title} on ${page}`);
+    text = paidSentence(c, ledger, nameOf, `${who} proved ${title}${on}`);
   else if (stage === "lost")
-    text = `${who} claimed ${title} on ${page} → it was not true, bond lost`;
+    text = `${who} claimed ${title}${on} → it was not true, bond lost`;
   else if (stage === "repeat")
     text = `${who} sent a bug that was already proven → bond back`;
   else if (c.status === "unfunded")

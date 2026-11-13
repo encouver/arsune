@@ -396,17 +396,17 @@ function newClaim(i: number, over: Record<string, unknown> = {}) {
 
 test("old claims make no dots on first load", async ({ page }) => {
   let polls = 0;
-  const old = bounty("dry").claims;
+  // Received claims stay on the line: a wrong dot would stay too.
   await mock(page, {
     bounty: () => {
       polls++;
-      return { claims: [...old, { ...old[1], id: "c3", status: "duplicate" }] };
+      return { claims: [newClaim(1), newClaim(2), newClaim(3)] };
     },
   });
   await page.goto("/swarm");
   await expect(page.getByTestId("line-claims")).toHaveText("3");
   await expect.poll(() => polls).toBeGreaterThanOrEqual(3);
-  await expect(page.getByTestId("race-dot")).toHaveCount(0);
+  expect(await page.getByTestId("race-dot").count()).toBe(0);
 });
 
 test("a new claim makes one dot that ends in its result", async ({ page }) => {
@@ -485,8 +485,9 @@ test("no dots move when the race is finished", async ({ page }) => {
 test("switching bounty makes no dots for its old claims", async ({ page }) => {
   let polls = 0;
   let switched = false;
+  // Received claims stay on the line: a wrong dot would stay too.
   const other = Array.from({ length: 5 }, (_, i) =>
-    newClaim(i, { id: `b2-${i}`, status: "rejected", outcome: "rejected" }),
+    newClaim(i, { id: `b2-${i}` }),
   );
   await mock(page, {
     swarm: () => {
@@ -500,7 +501,7 @@ test("switching bounty makes no dots for its old claims", async ({ page }) => {
   await expect(page.getByTestId("line-claims")).toHaveText("5");
   const at = polls;
   await expect.poll(() => polls).toBeGreaterThan(at + 1);
-  await expect(page.getByTestId("race-dot")).toHaveCount(0);
+  expect(await page.getByTestId("race-dot").count()).toBe(0);
 });
 
 test("near_intents mode links real payments to NearBlocks only", async ({
@@ -1152,6 +1153,9 @@ test("More details is closed and keeps payments, tips, leaderboard, activity", a
   await expect(page.getByTestId("pay-scouts")).toHaveText(
     "Paid to scouts0.375 USDC",
   );
+  await expect(page.getByTestId("pay-false-cost")).toHaveText(
+    "Cost of false claims to you0.00 USDC",
+  );
 });
 
 test("claim stream filter shows only the chosen status", async ({ page }) => {
@@ -1282,7 +1286,8 @@ test("a failed site check says that no agent started, and why", async ({
   await expect(page.getByTestId("site-check-banner")).toHaveText(
     `No agent started: ${reason}`,
   );
-  await expect(page.getByTestId("line-claims")).toHaveText("2");
+  await expect(page.getByTestId("line-claims")).toHaveText("0");
+  await expect(page.getByTestId("line-paid")).toHaveText("0");
   await openDetails(page);
   await expect(page.getByTestId("activity-log")).toContainText(
     "No agent starts: Arsune cannot check this site",
@@ -1310,3 +1315,134 @@ test("a paused bounty shows the stop line and Arsune's reason", async ({
   await expect(page.getByTestId("activity-log")).toContainText(stop);
   await expect(page.getByTestId("site-check-banner")).toHaveCount(0);
 });
+
+test("the agent filter goes away when the race moves to another bounty", async ({
+  page,
+}) => {
+  let polls = 0;
+  let switched = false;
+  let markPicked = false;
+  await mock(page, {
+    swarm: () => {
+      switched = polls > 0 && markPicked;
+      return { ...swarm(), bounty_id: switched ? "b2" : "b1" };
+    },
+    bounty: () => {
+      polls++;
+      return switched ? { id: "b2" } : {};
+    },
+  });
+  await page.goto("/swarm");
+  const bar = page.getByTestId("agent-filter");
+  await markOf(page, "hunter-01").click();
+  await expect(bar).toHaveText("Claims by hunter-01 · Show all");
+  markPicked = true;
+  await expect(page.getByTestId("agent-filter")).toHaveCount(0);
+});
+
+test("scouts in the records list are squares, and a click lists what they sourced", async ({
+  page,
+}) => {
+  const base = bounty("dry").hunters;
+  await mock(page, {
+    swarm: { ...swarm(0), run_id: null, bounty_id: null, finished: true },
+    bounty: {
+      hunters: [
+        ...base,
+        {
+          account: "scout-a.testnet",
+          claims: 0,
+          proven: 0,
+          rejected: 0,
+          duplicate: 0,
+          unverified: 0,
+          pending: 0,
+          earned: 0,
+          bonds_lost: 0,
+          scout_earned: 375_000,
+        },
+      ],
+    },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("agent-mark")).toHaveCount(3);
+  const scout = markOf(page, "hunter-03");
+  await expect(scout).toHaveAttribute("data-role", "scout");
+  await expect(scout).toHaveAttribute("aria-label", /\+0\.375 USDC/);
+  const row = page.locator('[data-testid="who-row"][data-result="earned"]');
+  await expect(row.locator('[data-role="scout"]')).toHaveCount(1);
+  await scout.click();
+  await expect(page.getByTestId("claim-row")).toHaveCount(1);
+  await expect(page.getByTestId("claim-row")).toHaveAttribute(
+    "data-status",
+    "paid",
+  );
+});
+
+test("keyboard focus stays on a mark that moves to another row", async ({
+  page,
+}) => {
+  let moved = false;
+  const sw = () => {
+    const s = swarm();
+    if (moved) s.agents[1] = { ...s.agents[1], earned: 1_000_000 };
+    return s;
+  };
+  await mock(page, { swarm: sw });
+  await page.goto("/swarm");
+  const row = (r: string) =>
+    page.locator(`[data-testid="who-row"][data-result="${r}"]`);
+  await expect(row("none").locator('[aria-label^="hunter-02 ·"]')).toHaveCount(
+    1,
+  );
+  await markOf(page, "hunter-02").focus();
+  await expect(markOf(page, "hunter-02")).toBeFocused();
+  moved = true;
+  await expect(
+    row("earned").locator('[aria-label^="hunter-02 ·"]'),
+  ).toHaveCount(1);
+  await expect(markOf(page, "hunter-02")).toBeFocused();
+});
+
+test("a hover tooltip closes when its mark moves to another row", async ({
+  page,
+}) => {
+  let moved = false;
+  const sw = () => {
+    const s = swarm();
+    if (moved) s.agents[1] = { ...s.agents[1], earned: 1_000_000 };
+    return s;
+  };
+  await mock(page, { swarm: sw });
+  await page.goto("/swarm");
+  await markOf(page, "hunter-02").hover();
+  await expect(page.getByTestId("agent-tip")).toHaveCount(1);
+  moved = true;
+  await expect(
+    page
+      .locator('[data-testid="who-row"][data-result="earned"]')
+      .locator('[aria-label^="hunter-02 ·"]'),
+  ).toHaveCount(1);
+  await expect(page.getByTestId("agent-tip")).toHaveCount(0);
+});
+
+for (const width of [1440, 1024]) {
+  test(`the fork lines end at the result swatches at ${width} px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await mock(page);
+    await page.goto("/swarm");
+    await expect(page.getByTestId("line-claims")).toHaveText("2");
+    const m = await page.evaluate(() => {
+      const fork = document.querySelector(".rv-fork")!.getBoundingClientRect();
+      const swatches = [
+        ...document.querySelectorAll(".rv-results .rv-result .rv-swatch"),
+      ].map((el) => el.getBoundingClientRect().left);
+      return { end: fork.right, swatches };
+    });
+    expect(m.swatches.length).toBe(3);
+    for (const left of m.swatches)
+      expect(Math.abs(m.end - left)).toBeLessThan(4);
+  });
+}

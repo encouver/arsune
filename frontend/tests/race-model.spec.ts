@@ -376,3 +376,17 @@ test("pickNewDots caps the dots but marks every new claim seen", () => {
   expect(fresh).toEqual(many.slice(0, 12).map((c) => c.id));
   expect(seen.size).toBe(15);
 });
+
+test("latestSentence leaves out the page when the claim has none", () => {
+  const c = claim("1", { urls: [], details: null });
+  for (const status of ["paid", "rejected"]) {
+    const text = latestSentence(
+      [{ ...c, status, outcome: status === "paid" ? "proven" : "rejected" }],
+      [],
+      nameOf,
+      titleOf,
+    )?.text;
+    expect(text).not.toMatch(/ on\s*(→|$)/);
+    expect(text).not.toContain("  ");
+  }
+});

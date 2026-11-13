@@ -1,6 +1,6 @@
 "use client";
 
-import { useLayoutEffect, useRef, useState, type JSX } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type JSX } from "react";
 import {
   agentLabel,
   agentRows,
@@ -35,12 +35,20 @@ function rowTotal(result: Result, agents: Agent[]): string {
 }
 
 // The tooltip opens toward the middle of the screen, so it never makes the page wider.
-type Tip = { account: string; side: "left" | "right" };
+type Tip = {
+  account: string;
+  result: Result;
+  side: "left" | "right";
+};
 
 function tipFor(a: Agent, el: HTMLElement): Tip {
   const box = el.getBoundingClientRect();
   const side = box.left + box.width / 2 > window.innerWidth / 2;
-  return { account: a.account, side: side ? "right" : "left" };
+  return {
+    account: a.account,
+    result: resultOf(a),
+    side: side ? "right" : "left",
+  };
 }
 
 // A long label can still pass the screen edge: move it back inside before it paints.
@@ -76,6 +84,15 @@ export default function WhoWon({
   onPick,
 }: WhoWonProps): JSX.Element | null {
   const [tip, setTip] = useState<Tip | null>(null);
+  const marks = useRef(new Map<string, HTMLButtonElement>());
+  const focused = useRef<string | null>(null);
+  // An agent that changes result moves to another row: its old button unmounts.
+  useEffect(() => {
+    const now = agents.find((a) => a.account === tip?.account);
+    if (tip && (!now || resultOf(now) !== tip.result)) setTip(null);
+    if (!focused.current || document.activeElement !== document.body) return;
+    marks.current.get(focused.current)?.focus();
+  });
   if (agents.length === 0) return null;
   const rows = agentRows(agents);
   const rings = running && !fallback;
@@ -122,6 +139,10 @@ export default function WhoWon({
                   type="button"
                   className="rv-mark"
                   data-testid="agent-mark"
+                  ref={(el) => {
+                    if (el) marks.current.set(a.account, el);
+                    else marks.current.delete(a.account);
+                  }}
                   data-role={a.role}
                   data-result={resultOf(a)}
                   data-working={rings && isWorking(a) ? "true" : undefined}
@@ -129,9 +150,16 @@ export default function WhoWon({
                   aria-pressed={picked === a.account}
                   onClick={() => onPick(a)}
                   onMouseEnter={(e) => setTip(tipFor(a, e.currentTarget))}
-                  onFocus={(e) => setTip(tipFor(a, e.currentTarget))}
+                  onFocus={(e) => {
+                    focused.current = a.account;
+                    setTip(tipFor(a, e.currentTarget));
+                  }}
                   onMouseLeave={() => setTip(null)}
-                  onBlur={() => setTip(null)}
+                  onBlur={(e) => {
+                    // The browser can also blur a button because it unmounted.
+                    if (e.relatedTarget) focused.current = null;
+                    setTip(null);
+                  }}
                 >
                   {tip?.account === a.account && (
                     <TipText text={label} side={tip.side} />

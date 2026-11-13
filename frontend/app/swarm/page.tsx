@@ -124,17 +124,21 @@ function deriveHunters(b: Bounty | null): HunterStat[] {
   return [...map.values()];
 }
 
-function agentsFromHunters(hunters: HunterStat[]): Agent[] {
+function agentsFromHunters(hunters: HunterStat[], claims: Claim[]): Agent[] {
+  // Scout accounts sit in the hunters list too; claims tell them apart.
+  const hunting = new Set(claims.map((c) => c.hunter_account));
+  const scouting = new Set(claims.map((c) => c.scout?.account));
   return hunters.map((h, i) => ({
     id: `hunter-${String(i + 1).padStart(2, "0")}`,
     account: h.account,
-    role: "hunter",
+    role:
+      scouting.has(h.account) && !hunting.has(h.account) ? "scout" : "hunter",
     strategy: "not reported",
     state: h.pending > 0 ? "waiting" : "searching",
     balance: 0,
     claims: h.claims,
     proven: h.proven,
-    earned: h.earned,
+    earned: h.earned + h.scout_earned,
     bonds_lost: h.bonds_lost,
   }));
 }
@@ -164,6 +168,9 @@ export default function SwarmPage() {
   const [agentFilter, setAgentFilter] = useState<AgentFilter | null>(null);
   const [filter, setFilter] = useState("all");
   const swarmRef = useRef<SwarmState | null>(null);
+
+  // A filter for an agent of one race does not fit the next bounty.
+  useEffect(() => setAgentFilter(null), [bounty?.id]);
 
   useEffect(() => {
     let stop = false;
@@ -230,8 +237,11 @@ export default function SwarmPage() {
   const swarm = other || idle ? null : rawSwarm;
   const hunters = useMemo(() => deriveHunters(bounty), [bounty]);
   const agents = useMemo(
-    () => (swarm?.agents?.length ? swarm.agents : agentsFromHunters(hunters)),
-    [swarm, hunters],
+    () =>
+      swarm?.agents?.length
+        ? swarm.agents
+        : agentsFromHunters(hunters, bounty?.claims ?? []),
+    [swarm, hunters, bounty],
   );
   const names: Names = useMemo(
     () => new Map((rawSwarm?.agents ?? []).map((a) => [a.account, a.id])),
@@ -298,6 +308,7 @@ export default function SwarmPage() {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 5);
   }, [hunters, agents]);
+  const siteFailed = swarm?.site_check?.state === "failed";
   const finished =
     !!swarm?.finished ||
     (agents.length > 0 &&
@@ -408,8 +419,8 @@ export default function SwarmPage() {
               </p>
             )}
             <RaceLine
-              claims={claims}
-              ledger={rows}
+              claims={siteFailed ? [] : claims}
+              ledger={siteFailed ? [] : rows}
               agentCount={swarm ? swarm.agents.length : null}
               nameOf={(account) => nameOf(account, names)}
               titleOf={titleOf}
@@ -487,6 +498,7 @@ export default function SwarmPage() {
                       sum(rows, "bond_forfeit"),
                     ],
                     ["pay-scouts", "Paid to scouts", sum(rows, "scout_share")],
+                    ["pay-false-cost", "Cost of false claims to you", 0],
                   ] as const
                 ).map(([id, label, amount]) => (
                   <div key={id} data-testid={id}>
