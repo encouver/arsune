@@ -88,7 +88,7 @@ export async function stopRace(timeoutMs = 15_000) {
   }
 }
 
-/** "1 AI scout", "3 AI hunters" */
+/** "1 scout", "12 hunters" */
 export function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
@@ -96,13 +96,4 @@ export function count(n: number, noun: string): string {
 export function agentCount(host: Host, ai: boolean): number {
   const a = host.agents;
   return a.hunters + a.scouts + (ai ? a.ai_hunters + a.ai_scouts : 0);
-}
-
-/** Why the AI option is off, in plain words; null when it is on. */
-export function aiOffReason(host: Host | null | undefined): string | null {
-  if (host === undefined) return "Asking the race host…";
-  if (host === null) return `AI agents are off: ${HOST_DOWN.toLowerCase()}`;
-  if (!host.ai_available)
-    return "AI agents are off: this race host has no model key.";
-  return null;
 }

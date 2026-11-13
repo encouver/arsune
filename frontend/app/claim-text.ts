@@ -16,7 +16,8 @@ export const GROUPS: Record<
   { title: string; count: string; chip: string; mark: string }
 > = {
   proven: {
-    title: "Proven bugs (paid)",
+    // Not "(paid)": a proven claim is unfunded when the budget ran out.
+    title: "Proven bugs",
     count: "proven",
     chip: "Proven, paid",
     mark: "✓",

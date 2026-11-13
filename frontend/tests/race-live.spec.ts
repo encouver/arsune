@@ -15,7 +15,7 @@ test("a real race on the demo shop, from the start page to the results", async (
   };
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto("/");
-  await page.getByRole("button", { name: "Use the local demo shop" }).click();
+  await page.getByRole("button", { name: "Try the demo shop" }).click();
   await page.getByRole("button", { name: "Start a bug race" }).click();
   await expect(page).toHaveURL(/\/bounties\/[0-9a-f-]{36}$/);
   const id = new URL(page.url()).pathname.split("/").pop()!;
@@ -25,10 +25,9 @@ test("a real race on the demo shop, from the start page to the results", async (
     .getByRole("button", { name: "Demo site: set proof automatically" })
     .click();
   await expect(page.getByTestId("step-1-status")).toHaveText("Done");
-  await expect(page.getByTestId("step-2-status")).toHaveText(
-    "Loads on desktop and mobile",
-    { timeout: 120_000 },
-  );
+  await expect(page.getByTestId("step-2-status")).toHaveText("Done", {
+    timeout: 120_000,
+  });
   await page.getByRole("button", { name: "Add simulated money" }).click();
   await expect(page.getByTestId("funded-total")).toHaveText(
     "Funded 10.00 USDC · pays for 9 bugs · 10.00 USDC left",
@@ -39,8 +38,10 @@ test("a real race on the demo shop, from the start page to the results", async (
     timeout: 180_000,
   });
   const host = await (await page.request.get("/swarm-api/host")).json();
-  if (!host.ai_available)
-    await expect(step.getByLabel(/Scripted \+ AI agents/)).toBeDisabled();
+  // A choice only when the race host has AI agents; the race uses standard agents.
+  if (host.ai_available)
+    await expect(step.getByLabel("Standard agents (free)")).toBeChecked();
+  else await expect(step.getByRole("radio")).toHaveCount(0);
   await page.getByRole("button", { name: "Start the race" }).click();
   await expect(page.getByTestId("step-4-status")).toHaveText("Running");
   await expect(page.getByTestId("live-race")).toBeVisible();

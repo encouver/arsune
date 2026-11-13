@@ -26,7 +26,7 @@ import {
   useRace,
 } from "../race-step";
 import { Results, TechnicalDetails } from "../results";
-import { Code, Message, SimTag } from "../ui";
+import { Code, Message, ShowHide, SimTag } from "../ui";
 
 const POLL_MS = 3000;
 const FUNDING_POLL_MS = 5000;
@@ -36,7 +36,7 @@ type Refresh = () => Promise<void>;
 
 const SITE_STATUS: Record<SiteCheck["state"], [StepState, string]> = {
   checking: ["active", "Loading your site…"],
-  passed: ["done", "Loads on desktop and mobile"],
+  passed: ["done", "Done"],
   failed: ["error", "Could not load your site"],
 };
 
@@ -115,8 +115,6 @@ export default function BountyPage({
   }, [id]);
 
   useEffect(() => {
-    // The start page passes the owner's agent choice along.
-    setAi(new URLSearchParams(window.location.search).get("agents") === "ai");
     api<Options>("/api/funding/options")
       .then(setOptions)
       .catch((e) => setLoadError(errorText(e)));
@@ -186,6 +184,9 @@ export default function BountyPage({
     bounty.status === "open" && bounty.budget_amount >= perBug(bounty);
   const phase = racePhase(race, bounty.id, ready);
   const site = siteStep(bounty, proofDone);
+  // A passed check can carry a note while the bounty waits (escrow): keep the step open.
+  const siteOpen =
+    !!bounty.site_check?.note || bounty.status === "pending_proof";
   const fund = fundStep(bounty);
   const glance: [string, StepState, string][] = [
     [
@@ -266,6 +267,7 @@ export default function BountyPage({
               title="Prove that you own the site"
               state={proofDone ? "done" : "active"}
               status={proofDone ? "Done" : "Waiting for proof"}
+              collapse
             >
               <ProveStep
                 bounty={bounty}
@@ -279,6 +281,7 @@ export default function BountyPage({
               title="Arsune loads your site"
               state={site[0]}
               status={site[1]}
+              collapse={!siteOpen}
             >
               <SiteStep
                 bounty={bounty}
@@ -330,14 +333,30 @@ function Step({
   title,
   state,
   status,
+  collapse = false,
   children,
 }: {
   n: number;
   title: string;
   state: StepState;
   status: string;
+  // A done step that collapses shows one line; its body waits behind "Show".
+  collapse?: boolean;
   children: ReactNode;
 }) {
+  const top = (
+    <>
+      <h2>
+        <span className="bo-step-label">{n}.</span> {title}
+      </h2>
+      <span
+        className={`sw-chip bo-chip-${state}`}
+        data-testid={`step-${n}-status`}
+      >
+        {status}
+      </span>
+    </>
+  );
   return (
     <li
       className="bo-step"
@@ -349,18 +368,20 @@ function Step({
         {state === "done" ? "✓" : state === "error" ? "!" : n}
       </span>
       <section className="sw-panel" aria-label={title}>
-        <div className="sw-panel-top">
-          <h2>
-            <span className="bo-step-label">{n}.</span> {title}
-          </h2>
-          <span
-            className={`sw-chip bo-chip-${state}`}
-            data-testid={`step-${n}-status`}
-          >
-            {status}
-          </span>
-        </div>
-        {children}
+        {collapse && state === "done" ? (
+          <details className="bo-done" data-testid={`step-${n}-done`}>
+            <summary className="sw-panel-top">
+              {top}
+              <ShowHide />
+            </summary>
+            {children}
+          </details>
+        ) : (
+          <>
+            <div className="sw-panel-top">{top}</div>
+            {children}
+          </>
+        )}
       </section>
     </li>
   );
@@ -617,8 +638,7 @@ function PausedBanner({
     >
       <div className="sw-error" role="alert">
         Arsune paused this bounty and takes no new claims, so agents do not
-        spend time and tokens on claims that it cannot check.{" "}
-        {bounty.paused_reason}
+        spend time on claims that it cannot check. {bounty.paused_reason}
       </div>
       <div className="bo-actions">
         <button

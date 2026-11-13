@@ -30,12 +30,23 @@ export function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
-export function SimTag({ show = true }: { show?: boolean }) {
+// The one simulation label of a page, in its header.
+export function SimTag({ show }: { show: boolean }) {
   return show ? (
     <span className="sw-sim" data-testid="sim-label">
-      Simulation — no real money
+      Simulation · no real money
     </span>
   ) : null;
+}
+
+/** The small word of a disclosure: "Show" while it is closed, "Hide" while it is open. */
+export function ShowHide() {
+  return (
+    <>
+      <span className="bo-show">Show</span>
+      <span className="bo-hide">Hide</span>
+    </>
+  );
 }
 
 export function Code({

@@ -1,8 +1,8 @@
 "use client";
 
-import { aiOffReason, count, type Host } from "../race-host";
+import { count, type Host } from "../race-host";
 
-/** Free scripted agents, or scripted plus AI agents with a spending cap. */
+/** Standard agents, or standard plus AI agents: only when the race host has AI agents. */
 export default function AgentChoice({
   host,
   ai,
@@ -14,9 +14,8 @@ export default function AgentChoice({
   onChange: (ai: boolean) => void;
   disabled?: boolean;
 }) {
-  const off = aiOffReason(host);
-  const a = host?.agents;
-  const maxUsd = `$${(host?.ai_max_usd ?? 0).toFixed(2)}`;
+  if (!host?.ai_available) return null;
+  const a = host.agents;
   return (
     <fieldset className="agent-choice" disabled={disabled}>
       <legend>Agents</legend>
@@ -25,16 +24,15 @@ export default function AgentChoice({
           <input
             type="radio"
             name="agents"
-            value="scripted"
+            value="standard"
             checked={!ai}
             onChange={() => onChange(false)}
           />
           <span>
-            <strong>Free scripted agents</strong>
+            <strong>Standard agents (free)</strong>
             <small>
-              {a
-                ? `${count(a.hunters, "hunter")} and ${count(a.scouts, "scout")} follow fixed rules. No model cost.`
-                : "Agents follow fixed rules. No model cost."}
+              {count(a.hunters, "hunter")} and {count(a.scouts, "scout")} with
+              fixed rules.
             </small>
           </span>
         </label>
@@ -43,20 +41,12 @@ export default function AgentChoice({
             type="radio"
             name="agents"
             value="ai"
-            checked={ai && !off}
-            disabled={!!off}
+            checked={ai}
             onChange={() => onChange(true)}
           />
           <span>
-            <strong>
-              {off
-                ? "Scripted + AI agents"
-                : `Scripted + AI agents (max ${maxUsd}, model ${host?.ai_model})`}
-            </strong>
-            <small data-testid="ai-option-note">
-              {off ??
-                `Adds ${count(a?.ai_hunters ?? 0, "AI hunter")} and ${count(a?.ai_scouts ?? 0, "AI scout")}. Arsune stops them at ${maxUsd}.`}
-            </small>
+            <strong>Standard + AI agents</strong>
+            <small>AI agents also search. They use model credits.</small>
           </span>
         </label>
       </div>
