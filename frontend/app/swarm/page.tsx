@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { settlementBadge } from "../bounties/api";
+import { settlementBadge, siteName } from "../bounties/api";
+import { SimTag } from "../bounties/ui";
 import {
   claimGroup,
   claimKind,
@@ -14,7 +15,14 @@ import {
 import SiteHeader from "../site-header";
 import { clock, pagePath, share, usdc } from "./format";
 import RaceLine, { PoolBar } from "./race-line";
-import { claimsOfAgent, poolOf } from "./race-model";
+import {
+  claimsOfAgent,
+  finishedStory,
+  lineCounts,
+  poolOf,
+  runningStory,
+  withRecords,
+} from "./race-model";
 import styles from "./swarm.module.css";
 import type {
   Agent,
@@ -143,14 +151,6 @@ function agentsFromHunters(hunters: HunterStat[], claims: Claim[]): Agent[] {
   }));
 }
 
-function SimTag({ dry }: { dry: boolean }) {
-  return dry ? (
-    <span className="sw-sim" data-testid="sim-label">
-      Simulation · no real money
-    </span>
-  ) : null;
-}
-
 function sum(rows: LedgerRow[], kind: string) {
   return rows
     .filter((r) => r.kind === kind && r.status === "completed")
@@ -236,10 +236,11 @@ export default function SwarmPage() {
   // Agents, tips and activity of another bounty's race do not belong on this board.
   const swarm = other || idle ? null : rawSwarm;
   const hunters = useMemo(() => deriveHunters(bounty), [bounty]);
+  // Money comes from Arsune's records; the race host still tells each agent's state.
   const agents = useMemo(
     () =>
       swarm?.agents?.length
-        ? swarm.agents
+        ? withRecords(swarm.agents, hunters)
         : agentsFromHunters(hunters, bounty?.claims ?? []),
     [swarm, hunters, bounty],
   );
@@ -257,57 +258,6 @@ export default function SwarmPage() {
   const ledger = useMemo(() => [...(bounty?.ledger ?? [])].reverse(), [bounty]);
   const dry = bounty?.settlement_mode === "dry";
   const rows = bounty?.ledger ?? [];
-  const byAccount = useMemo(
-    () => new Map((swarm?.agents ?? []).map((a) => [a.account, a])),
-    [swarm],
-  );
-  // The API has no proven count for scouts, so the swarm state fills it in.
-  const board = useMemo(() => {
-    const rows = hunters.map((h) => {
-      const a = byAccount.get(h.account);
-      if (a?.role !== "scout") return h;
-      return {
-        ...h,
-        proven: a.proven,
-        earned: Math.max(h.earned + h.scout_earned, a.earned),
-        scout_earned: 0,
-      };
-    });
-    const seen = new Set(rows.map((h) => h.account));
-    for (const a of swarm?.agents ?? []) {
-      if (a.role === "scout" && !seen.has(a.account) && a.earned > 0)
-        rows.push({
-          account: a.account,
-          claims: a.claims,
-          proven: a.proven,
-          rejected: 0,
-          duplicate: 0,
-          unverified: 0,
-          pending: 0,
-          earned: a.earned,
-          bonds_lost: a.bonds_lost,
-          scout_earned: 0,
-        });
-    }
-    return rows;
-  }, [hunters, byAccount, swarm]);
-  const leaderboard = useMemo(
-    () =>
-      [...board]
-        .sort((a, b) => b.earned + b.scout_earned - (a.earned + a.scout_earned))
-        .slice(0, 10),
-    [board],
-  );
-  const losers = useMemo(() => {
-    const lost = new Map<string, number>();
-    for (const h of hunters) lost.set(h.account, h.bonds_lost);
-    for (const a of agents)
-      lost.set(a.account, Math.max(lost.get(a.account) ?? 0, a.bonds_lost));
-    return [...lost.entries()]
-      .filter(([, n]) => n > 0)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5);
-  }, [hunters, agents]);
   const siteFailed = swarm?.site_check?.state === "failed";
   const finished =
     !!swarm?.finished ||
@@ -318,6 +268,15 @@ export default function SwarmPage() {
     : claims;
   const shownClaims = agentClaims.filter((c) => matchesFilter(c, filter));
   const titleOf = titler(claims);
+  // Only a race of this bounty with agents has a story; without one the notices below speak.
+  const story =
+    !swarm || !bounty || siteFailed
+      ? null
+      : finished
+        ? finishedStory(lineCounts(claims, rows))
+        : swarm.agents.length
+          ? runningStory(swarm.agents.length, siteName(bounty.url))
+          : null;
 
   function pickAgent(a: Agent) {
     if (agentFilter?.account === a.account) return setAgentFilter(null);
@@ -331,7 +290,7 @@ export default function SwarmPage() {
       <div className="sw">
         <div className="rv-head">
           <h1 className="rv-site">
-            {bounty ? bounty.url.replace(/^https?:\/\//, "") : "Bug race"}
+            {bounty ? siteName(bounty.url) : "Bug race"}
           </h1>
           <span className="sw-live" aria-live="polite">
             <i className={swarm && !finished ? "sw-pulse" : ""} />
@@ -348,7 +307,7 @@ export default function SwarmPage() {
                     : "Connecting"}
           </span>
           <div className="sw-meta">
-            <SimTag dry={!!dry} />
+            <SimTag show={dry} />
             {bounty && !dry && (
               <span className="sw-real">
                 {settlementBadge(bounty.settlement_mode)}
@@ -356,12 +315,17 @@ export default function SwarmPage() {
             )}
           </div>
         </div>
+        {story && (
+          <p className="rv-story" data-testid="race-story" aria-live="polite">
+            {story}
+          </p>
+        )}
 
         {other && (
           <div className="notice" role="status" data-testid="other-race-banner">
             The race that runs now is for another bounty. This board shows{" "}
-            {bounty ? bounty.url.replace(/^https?:\/\//, "") : "this bounty"}{" "}
-            from Arsune&apos;s records only.{" "}
+            {bounty ? siteName(bounty.url) : "this bounty"} from Arsune&apos;s
+            records only.{" "}
             <a
               href={`/swarm?bounty=${encodeURIComponent(rawSwarm?.bounty_id ?? "")}`}
             >
@@ -439,9 +403,9 @@ export default function SwarmPage() {
           onPick={pickAgent}
         />
 
-        <section className="sw-panel" aria-label="Claim stream" id="claims">
+        <section className="sw-panel" aria-label="Claims" id="claims">
           <div className="sw-panel-top">
-            <h2>Claim stream</h2>
+            <h2>Claims</h2>
             <span>{claims.length} claims</span>
           </div>
           <div className="sw-filters" role="group" aria-label="Claim filter">
@@ -482,11 +446,10 @@ export default function SwarmPage() {
 
         <details className="rv-more" data-testid="more-details">
           <summary>More details</summary>
-          <div className="sw-cols sw-cols-3">
+          <div className="sw-cols">
             <section className="sw-panel" aria-label="Payments">
               <div className="sw-panel-top">
                 <h2>Payments</h2>
-                <SimTag dry={!!dry} />
               </div>
               <dl className="rv-pay">
                 {(
@@ -520,9 +483,7 @@ export default function SwarmPage() {
                       </span>
                       <Who account={r.account} names={names} />
                       <strong>{usdc(r.amount)} USDC</strong>
-                      {rowDry ? (
-                        <span className="sw-sim sw-sim-small">Simulated</span>
-                      ) : r.explorer_url ? (
+                      {rowDry ? null : r.explorer_url ? (
                         <a
                           href={r.explorer_url}
                           target="_blank"
@@ -539,9 +500,9 @@ export default function SwarmPage() {
               </ul>
             </section>
 
-            <section className="sw-panel" aria-label="Tip market">
+            <section className="sw-panel" aria-label="Scout tips">
               <div className="sw-panel-top">
-                <h2>Tip market</h2>
+                <h2>Scout tips</h2>
                 <span>{swarm?.tips.length ?? 0} tips</span>
               </div>
               <ul className="sw-tips" data-testid="tips">
@@ -570,40 +531,6 @@ export default function SwarmPage() {
                   </li>
                 ))}
               </ul>
-            </section>
-
-            <section className="sw-panel" aria-label="Leaderboard">
-              <div className="sw-panel-top">
-                <h2>Leaderboard</h2>
-                <SimTag dry={!!dry} />
-              </div>
-              <ol className="sw-board" data-testid="leaderboard">
-                {leaderboard.length === 0 && (
-                  <li className="sw-empty">No hunters yet.</li>
-                )}
-                {leaderboard.map((h, i) => (
-                  <li key={h.account}>
-                    <span className="sw-rank">{i + 1}</span>
-                    <Who account={h.account} names={names} />
-                    <span className="sw-muted">{h.proven} proven</span>
-                    <strong>{usdc(h.earned + h.scout_earned)} USDC</strong>
-                  </li>
-                ))}
-              </ol>
-              <h3 className="sw-sub-h">Biggest losers</h3>
-              <ol className="sw-board sw-losers" data-testid="biggest-losers">
-                {losers.length === 0 && (
-                  <li className="sw-empty">No bonds lost yet.</li>
-                )}
-                {losers.map(([account, n], i) => (
-                  <li key={account}>
-                    <span className="sw-rank sw-rank-bad">{i + 1}</span>
-                    <Who account={account} names={names} />
-                    <span className="sw-muted">bonds lost</span>
-                    <strong className="sw-loss-amt">−{usdc(n)} USDC</strong>
-                  </li>
-                ))}
-              </ol>
             </section>
           </div>
 

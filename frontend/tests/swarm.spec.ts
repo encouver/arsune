@@ -269,11 +269,15 @@ test("dry mode labels money as simulation and has no NearBlocks links", async ({
   await mock(page, { mode: "dry" });
   await page.goto("/swarm");
   await expect(page.getByTestId("agent-mark")).toHaveCount(12);
-  await expect(page.getByTestId("sim-label").first()).toBeVisible();
-  expect(await page.getByTestId("sim-label").count()).toBeGreaterThanOrEqual(3);
+  // One label, in the header; payment rows carry no tag and no link.
+  await expect(page.getByTestId("sim-label")).toHaveText(
+    "Simulation · no real money",
+  );
   await expect(page.getByRole("link", { name: "NearBlocks" })).toHaveCount(0);
   await openDetails(page);
-  await expect(page.getByTestId("ledger")).toContainText("Simulated");
+  await expect(page.getByTestId("sim-label")).toHaveCount(1);
+  await expect(page.getByTestId("ledger")).not.toContainText("Simulated");
+  await expect(page.getByTestId("ledger").getByRole("link")).toHaveCount(0);
   await expect(page.getByTestId("line-claims")).toHaveText("2");
   await expect(page.getByTestId("line-paid")).toHaveText("1");
   // Paid to hunters 2.125 plus paid to scouts 0.375.
@@ -296,12 +300,13 @@ test("dry mode labels money as simulation and has no NearBlocks links", async ({
   await expect(page.getByTestId("activity-log")).toContainText(
     "opened a claim",
   );
+  // Money from Arsune's records: 2.125 earned, no bond lost (the host said 2.50 and 0.10).
   await expect(markOf(page, "hunter-01")).toHaveAttribute(
     "aria-label",
-    "hunter-01 · crawl forms and check mobile layout · +2.40 USDC",
+    "hunter-01 · crawl forms and check mobile layout · +2.125 USDC",
   );
   await expect(
-    page.getByRole("link", { name: "Live board", exact: true }),
+    page.getByRole("link", { name: "Live race", exact: true }),
   ).toHaveAttribute("aria-current", "page");
 });
 
@@ -370,7 +375,7 @@ test("Latest names the newest decided claim", async ({ page }) => {
   const all = page.getByTestId("line-see-all");
   await expect(all).toHaveText("See all 3 claims ↓");
   await expect(all).toHaveAttribute("href", "#claims");
-  await expect(page.locator("#claims")).toContainText("Claim stream");
+  await expect(page.locator("#claims h2")).toHaveText("Claims");
 });
 
 test("the header says the race state in few words", async ({ page }) => {
@@ -475,7 +480,7 @@ test("no dots move when the race is finished", async ({ page }) => {
       ++polls <= 1 ? {} : { claims: [newClaim(1), newClaim(2), ...old] },
   });
   await page.goto("/swarm");
-  await expect(page.getByText("Race finished")).toBeVisible();
+  await expect(page.getByText("Race finished", { exact: true })).toBeVisible();
   await expect(page.getByTestId("line-claims")).toHaveText("4");
   const at = polls;
   await expect.poll(() => polls).toBeGreaterThan(at + 1);
@@ -788,11 +793,13 @@ test("Who won groups agents by result, most money first", async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1440, height: 1000 });
+  // Arsune's records list none of these agents, so the race host's numbers stay.
   await mock(page, {
     swarm: { ...swarm(), finished: true, agents: raceAgents(true) },
+    bounty: { hunters: [] },
   });
   await page.goto("/swarm");
-  await expect(page.getByText("Race finished")).toBeVisible();
+  await expect(page.getByText("Race finished", { exact: true })).toBeVisible();
   const marks = page.getByTestId("agent-mark");
   await expect(marks).toHaveCount(7);
   const row = (r: string) =>
@@ -851,8 +858,6 @@ test("Who won groups agents by result, most money first", async ({
   await expect(broke).toHaveCSS("box-shadow", /rgb\(236, 122, 92\)/);
   await expect(page.locator("[data-working]")).toHaveCount(0);
   await expect(page.getByTestId("who-won")).not.toContainText("working now");
-  await openDetails(page);
-  await expect(page.getByTestId("biggest-losers")).toContainText("0.9");
   await page.screenshot({
     path: testInfo.outputPath("swarm-finished-1440.png"),
     fullPage: true,
@@ -1132,7 +1137,7 @@ test("fallback agents have no rings and say tier not reported", async ({
   );
 });
 
-test("More details is closed and keeps payments, tips, leaderboard, activity", async ({
+test("More details is closed and keeps payments, scout tips and activity", async ({
   page,
 }) => {
   await mock(page);
@@ -1142,8 +1147,17 @@ test("More details is closed and keeps payments, tips, leaderboard, activity", a
   await expect(page.getByTestId("ledger")).toBeHidden();
   await openDetails(page);
   await expect(more).toHaveAttribute("open");
-  for (const id of ["ledger", "tips", "leaderboard", "activity-log"])
+  for (const id of ["ledger", "tips", "activity-log"])
     await expect(page.getByTestId(id)).toBeVisible();
+  await expect(more.locator("h2")).toHaveText([
+    "Payments",
+    "Scout tips",
+    "Activity",
+  ]);
+  // "Who won" shows who earned and who lost: no second board for it.
+  await expect(page.getByTestId("leaderboard")).toHaveCount(0);
+  await expect(page.getByTestId("biggest-losers")).toHaveCount(0);
+  await expect(page.locator("body")).not.toContainText("Tip market");
   await expect(page.getByTestId("pay-fees")).toHaveText(
     "Arsune fees0.125 USDC",
   );
@@ -1179,19 +1193,102 @@ test("claim stream filter shows only the chosen status", async ({ page }) => {
   await expect(rows).toHaveCount(2);
 });
 
-test("scouts show proven count from swarm state", async ({ page }) => {
+test("Who won agrees with Paid after the race ends", async ({ page }) => {
+  // The runner stopped counting: the race host says nobody earned or lost anything.
+  const zero = { earned: 0, bonds_lost: 0, state: "done" };
   const sw = swarm();
-  sw.agents = raceAgents(false).map((a) =>
-    a.role === "scout" ? { ...a, account: "scout-a.testnet" } : a,
-  ) as typeof sw.agents;
-  await mock(page, { swarm: sw });
+  sw.finished = true;
+  sw.agents = [
+    { ...sw.agents[0], ...zero },
+    { ...sw.agents[1], ...zero },
+    {
+      ...sw.agents[11],
+      ...zero,
+      id: "scout-01",
+      account: "scout-a.testnet",
+    },
+    { ...sw.agents[3], ...zero },
+  ];
+  const records = bounty("dry").hunters;
+  await mock(page, {
+    swarm: sw,
+    bounty: {
+      hunters: [
+        ...records,
+        {
+          ...records[0],
+          account: "scout-a.testnet",
+          claims: 0,
+          proven: 0,
+          earned: 0,
+          scout_earned: 375_000,
+        },
+      ],
+    },
+  });
   await page.goto("/swarm");
-  await openDetails(page);
-  const row = page
-    .getByTestId("leaderboard")
-    .locator("li", { hasText: "scout-a.testnet" });
-  await expect(row).toContainText("3 proven");
-  await expect(row).toContainText("1.5");
+  const row = (r: string) =>
+    page.locator(`[data-testid="who-row"][data-result="${r}"]`);
+  // Paid is 2.125 to hunter-01 plus 0.375 to scout-01, from completed ledger rows.
+  await expect(page.getByTestId("line-paid-amount")).toHaveText("+2.50 USDC");
+  await expect(row("earned").getByTestId("who-total")).toHaveText("+2.50 USDC");
+  await expect(row("earned").getByTestId("who-count")).toHaveText("2");
+  await expect(markOf(page, "scout-01")).toHaveAttribute(
+    "aria-label",
+    "scout-01 · crawl forms and check mobile layout · +0.375 USDC",
+  );
+  await expect(row("lost").getByTestId("who-total")).toHaveText("−0.10 USDC");
+  // An agent that Arsune's records do not list keeps the race host's numbers.
+  await expect(row("none").getByTestId("who-count")).toHaveText("1");
+  await expect(page.getByTestId("race-story")).toHaveText(
+    "Race finished. 1 bug proven and paid (2.50 USDC). " +
+      "1 false claim lost its bond. False claims cost the owner nothing.",
+  );
+});
+
+test("the story line tells the running race in one sentence", async ({
+  page,
+}) => {
+  await mock(page);
+  await page.goto("/swarm");
+  const story = page.getByTestId("race-story");
+  await expect(story).toHaveText(
+    "12 agents search shop.example. Each claim locks a bond. Arsune checks it in a fresh browser.",
+  );
+  // It sits under the header, above the pool and the line.
+  const head = (await page.locator(".rv-head").boundingBox())!;
+  const line = (await page.getByTestId("race-line").boundingBox())!;
+  const box = (await story.boundingBox())!;
+  expect(box.y).toBeGreaterThan(head.y);
+  expect(box.y).toBeLessThan(line.y);
+});
+
+test("the story line of a finished race leaves out the false claims when there are none", async ({
+  page,
+}) => {
+  const [paid] = bounty("dry").claims;
+  await mock(page, {
+    swarm: { ...swarm(), finished: true },
+    bounty: { claims: [paid, { ...paid, id: "c3" }] },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("race-story")).toHaveText(
+    "Race finished. 2 bugs proven and paid (2.50 USDC).",
+  );
+});
+
+test("without a race of this bounty there is no story line", async ({
+  page,
+}) => {
+  await mock(page, { swarm: { ...swarm(), bounty_id: "other" } });
+  await page.goto("/swarm?bounty=b1");
+  await expect(page.getByTestId("other-race-banner")).toBeVisible();
+  await expect(page.getByTestId("race-story")).toHaveCount(0);
+  await page.unrouteAll();
+  await mock(page, { swarm: null });
+  await page.goto("/swarm");
+  await expect(page.getByText("Swarm runner offline")).toBeVisible();
+  await expect(page.getByTestId("race-story")).toHaveCount(0);
 });
 
 test("AI agents say AI in their label and the AI spend shows under the pool", async ({
@@ -1383,25 +1480,26 @@ test("keyboard focus stays on a mark that moves to another row", async ({
   page,
 }) => {
   let moved = false;
+  // hunter-03 is not in Arsune's records, so the race host's money counts for it.
   const sw = () => {
     const s = swarm();
-    if (moved) s.agents[1] = { ...s.agents[1], earned: 1_000_000 };
+    if (moved) s.agents[2] = { ...s.agents[2], earned: 1_000_000 };
     return s;
   };
   await mock(page, { swarm: sw });
   await page.goto("/swarm");
   const row = (r: string) =>
     page.locator(`[data-testid="who-row"][data-result="${r}"]`);
-  await expect(row("none").locator('[aria-label^="hunter-02 ·"]')).toHaveCount(
+  await expect(row("none").locator('[aria-label^="hunter-03 ·"]')).toHaveCount(
     1,
   );
-  await markOf(page, "hunter-02").focus();
-  await expect(markOf(page, "hunter-02")).toBeFocused();
+  await markOf(page, "hunter-03").focus();
+  await expect(markOf(page, "hunter-03")).toBeFocused();
   moved = true;
   await expect(
-    row("earned").locator('[aria-label^="hunter-02 ·"]'),
+    row("earned").locator('[aria-label^="hunter-03 ·"]'),
   ).toHaveCount(1);
-  await expect(markOf(page, "hunter-02")).toBeFocused();
+  await expect(markOf(page, "hunter-03")).toBeFocused();
 });
 
 test("a hover tooltip closes when its mark moves to another row", async ({
@@ -1410,18 +1508,18 @@ test("a hover tooltip closes when its mark moves to another row", async ({
   let moved = false;
   const sw = () => {
     const s = swarm();
-    if (moved) s.agents[1] = { ...s.agents[1], earned: 1_000_000 };
+    if (moved) s.agents[2] = { ...s.agents[2], earned: 1_000_000 };
     return s;
   };
   await mock(page, { swarm: sw });
   await page.goto("/swarm");
-  await markOf(page, "hunter-02").hover();
+  await markOf(page, "hunter-03").hover();
   await expect(page.getByTestId("agent-tip")).toHaveCount(1);
   moved = true;
   await expect(
     page
       .locator('[data-testid="who-row"][data-result="earned"]')
-      .locator('[aria-label^="hunter-02 ·"]'),
+      .locator('[aria-label^="hunter-03 ·"]'),
   ).toHaveCount(1);
   await expect(page.getByTestId("agent-tip")).toHaveCount(0);
 });
