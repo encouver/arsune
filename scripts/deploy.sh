@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Deploy Arsune to https://arsune.augevis.com. Usage: scripts/deploy.sh [--dry-run]
+# Deploy Arsune to https://arsune.augevi.com. Usage: scripts/deploy.sh [--dry-run]
 # Copies the repo with rsync (never .env), then builds and starts the stack over ssh.
 set -euo pipefail
 
 HOST=augevi@api.staging.personaizit.com
 REMOTE_DIR=arsune
-URL=https://arsune.augevis.com/
+URL=https://arsune.augevi.com/
 COMPOSE="docker compose -p arsune -f compose.yaml -f compose.prod.yaml"
 cd "$(dirname "$0")/.."
 
