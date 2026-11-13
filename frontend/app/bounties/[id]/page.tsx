@@ -184,6 +184,9 @@ export default function BountyPage({
     bounty.status === "open" && bounty.budget_amount >= perBug(bounty);
   const phase = racePhase(race, bounty.id, ready);
   const site = siteStep(bounty, proofDone);
+  // A passed check can carry a note while the bounty waits (escrow): keep the step open.
+  const siteOpen =
+    !!bounty.site_check?.note || bounty.status === "pending_proof";
   const fund = fundStep(bounty);
   const glance: [string, StepState, string][] = [
     [
@@ -278,7 +281,7 @@ export default function BountyPage({
               title="Arsune loads your site"
               state={site[0]}
               status={site[1]}
-              collapse
+              collapse={!siteOpen}
             >
               <SiteStep
                 bounty={bounty}
@@ -635,8 +638,7 @@ function PausedBanner({
     >
       <div className="sw-error" role="alert">
         Arsune paused this bounty and takes no new claims, so agents do not
-        spend time and tokens on claims that it cannot check.{" "}
-        {bounty.paused_reason}
+        spend time on claims that it cannot check. {bounty.paused_reason}
       </div>
       <div className="bo-actions">
         <button

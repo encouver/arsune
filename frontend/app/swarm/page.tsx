@@ -17,7 +17,9 @@ import { clock, pagePath, share, usdc } from "./format";
 import RaceLine, { PoolBar } from "./race-line";
 import {
   claimsOfAgent,
+  claimsOfRace,
   finishedStory,
+  ledgerOfClaims,
   lineCounts,
   poolOf,
   runningStory,
@@ -190,7 +192,7 @@ export default function SwarmPage() {
         if (!stop) setSwarmDown(true);
         if (swarmRef.current)
           errs.push(
-            "Swarm runner is not answering. Showing the last good state.",
+            "Live race data is not answering. Showing the last good state.",
           );
       }
       try {
@@ -263,20 +265,29 @@ export default function SwarmPage() {
     !!swarm?.finished ||
     (agents.length > 0 &&
       agents.every((a) => a.state === "done" || a.state === "broke"));
+  // With race state, the page shows this race only; without it, the whole bounty.
+  const raceClaims = useMemo(
+    () => (swarm ? claimsOfRace(claims, swarm.started_at) : claims),
+    [swarm, claims],
+  );
+  const raceRows = swarm ? ledgerOfClaims(rows, raceClaims) : rows;
   const agentClaims = agentFilter
-    ? claimsOfAgent(claims, agentFilter.account, agentFilter.role)
-    : claims;
+    ? claimsOfAgent(raceClaims, agentFilter.account, agentFilter.role)
+    : raceClaims;
   const shownClaims = agentClaims.filter((c) => matchesFilter(c, filter));
   const titleOf = titler(claims);
   // Only a race of this bounty with agents has a story; without one the notices below speak.
+  const reason = swarm?.site_check?.reason;
   const story =
     !swarm || !bounty || siteFailed
       ? null
-      : finished
-        ? finishedStory(lineCounts(claims, rows))
-        : swarm.agents.length
-          ? runningStory(swarm.agents.length, siteName(bounty.url))
-          : null;
+      : finished && swarm.agents.length === 0
+        ? `The race ended before any agent started.${reason ? ` ${reason}` : ""}`
+        : finished
+          ? finishedStory(lineCounts(raceClaims, raceRows))
+          : swarm.agents.length
+            ? runningStory(swarm.agents.length, siteName(bounty.url))
+            : null;
 
   function pickAgent(a: Agent) {
     if (agentFilter?.account === a.account) return setAgentFilter(null);
@@ -303,7 +314,7 @@ export default function SwarmPage() {
                     ? "Race finished"
                     : `Race running · ${swarm.agents.length} agents`
                   : swarmDown
-                    ? "Swarm runner offline"
+                    ? "Live data offline"
                     : "Connecting"}
           </span>
           <div className="sw-meta">
@@ -354,7 +365,7 @@ export default function SwarmPage() {
         {bounty?.status === "paused" && (
           <div className="sw-error" role="alert" data-testid="paused-banner">
             The bounty is paused: Arsune cannot check this site, so agents stop
-            to save tokens. {bounty.paused_reason}
+            until Arsune can load the site again. {bounty.paused_reason}
           </div>
         )}
         {loaded && !bounty && errors.length === 0 && (
@@ -383,8 +394,8 @@ export default function SwarmPage() {
               </p>
             )}
             <RaceLine
-              claims={siteFailed ? [] : claims}
-              ledger={siteFailed ? [] : rows}
+              claims={siteFailed ? [] : raceClaims}
+              ledger={siteFailed ? [] : raceRows}
               agentCount={swarm ? swarm.agents.length : null}
               nameOf={(account) => nameOf(account, names)}
               titleOf={titleOf}
@@ -406,7 +417,7 @@ export default function SwarmPage() {
         <section className="sw-panel" aria-label="Claims" id="claims">
           <div className="sw-panel-top">
             <h2>Claims</h2>
-            <span>{claims.length} claims</span>
+            <span>{raceClaims.length} claims</span>
           </div>
           <div className="sw-filters" role="group" aria-label="Claim filter">
             {CLAIM_FILTERS.map(([key, label]) => (
@@ -435,7 +446,9 @@ export default function SwarmPage() {
           <ol className="sw-stream" data-testid="claim-stream">
             {shownClaims.length === 0 && (
               <li className="sw-empty">
-                {claims.length === 0 ? "No claims yet." : "No claims match."}
+                {raceClaims.length === 0
+                  ? "No claims yet."
+                  : "No claims match."}
               </li>
             )}
             {shownClaims.slice(0, 60).map((c) => (

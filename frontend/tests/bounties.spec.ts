@@ -485,7 +485,7 @@ test("start page: validates, creates the race and opens its page", async ({
   await expect(page.getByLabel("Your NEAR account")).toHaveValue(
     "demo-owner.near",
   );
-  await page.getByLabel("Base bond per claim").fill("0.25");
+  await page.getByLabel("Bond per claim").fill("0.25");
   await page.getByRole("button", { name: "Start a bug race" }).click();
   await expect(page).toHaveURL(new RegExp(`/bounties/${ID}$`));
   const create = api.calls.find(
@@ -1065,6 +1065,40 @@ test("a done step shows one line, and its body waits behind Show", async ({
   ).toBeVisible();
 });
 
+test("a passed check with a note keeps step 2 open", async ({ page }) => {
+  const api = await mockApi(page, "dry", "https://shop.example.com/");
+  makeReady(api);
+  api.bounty.site_check = {
+    job_id: "j1",
+    state: "passed",
+    url: api.bounty.url,
+    reason: "Arsune loaded the site completely.",
+    problems: [],
+    note: "The site check passed, but the escrow did not open the bounty.",
+    checked_at: "2026-11-09T10:01:00Z",
+    fresh_until: null,
+  };
+  await page.goto(`/bounties/${ID}`);
+  await expect(page.getByTestId("step-2-done")).toHaveCount(0);
+  await expect(page.getByTestId("site-check-note")).toContainText(
+    "escrow did not open",
+  );
+  await expect(page.getByRole("button", { name: "Check again" })).toBeVisible();
+});
+
+test("proven claims that wait for payment are on the way, not paid", async ({
+  page,
+}) => {
+  const api = await mockApi(page, "dry", "https://shop.example.com/");
+  makeReady(api);
+  api.bounty.claims = [CLAIMS[0], { ...CLAIMS[3], status: "proven" }];
+  api.bounty.ledger.push(reward(PROVEN, 900_000));
+  await page.goto(`/bounties/${ID}`);
+  await expect(page.getByTestId("result-story")).toHaveText(
+    "Your race found 2 bugs. 1 is paid (0.90 USDC). 1 payment is on the way.",
+  );
+});
+
 test("results come first, in plain words; hashes and IDs stay in Details", async ({
   page,
   context,
@@ -1088,7 +1122,8 @@ test("results come first, in plain words; hashes and IDs stay in Details", async
   await expect(page.getByTestId("result-story")).toHaveText(
     "Your race found 2 bugs. 2 are paid (1.80 USDC). " +
       "1 false claim cost you nothing: its bond went into your pool. " +
-      "1 repeat got its bond back.",
+      "1 repeat got its bond back. " +
+      "1 could not be checked: its bond came back.",
   );
   // Proven bugs and claims being checked stay open; the other groups are closed.
   for (const g of ["proven", "pending"])

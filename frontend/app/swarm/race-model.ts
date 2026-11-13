@@ -27,6 +27,7 @@ export type LineCounts = {
   claims: number;
   checking: number;
   paid: number;
+  paying: number;
   lost: number;
   repeat: number;
   unchecked: number;
@@ -55,6 +56,7 @@ export function lineCounts(
     claims: claims.length,
     checking: 0,
     paid: 0,
+    paying: 0,
     lost: 0,
     repeat: 0,
     unchecked: 0,
@@ -65,7 +67,9 @@ export function lineCounts(
     const group = claimGroup(c);
     if (c.status === "unfunded") counts.unfunded++;
     else if (group === "pending") counts.checking++;
-    else if (group === "proven") counts.paid++;
+    else if (group === "proven")
+      // Proven and decided, but the payout is not complete until the claim is "paid".
+      c.status === "paid" ? counts.paid++ : counts.paying++;
     else if (group === "false") counts.lost++;
     else if (group === "repeat") counts.repeat++;
     else counts.unchecked++;
@@ -76,10 +80,32 @@ export function lineCounts(
 /** The rare results in one small line; "" when there are none. */
 export function rareText(counts: LineCounts): string {
   const parts: string[] = [];
-  if (counts.unchecked) parts.push(`${counts.unchecked} could not be checked`);
+  if (counts.paying) parts.push(`${counts.paying} proven, payment on the way`);
+  const bondBack: string[] = [];
+  if (counts.unchecked)
+    bondBack.push(`${counts.unchecked} could not be checked`);
   if (counts.unfunded)
-    parts.push(`${counts.unfunded} proven, but the pool was empty`);
-  return parts.length ? [...parts, "bond back"].join(" · ") : "";
+    bondBack.push(`${counts.unfunded} proven, but the pool was empty`);
+  if (bondBack.length) parts.push(...bondBack, "bond back");
+  return parts.join(" · ");
+}
+
+/** The claims of one race: made since it started. */
+export function claimsOfRace<T extends LineClaim>(
+  claims: T[],
+  startedAt: string,
+): T[] {
+  const since = Date.parse(startedAt);
+  return claims.filter((c) => Date.parse(c.created_at ?? "") >= since);
+}
+
+/** The ledger rows that belong to the given claims. */
+export function ledgerOfClaims<T extends LineLedgerRow>(
+  ledger: T[],
+  claims: LineClaim[],
+): T[] {
+  const ids = new Set(claims.map((c) => c.id));
+  return ledger.filter((r) => r.claim_id && ids.has(r.claim_id));
 }
 
 // A lost bond goes into the pool too, so budget_amount can grow past the funded amount.
@@ -168,10 +194,13 @@ export function runningStory(agents: number, site: string): string {
   return `${counted(agents, "agent searches", "agents search")} ${site}. Each claim locks a bond. Arsune checks it in a fresh browser.`;
 }
 
+function uncheckedSentence(n: number): string {
+  return `${n} could not be checked: ${n === 1 ? "its bond" : "their bonds"} came back.`;
+}
+
 /** The finished race as sentences. The false-claim sentences are left out when none lost a bond. */
 export function finishedStory(counts: LineCounts): string {
   const parts = [
-    "Race finished.",
     `${counted(counts.paid, "bug", "bugs")} proven and paid (${usdc(counts.paidAmount)} USDC).`,
   ];
   if (counts.lost)
@@ -179,18 +208,23 @@ export function finishedStory(counts: LineCounts): string {
       `${counted(counts.lost, "false claim lost its", "false claims lost their")} bond.`,
       "False claims cost the owner nothing.",
     );
+  if (counts.unchecked) parts.push(uncheckedSentence(counts.unchecked));
   return parts.join(" ");
 }
 
 /** The owner's outcome: null until a claim has a result. A sentence whose count is 0 is left out. */
 export function resultStory(counts: LineCounts): string | null {
-  const proven = counts.paid + counts.unfunded;
+  const proven = counts.paid + counts.paying + counts.unfunded;
   if (proven + counts.lost + counts.repeat + counts.unchecked === 0)
     return null;
   const parts = [`Your race found ${counted(proven, "bug", "bugs")}.`];
   if (counts.paid)
     parts.push(
       `${counted(counts.paid, "is", "are")} paid (${usdc(counts.paidAmount)} USDC).`,
+    );
+  if (counts.paying)
+    parts.push(
+      `${counted(counts.paying, "payment is", "payments are")} on the way.`,
     );
   // An unfunded claim is never paid later: its bond is refunded and the fault stays open.
   if (counts.unfunded)
@@ -205,6 +239,7 @@ export function resultStory(counts: LineCounts): string | null {
     parts.push(
       `${counted(counts.repeat, "repeat got its", "repeats got their")} bond back.`,
     );
+  if (counts.unchecked) parts.push(uncheckedSentence(counts.unchecked));
   return parts.join(" ");
 }
 

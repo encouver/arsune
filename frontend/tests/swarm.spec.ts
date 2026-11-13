@@ -144,6 +144,7 @@ function bounty(mode: Mode) {
       },
       {
         id: "l2",
+        claim_id: "c1",
         kind: "reward_out",
         amount: 2_125_000,
         account: "hunter1.testnet",
@@ -154,6 +155,7 @@ function bounty(mode: Mode) {
       },
       {
         id: "l3",
+        claim_id: "c1",
         kind: "scout_share",
         amount: 375_000,
         account: "scout-a.testnet",
@@ -174,6 +176,7 @@ function bounty(mode: Mode) {
       },
       {
         id: "l5",
+        claim_id: "c2",
         kind: "bond_forfeit",
         amount: 100_000,
         account: "hunter2.testnet",
@@ -194,6 +197,7 @@ function bounty(mode: Mode) {
       },
       {
         id: "l7",
+        claim_id: "c2",
         kind: "reward_out",
         amount: 3_000_000,
         account: "hunter2.testnet",
@@ -674,7 +678,7 @@ test("works without the swarm runner", async ({ page }) => {
   await expect(page.getByTestId("claim-stream")).toContainText(
     "hunter1.testnet",
   );
-  await expect(page.getByText("Swarm runner offline")).toBeVisible();
+  await expect(page.getByText("Live data offline")).toBeVisible();
   await expect(page.getByTestId("error-banner")).toHaveCount(0);
 });
 
@@ -1097,7 +1101,7 @@ test("the agent filter survives the fallback to Arsune's records", async ({
   // The page keeps the last good race state while the host does not answer.
   phase = "down";
   await expect(page.getByTestId("error-banner")).toContainText(
-    "Swarm runner is not answering.",
+    "Live race data is not answering.",
   );
   await expect(bar).toHaveText("Claims by hunter-001 · Show all");
   await expect(rows).toHaveCount(1);
@@ -1241,7 +1245,7 @@ test("Who won agrees with Paid after the race ends", async ({ page }) => {
   // An agent that Arsune's records do not list keeps the race host's numbers.
   await expect(row("none").getByTestId("who-count")).toHaveText("1");
   await expect(page.getByTestId("race-story")).toHaveText(
-    "Race finished. 1 bug proven and paid (2.50 USDC). " +
+    "1 bug proven and paid (2.50 USDC). " +
       "1 false claim lost its bond. False claims cost the owner nothing.",
   );
 });
@@ -1269,12 +1273,92 @@ test("the story line of a finished race leaves out the false claims when there a
   const [paid] = bounty("dry").claims;
   await mock(page, {
     swarm: { ...swarm(), finished: true },
-    bounty: { claims: [paid, { ...paid, id: "c3" }] },
+    // The second claim is decided, but its payment is not complete: it is not Paid.
+    bounty: { claims: [paid, { ...paid, id: "c3", status: "proven" }] },
   });
   await page.goto("/swarm");
   await expect(page.getByTestId("race-story")).toHaveText(
-    "Race finished. 2 bugs proven and paid (2.50 USDC).",
+    "1 bug proven and paid (2.50 USDC).",
   );
+  await expect(page.getByTestId("line-paid")).toHaveText("1");
+  await expect(page.getByTestId("line-rare")).toHaveText(
+    "1 proven, payment on the way",
+  );
+});
+
+test("a race that ended with no agents says so", async ({ page }) => {
+  await mock(page, {
+    swarm: {
+      ...swarm(),
+      finished: true,
+      agents: [],
+      site_check: { state: "passed", reason: "Site is slow." },
+    },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("race-story")).toHaveText(
+    "The race ended before any agent started. Site is slow.",
+  );
+  await expect(page.getByTestId("race-story")).not.toContainText("bugs proven");
+});
+
+test("the live race page shows this race only", async ({ page }) => {
+  const [paid, lost] = bounty("dry").claims;
+  const earlier = (id: string, status: string) => ({
+    ...paid,
+    id,
+    status,
+    created_at: "2026-11-09T09:00:00Z",
+  });
+  const { ledger, hunters } = bounty("dry");
+  const sw = swarm();
+  sw.agents = [
+    sw.agents[0],
+    { ...sw.agents[11], id: "scout-01", account: "scout-a.testnet" },
+  ];
+  await mock(page, {
+    swarm: { ...sw, finished: true },
+    bounty: {
+      hunters: [
+        hunters[0],
+        {
+          ...hunters[0],
+          account: "scout-a.testnet",
+          earned: 0,
+          scout_earned: 375_000,
+        },
+      ],
+      claims: [earlier("e1", "paid"), earlier("e2", "paid"), paid, lost],
+      ledger: [
+        ...ledger,
+        {
+          id: "le1",
+          claim_id: "e1",
+          kind: "reward_out",
+          amount: 9_000_000,
+          account: "hunter9.testnet",
+          settlement_mode: "dry",
+          status: "completed",
+          explorer_url: null,
+        },
+      ],
+    },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("line-claims")).toHaveText("2");
+  await expect(page.getByTestId("line-paid-amount")).toHaveText("+2.50 USDC");
+  await expect(page.getByTestId("race-story")).toHaveText(
+    "1 bug proven and paid (2.50 USDC). 1 false claim lost its bond. False claims cost the owner nothing.",
+  );
+  await expect(page.getByTestId("claim-row")).toHaveCount(2);
+  await expect(page.getByTestId("filter-all")).toHaveText("All (2)");
+  await expect(page.getByTestId("filter-paid")).toHaveText("Proven (1)");
+  // Who won: Earned money equals the Paid money of the line.
+  await expect(
+    page
+      .locator('[data-testid="who-row"][data-result="earned"]')
+      .getByTestId("who-total"),
+  ).toHaveText("+2.50 USDC");
 });
 
 test("without a race of this bounty there is no story line", async ({
@@ -1287,7 +1371,7 @@ test("without a race of this bounty there is no story line", async ({
   await page.unrouteAll();
   await mock(page, { swarm: null });
   await page.goto("/swarm");
-  await expect(page.getByText("Swarm runner offline")).toBeVisible();
+  await expect(page.getByText("Live data offline")).toBeVisible();
   await expect(page.getByTestId("race-story")).toHaveCount(0);
 });
 
@@ -1398,7 +1482,7 @@ test("a paused bounty shows the stop line and Arsune's reason", async ({
     "Arsune cannot check this site: the last 5 claims were unverified because Arsune could " +
     "not load their pages completely.";
   const stop =
-    "The bounty is paused: Arsune cannot check this site — agents stop to save tokens.";
+    "The bounty is paused: Arsune cannot check this site — agents stop until Arsune can load the site again.";
   await mock(page, {
     bounty: { status: "paused", paused_reason: reason },
     swarm: {

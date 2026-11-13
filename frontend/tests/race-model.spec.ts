@@ -3,10 +3,12 @@ import {
   agentLabel,
   agentRows,
   claimsOfAgent,
+  claimsOfRace,
   DOT_CAP,
   finishedStory,
   isWorking,
   latestSentence,
+  ledgerOfClaims,
   lineCounts,
   net,
   pickNewDots,
@@ -100,7 +102,8 @@ test("lineCounts counts each claim once, by group", () => {
   expect(lineCounts(claims, ledger)).toEqual({
     claims: 10,
     checking: 3,
-    paid: 2,
+    paid: 1,
+    paying: 1,
     lost: 1,
     repeat: 2,
     unchecked: 1,
@@ -113,6 +116,7 @@ const base: LineCounts = {
   claims: 0,
   checking: 0,
   paid: 0,
+  paying: 0,
   lost: 0,
   repeat: 0,
   unchecked: 0,
@@ -453,23 +457,26 @@ test("finishedStory tells the result and leaves out false claims when there are 
   expect(
     finishedStory({ ...base, paid: 7, lost: 3, paidAmount: 15_400_000 }),
   ).toBe(
-    "Race finished. 7 bugs proven and paid (15.40 USDC). 3 false claims lost their bond. False claims cost the owner nothing.",
+    "7 bugs proven and paid (15.40 USDC). 3 false claims lost their bond. False claims cost the owner nothing.",
   );
   expect(
     finishedStory({ ...base, paid: 1, lost: 1, paidAmount: 2_140_000 }),
   ).toBe(
-    "Race finished. 1 bug proven and paid (2.14 USDC). 1 false claim lost its bond. False claims cost the owner nothing.",
+    "1 bug proven and paid (2.14 USDC). 1 false claim lost its bond. False claims cost the owner nothing.",
   );
   expect(finishedStory({ ...base, paid: 2, paidAmount: 4_000_000 })).toBe(
-    "Race finished. 2 bugs proven and paid (4.00 USDC).",
+    "2 bugs proven and paid (4.00 USDC).",
   );
   // The first result sentence stays, even at 0.
   expect(finishedStory({ ...base, lost: 2 })).toBe(
-    "Race finished. 0 bugs proven and paid (0.00 USDC). 2 false claims lost their bond. False claims cost the owner nothing.",
+    "0 bugs proven and paid (0.00 USDC). 2 false claims lost their bond. False claims cost the owner nothing.",
   );
-  // Repeats, unfunded and unchecked claims are not part of this line.
+  // Repeats and unfunded claims are not part of this line; unchecked claims are.
   expect(finishedStory({ ...base, repeat: 4, unfunded: 1, unchecked: 2 })).toBe(
-    "Race finished. 0 bugs proven and paid (0.00 USDC).",
+    "0 bugs proven and paid (0.00 USDC). 2 could not be checked: their bonds came back.",
+  );
+  expect(finishedStory({ ...base, unchecked: 1 })).toBe(
+    "0 bugs proven and paid (0.00 USDC). 1 could not be checked: its bond came back.",
   );
 });
 
@@ -507,10 +514,48 @@ test("resultStory tells the owner the outcome, leaving out counts of 0", () => {
     "Your race found 0 bugs. 2 false claims cost you nothing: their bonds went into your pool.",
   );
   expect(resultStory({ ...base, unchecked: 1 })).toBe(
-    "Your race found 0 bugs.",
+    "Your race found 0 bugs. 1 could not be checked: its bond came back.",
+  );
+  expect(resultStory({ ...base, unchecked: 2 })).toBe(
+    "Your race found 0 bugs. 2 could not be checked: their bonds came back.",
+  );
+  // Proven claims that wait for their payment are found, not paid.
+  expect(
+    resultStory({ ...base, paid: 1, paying: 2, paidAmount: 1_000_000 }),
+  ).toBe(
+    "Your race found 3 bugs. 1 is paid (1.00 USDC). 2 payments are on the way.",
+  );
+  expect(resultStory({ ...base, paying: 1 })).toBe(
+    "Your race found 1 bug. 1 payment is on the way.",
   );
   // No story before a claim has a result.
   expect(resultStory({ ...base, claims: 3, checking: 3 })).toBeNull();
+});
+
+test("a proven claim counts as paid only when its payout is complete", () => {
+  const claims = [
+    claim("1", { status: "paid", outcome: "proven" }),
+    claim("2", { status: "proven", outcome: "proven" }),
+    claim("3", { status: "proven", outcome: "proven" }),
+  ];
+  const counts = lineCounts(claims, [row("reward_out", 1_000_000)]);
+  expect(counts.paid).toBe(1);
+  expect(counts.paying).toBe(2);
+  expect(rareText(counts)).toBe("2 proven, payment on the way");
+  expect(rareText({ ...base, paying: 1 })).toBe("1 proven, payment on the way");
+});
+
+test("claimsOfRace and ledgerOfClaims keep one race", () => {
+  const old = claim("old", { created_at: "2026-11-09T09:59:59Z" });
+  const mine = claim("mine", { created_at: "2026-11-09T10:00:00Z" });
+  const race = claimsOfRace([old, mine], "2026-11-09T10:00:00Z");
+  expect(race.map((c) => c.id)).toEqual(["mine"]);
+  const ledger = [
+    { ...row("reward_out", 1), claim_id: "old" },
+    { ...row("reward_out", 2), claim_id: "mine" },
+    row("fund", 3),
+  ];
+  expect(ledgerOfClaims(ledger, race).map((r) => r.amount)).toEqual([2]);
 });
 
 test("the stories count with claimGroup and the summary line's money", () => {
@@ -533,6 +578,6 @@ test("the stories count with claimGroup and the summary line's money", () => {
       "1 false claim cost you nothing: its bond went into your pool. 1 repeat got its bond back.",
   );
   expect(finishedStory(counts)).toBe(
-    "Race finished. 1 bug proven and paid (2.00 USDC). 1 false claim lost its bond. False claims cost the owner nothing.",
+    "1 bug proven and paid (2.00 USDC). 1 false claim lost its bond. False claims cost the owner nothing.",
   );
 });

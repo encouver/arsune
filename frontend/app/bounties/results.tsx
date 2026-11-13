@@ -224,7 +224,7 @@ export function TechnicalDetails({ bounty }: { bounty: OwnerBounty }) {
           value={`${usdc(bounty.reward_amount)} USDC`}
         />
         <Fact
-          label="Base bond per claim"
+          label="Bond per claim"
           value={`${usdc(bounty.bond_amount)} USDC`}
         />
         <Fact
