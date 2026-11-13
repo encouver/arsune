@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type JSX } from "react";
+import { useLayoutEffect, useRef, useState, type JSX } from "react";
 import {
   agentLabel,
   agentRows,
@@ -41,6 +41,31 @@ function tipFor(a: Agent, el: HTMLElement): Tip {
   const box = el.getBoundingClientRect();
   const side = box.left + box.width / 2 > window.innerWidth / 2;
   return { account: a.account, side: side ? "right" : "left" };
+}
+
+// A long label can still pass the screen edge: move it back inside before it paints.
+function TipText({ text, side }: { text: string; side: Tip["side"] }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    const box = ref.current?.getBoundingClientRect();
+    if (!box) return;
+    const room = document.documentElement.clientWidth - 8;
+    if (box.left < 8) setShift(8 - box.left);
+    else if (box.right > room) setShift(room - box.right);
+  }, []);
+  return (
+    <span
+      ref={ref}
+      className="rv-tip"
+      data-side={side}
+      data-testid="agent-tip"
+      role="tooltip"
+      style={{ translate: `${shift}px 0` }}
+    >
+      {text}
+    </span>
+  );
 }
 
 export default function WhoWon({
@@ -109,14 +134,7 @@ export default function WhoWon({
                   onBlur={() => setTip(null)}
                 >
                   {tip?.account === a.account && (
-                    <span
-                      className="rv-tip"
-                      data-side={tip.side}
-                      data-testid="agent-tip"
-                      role="tooltip"
-                    >
-                      {label}
-                    </span>
+                    <TipText text={label} side={tip.side} />
                   )}
                 </button>
               );

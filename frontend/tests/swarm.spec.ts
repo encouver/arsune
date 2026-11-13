@@ -700,6 +700,59 @@ test("renders 100 agents at desktop size", async ({ page }, testInfo) => {
   console.log("SCREENSHOT", testInfo.outputPath("swarm-100-agents-1440.png"));
 });
 
+test("no horizontal scroll at 390 px with 110 agents", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mock(page, { swarm: swarm(110) });
+  await page.goto("/swarm");
+  const marks = page.getByTestId("agent-mark");
+  await expect(marks).toHaveCount(110);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(390);
+  // The line is vertical: Check sits below Claim, Claim below Find.
+  const line = page.getByTestId("race-line");
+  const box = async (step: string) =>
+    (await line.locator(`[data-step="${step}"]`).boundingBox())!;
+  const [find, claim, check] = [
+    await box("find"),
+    await box("claim"),
+    await box("check"),
+  ];
+  expect(claim.y).toBeGreaterThan(find.y);
+  expect(check.y).toBeGreaterThan(claim.y);
+  const paid = (await line.getByTestId("line-paid").boundingBox())!;
+  expect(paid.y).toBeGreaterThan(check.y);
+  for (const mark of await marks.all()) {
+    const b = (await mark.boundingBox())!;
+    expect(b.x).toBeGreaterThanOrEqual(0);
+    expect(b.x + b.width).toBeLessThanOrEqual(390);
+  }
+  // The name and count of a Who won row sit above its marks.
+  const row = page.locator('[data-testid="who-row"][data-result="earned"]');
+  const count = (await row.getByTestId("who-count").boundingBox())!;
+  const first = (await row.getByTestId("agent-mark").first().boundingBox())!;
+  expect(first.y).toBeGreaterThan(count.y);
+  // A tooltip at either edge stays inside the screen.
+  const rowMarks = row.getByTestId("agent-mark");
+  for (const mark of [rowMarks.first(), rowMarks.nth(11), rowMarks.last()]) {
+    await mark.hover();
+    const tip = (await page.getByTestId("agent-tip").boundingBox())!;
+    expect(tip.x).toBeGreaterThanOrEqual(0);
+    expect(tip.x + tip.width).toBeLessThanOrEqual(390);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(390);
+  }
+  await page.mouse.move(0, 0);
+  await page.screenshot({
+    path: testInfo.outputPath("swarm-110-agents-390.png"),
+    fullPage: true,
+  });
+  console.log("SCREENSHOT", testInfo.outputPath("swarm-110-agents-390.png"));
+});
+
 function raceAgents(finished: boolean) {
   const mk = (i: number, over: Record<string, unknown>) => ({
     id: `hunter-${String(i).padStart(2, "0")}`,

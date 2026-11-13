@@ -65,10 +65,18 @@ test("a real race on the demo shop, from the start page to the results", async (
 
   await page.goto(`/bounties/${id}`);
   const finished = page.getByTestId("step-4-status");
+  // The race ends when it is stopped, or by itself when it spends the pool: then the
+  // bounty closes and step 4 waits for more money.
+  const ended = /^(Finished|After funding)$/;
+  await expect(finished).toHaveText(/^(Running|Finished|After funding)$/);
   if ((await finished.innerText()) === "Running") {
     await page.getByRole("button", { name: "Stop the race" }).click();
   }
-  await expect(finished).toHaveText("Finished", { timeout: 60_000 });
+  await expect(finished).toHaveText(ended, { timeout: 60_000 });
+  if ((await finished.innerText()) === "After funding")
+    await expect(page.getByTestId("race-locked")).toHaveText(
+      /^The budget is spent\./,
+    );
   await expect(page.getByTestId("results")).toBeVisible();
   const results = await page.getByTestId("results").innerText();
   expect(results).not.toMatch(/[0-9a-f]{64}/);

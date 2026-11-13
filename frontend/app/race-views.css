@@ -451,7 +451,7 @@
   grid-area: marks;
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 7px;
 }
 .rv-who-total {
   grid-area: total;
@@ -498,7 +498,7 @@
 .rv-mark[data-working="true"]::after {
   content: "";
   position: absolute;
-  inset: -4px;
+  inset: -3px;
   border-radius: inherit;
   border: 1.5px solid var(--rv-gold);
   animation: rv-ring 1.6s ease-out infinite;
@@ -509,11 +509,11 @@
 @keyframes rv-ring {
   0% {
     opacity: 1;
-    transform: scale(0.85);
+    transform: scale(0.9);
   }
   100% {
-    opacity: 0.35;
-    transform: scale(1.25);
+    opacity: 0.4;
+    transform: scale(1.15);
   }
 }
 .rv-tip {
