@@ -1,0 +1,92 @@
+# Production override for https://arsune.augevis.com on the shared server:
+#   docker compose -p arsune -f compose.yaml -f compose.prod.yaml up -d --build
+# No host port is published. Only `ui` joins the Traefik network. Settlement stays dry, AI agents
+# are off (no model settings), and the race host starts no race by itself.
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  postgres:
+    <<: *restart
+    ports: !reset []
+    mem_limit: 256m
+  redis:
+    <<: *restart
+    ports: !reset []
+    mem_limit: 64m
+  migrate:
+    mem_limit: 256m
+  api:
+    <<: *restart
+    ports: !reset []
+    mem_limit: 384m
+    environment:
+      # The one browser origin that the API accepts (CORS).
+      ARSUNE_UI_ORIGIN: https://arsune.augevis.com
+  worker:
+    <<: *restart
+    # One claim check at a time: each one runs its own Chromium.
+    command: ["celery", "-A", "app.workers.queue:app", "worker", "--concurrency=1", "--loglevel=INFO"]
+    shm_size: 256m
+    mem_limit: 1g
+  coordinator:
+    <<: *restart
+    mem_limit: 192m
+  demo:
+    <<: *restart
+    ports: !reset []
+    mem_limit: 128m
+  swarm:
+    <<: *restart
+    # No --demo-on-start and no --hunters/--scouts: a race starts only from the UI, and the host
+    # gives every UI race its fixed size (12 hunters + 3 scouts, backend/swarm/host.py UI_RACE).
+    command:
+      - python
+      - -m
+      - swarm
+      - serve
+      - --api=http://api:8540
+      - --site=http://demo:8541/shop/
+      - --browser-pages=3
+      - --state-host=0.0.0.0
+    shm_size: 256m
+    ports: !reset []
+    mem_limit: 384m
+  ui:
+    <<: *restart
+    ports: !reset []
+    mem_limit: 256m
+    networks:
+      - default
+      - traefik-public
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+      - traefik.http.services.arsune.loadbalancer.server.port=3540
+      # HTTP: redirect to HTTPS.
+      - traefik.http.routers.arsune-http.rule=Host(`arsune.augevis.com`)
+      - traefik.http.routers.arsune-http.entrypoints=http
+      - traefik.http.routers.arsune-http.middlewares=https-redirect
+      # HTTPS: every request, 20 requests per second per client IP (burst 60).
+      - traefik.http.routers.arsune.rule=Host(`arsune.augevis.com`)
+      - traefik.http.routers.arsune.entrypoints=https
+      - traefik.http.routers.arsune.tls=true
+      - traefik.http.routers.arsune.tls.certresolver=le
+      - traefik.http.routers.arsune.middlewares=arsune-rate
+      - traefik.http.routers.arsune.service=arsune
+      - traefik.http.middlewares.arsune-rate.ratelimit.average=20
+      - traefik.http.middlewares.arsune-rate.ratelimit.burst=60
+      # Starting work (create a bounty, start a race): 1 request per second per client IP (burst 5).
+      - traefik.http.routers.arsune-write.rule=Host(`arsune.augevis.com`) && Method(`POST`) && (Path(`/api/bounties`) || PathPrefix(`/swarm-api/races`))
+      - traefik.http.routers.arsune-write.priority=100
+      - traefik.http.routers.arsune-write.entrypoints=https
+      - traefik.http.routers.arsune-write.tls=true
+      - traefik.http.routers.arsune-write.tls.certresolver=le
+      - traefik.http.routers.arsune-write.middlewares=arsune-write-rate
+      - traefik.http.routers.arsune-write.service=arsune
+      - traefik.http.middlewares.arsune-write-rate.ratelimit.average=1
+      - traefik.http.middlewares.arsune-write-rate.ratelimit.burst=5
+
+networks:
+  traefik-public:
+    external: true
