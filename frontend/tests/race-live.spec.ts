@@ -44,13 +44,13 @@ test("a real race on the demo shop, from the start page to the results", async (
   await page.getByRole("button", { name: "Start the race" }).click();
   await expect(page.getByTestId("step-4-status")).toHaveText("Running");
   await expect(page.getByTestId("live-race")).toBeVisible();
-  await expect(page.getByTestId("live-agents")).toHaveText(
+  await expect(page.getByTestId("line-agents")).toHaveText(
     String(host.agents.hunters + host.agents.scouts),
     { timeout: 60_000 },
   );
   await expect
     .poll(
-      async () => Number(await page.getByTestId("live-claims").innerText()),
+      async () => Number(await page.getByTestId("line-claims").innerText()),
       {
         timeout: 120_000,
       },

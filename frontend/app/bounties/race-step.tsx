@@ -4,8 +4,8 @@ import { useCallback, useEffect, useState } from "react";
 import {
   claimGroup,
   claimPage,
+  isHexAccount,
   titler,
-  countGroups,
   GROUPS,
 } from "../claim-text";
 import {
@@ -17,6 +17,7 @@ import {
   startRace,
   stopRace,
 } from "../race-host";
+import RaceLine from "../swarm/race-line";
 import type { SwarmState } from "../swarm/types";
 import AgentChoice from "./agent-choice";
 import { errorText, OwnerBounty, siteName } from "./api";
@@ -232,7 +233,7 @@ function Finished({ swarm }: { swarm: SwarmState }) {
   );
 }
 
-/** Counts and the newest claims of the race that runs now, for this bounty only. */
+/** The summary line and the newest claims of the race that runs now, for this bounty only. */
 function LiveRace({
   bounty,
   swarm,
@@ -245,16 +246,15 @@ function LiveRace({
   const claims = Number.isNaN(since)
     ? []
     : bounty.claims.filter((c) => Date.parse(c.created_at ?? "") >= since);
-  const counts = countGroups(claims);
   const titleOf = titler(bounty.claims);
   const loading = swarm?.site_check?.state === "checking";
-  const stats: [string, string, number | string][] = [
-    ["agents", "Agents", swarm ? swarm.agents.length : "…"],
-    ["claims", "Claims", claims.length],
-    ["proven", "Proven", counts.proven],
-    ["false", "False", counts.false],
-    ["repeats", "Repeats", counts.repeat],
-  ];
+  // Only this race's money: ledger rows of its claims.
+  const ids = new Set(claims.map((c) => c.id));
+  const ledger = bounty.ledger.filter((r) => r.claim_id && ids.has(r.claim_id));
+  const names = new Map((swarm?.agents ?? []).map((a) => [a.account, a.id]));
+  const nameOf = (account: string) =>
+    names.get(account) ??
+    (isHexAccount(account) ? "an unnamed agent" : account);
   return (
     <div className="bo-live" data-testid="live-race">
       <p className="bo-live-head">
@@ -265,14 +265,17 @@ function LiveRace({
             ? "Arsune is loading your site. Agents start when it loads."
             : "The race is running."}
       </p>
-      <dl className="bo-live-stats">
-        {stats.map(([key, label, value]) => (
-          <div key={key}>
-            <dt>{label}</dt>
-            <dd data-testid={`live-${key}`}>{value}</dd>
-          </div>
-        ))}
-      </dl>
+      <RaceLine
+        claims={claims}
+        ledger={ledger}
+        agentCount={swarm ? swarm.agents.length : null}
+        nameOf={nameOf}
+        titleOf={titleOf}
+        finished={false}
+        seeAllHref={`/swarm?bounty=${encodeURIComponent(bounty.id)}`}
+        // Claims that exist when the race state arrives are old: they get no dot.
+        resetKey={swarm ? `${bounty.id}:${swarm.run_id}` : bounty.id}
+      />
       <ol className="bo-live-stream" data-testid="live-stream">
         {claims.length === 0 && (
           <li className="sw-empty">No claims yet. The agents are searching.</li>

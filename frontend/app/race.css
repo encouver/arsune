@@ -360,28 +360,8 @@
   background: #4f9b3a;
   animation: sw-pulse 1.6s infinite;
 }
-.bo-live-stats {
-  margin: 0;
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 1px;
-  background: var(--line);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  overflow: hidden;
-}
-.bo-live-stats div {
-  background: var(--white);
-  padding: 8px 10px;
-}
-.bo-live-stats dt {
-  font-size: 11px;
-  color: var(--muted);
-}
-.bo-live-stats dd {
-  margin: 0;
-  font-family: var(--serif);
-  font-size: 22px;
+.bo-live .rv-line {
+  margin-top: 0;
 }
 .bo-live-stream {
   list-style: none;
@@ -549,9 +529,6 @@
   }
   .bo-result-evidence {
     grid-column: 2;
-  }
-  .bo-live-stats {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
   .ra-row {
     grid-template-columns: 1fr;

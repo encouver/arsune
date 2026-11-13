@@ -1068,7 +1068,8 @@ test("results come first, in plain words; hashes and IDs stay in Details", async
 
 test("step 4 starts the race, shows this race live, and stops it", async ({
   page,
-}) => {
+}, testInfo) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
   const api = await mockApi(page, "dry", "https://shop.example.com/");
   makeReady(api);
   api.host = host();
@@ -1094,8 +1095,13 @@ test("step 4 starts the race, shows this race live, and stops it", async ({
   await expect(page.getByTestId("step-4-status")).toHaveText("Running");
   const live = page.getByTestId("live-race");
   await expect(live).toContainText("The race is running.");
-  await expect(page.getByTestId("live-agents")).toHaveText("15");
-  await expect(page.getByTestId("live-claims")).toHaveText("0");
+  await expect(live.getByTestId("race-line")).toBeVisible();
+  await expect(live.getByTestId("line-agents")).toHaveText("15");
+  await expect(live.getByTestId("line-claims")).toHaveText("0");
+  await expect(live.getByTestId("line-see-all")).toHaveAttribute(
+    "href",
+    `/swarm?bounty=${ID}`,
+  );
   await expect(page.getByTestId("live-stream")).toContainText(
     "No claims yet. The agents are searching.",
   );
@@ -1110,10 +1116,30 @@ test("step 4 starts the race, shows this race live, and stops it", async ({
     CLAIMS[0],
     CLAIMS[1],
   ];
-  await expect(page.getByTestId("live-claims")).toHaveText("2");
-  await expect(page.getByTestId("live-proven")).toHaveText("1");
-  await expect(page.getByTestId("live-repeats")).toHaveText("1");
-  await expect(page.getByTestId("live-false")).toHaveText("0");
+  const reward = (claim_id: string, amount: number) => ({
+    ...fundRow(amount),
+    id: `r-${claim_id}`,
+    claim_id,
+    kind: "reward_out",
+    account: HUNTER,
+  });
+  api.bounty.ledger.push(reward(PROVEN, 900_000), reward("older", 5_000_000));
+  await expect(live.getByTestId("line-claims")).toHaveText("2");
+  await expect(live.getByTestId("line-paid")).toHaveText("1");
+  await expect(live.getByTestId("line-repeat")).toHaveText("1");
+  await expect(live.getByTestId("line-lost")).toHaveText("0");
+  await expect(live.getByTestId("line-see-all")).toHaveText(
+    "See all 2 claims →",
+  );
+  // The money of this race only: the older claim's reward is not counted.
+  await expect(live.getByTestId("line-paid-amount")).toHaveText("+0.90 USDC");
+  await expect(live.getByTestId("line-latest")).toHaveText(
+    'an unnamed agent proved "Too wide on mobile (601 px on a 390 px screen)" on /roi-calculator → paid +0.90 USDC',
+  );
+  expect(await live.innerText()).not.toMatch(/[0-9a-f]{64}/);
+  const shot = testInfo.outputPath("owner-live-1440.png");
+  await live.screenshot({ path: shot });
+  console.log("SCREENSHOT", shot);
   await expect(page.getByTestId("live-stream").locator("li")).toHaveText([
     "↺/roi-calculatorToo wide on mobile (601 px on a 390 px screen)Repeat",
     "✓/roi-calculatorToo wide on mobile (601 px on a 390 px screen)Proven, paid",
