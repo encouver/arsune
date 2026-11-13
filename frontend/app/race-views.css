@@ -1,0 +1,363 @@
+/* Race views: the summary line (RaceLine) and the agent view (WhoWon). Light theme only. */
+
+.rv-line,
+.rv-card {
+  --rv-paid: #2f7a3a;
+  --rv-lost: #ec7a5c;
+  --rv-grey: #8a938d;
+  --rv-none: #c9cfca;
+  --rv-gold: #c99a2e;
+}
+
+/* The /swarm header: site name, race state, money pill. */
+.rv-head {
+  display: flex;
+  align-items: center;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.sw h1.rv-site {
+  margin: 0;
+  font: italic 400 30px/1.2 var(--serif);
+  letter-spacing: -0.5px;
+  overflow-wrap: anywhere;
+}
+.rv-head .sw-meta {
+  margin-left: auto;
+}
+
+.rv-card {
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 18px 28px 16px;
+  margin-bottom: 18px;
+}
+
+/* Pool bar */
+.rv-pool {
+  display: flex;
+  align-items: center;
+  gap: 6px 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.rv-pool-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 3px;
+  background: #e7e9e4;
+  overflow: hidden;
+}
+.rv-pool-bar i {
+  display: block;
+  height: 100%;
+  background: var(--rv-paid);
+  transition: width 0.8s ease-out;
+}
+.rv-pool b {
+  color: var(--ink);
+}
+.rv-ai {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.rv-ai code {
+  font-size: 11px;
+}
+
+/* The summary line. Desktop: steps left to right, results in a column at the right. */
+.rv-line {
+  container: rv-line / inline-size;
+  margin-top: 14px;
+}
+.rv-stage {
+  --rv-res: 270px;
+  --rv-y: 87px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--rv-res);
+}
+.rv-track {
+  position: relative;
+  height: 174px;
+}
+.rv-wire {
+  position: absolute;
+  top: calc(var(--rv-y) - 1px);
+  left: 80px;
+  width: calc((100% - 80px) * 0.88);
+  height: 2px;
+  background: var(--line);
+}
+.rv-fork {
+  position: absolute;
+  top: 0;
+  left: calc(80px + (100% - 80px) * 0.88);
+  right: 0;
+  height: 174px;
+  width: auto;
+  overflow: visible;
+}
+.rv-fork path {
+  fill: none;
+  stroke: var(--line);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.rv-step {
+  position: absolute;
+  top: 0;
+  left: calc(80px + (100% - 80px) * var(--f));
+  width: 0;
+  height: 100%;
+}
+.rv-step-1 {
+  --f: 0;
+  --i: 0;
+}
+.rv-step-2 {
+  --f: 0.38;
+  --i: 1;
+}
+.rv-step-3 {
+  --f: 0.76;
+  --i: 2;
+}
+.rv-node {
+  position: absolute;
+  z-index: 3;
+  left: -22px;
+  top: calc(var(--rv-y) - 22px);
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--white);
+  border: 2px solid #c9d0ca;
+  display: grid;
+  place-items: center;
+  font: 700 17px var(--serif);
+}
+.rv-label {
+  position: absolute;
+  top: calc(var(--rv-y) + 29px);
+  left: -80px;
+  width: 160px;
+  display: grid;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+.rv-label b {
+  color: var(--ink);
+  font-size: 14.5px;
+}
+.rv-checking {
+  color: var(--ink);
+}
+/* ".sw ul" resets the padding, so these rules name the stage too. */
+.rv-stage .rv-results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-rows: repeat(3, 58px);
+}
+.rv-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+.rv-swatch {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--rv-grey);
+}
+.rv-result[data-result="paid"] .rv-swatch {
+  background: var(--rv-paid);
+}
+.rv-result[data-result="lost"] .rv-swatch {
+  background: var(--rv-lost);
+}
+.rv-result-name {
+  width: 78px;
+  font-weight: 700;
+  font-size: 14px;
+}
+.rv-count {
+  min-width: 44px;
+  text-align: right;
+  font: 400 26px/1 var(--serif);
+}
+.rv-note {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.rv-rare {
+  grid-column: 2;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.rv-rare .rv-swatch {
+  width: 10px;
+  height: 10px;
+  margin: 0 1px;
+  background: none;
+  box-shadow: inset 0 0 0 2px var(--rv-grey);
+}
+
+/* Visually hidden: the line as text for screen readers. */
+.rv-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.rv-latest {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 14px;
+  margin-top: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 13.5px;
+}
+.rv-latest-key {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.rv-latest p {
+  flex: 1 1 300px;
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.rv-latest-result::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin: 0 6px 1px 0;
+  border-radius: 50%;
+  background: var(--rv-grey);
+}
+.rv-latest-result[data-stage="paid"] {
+  color: var(--rv-paid);
+}
+.rv-latest-result[data-stage="paid"]::before {
+  background: var(--rv-paid);
+}
+.rv-latest-result[data-stage="lost"]::before {
+  background: var(--rv-lost);
+}
+.rv-see-all {
+  margin-left: auto;
+  font-size: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+  text-decoration: none;
+}
+.rv-see-all:hover {
+  color: var(--ink);
+  text-decoration: underline;
+}
+
+/* Narrow: the line goes down the page; the results follow under Check on one spine. */
+@container rv-line (max-width: 720px) {
+  .rv-stage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .rv-stage::before {
+    content: "";
+    position: absolute;
+    left: 21px;
+    top: 32px;
+    height: 260px;
+    width: 2px;
+    background: var(--line);
+  }
+  .rv-track {
+    height: 192px;
+  }
+  .rv-wire,
+  .rv-fork {
+    display: none;
+  }
+  .rv-step {
+    left: 0;
+    top: calc(var(--i) * 64px);
+    width: 100%;
+    height: 64px;
+  }
+  .rv-node {
+    left: 2px;
+    top: 12px;
+    width: 40px;
+    height: 40px;
+  }
+  .rv-label {
+    top: 8px;
+    left: 58px;
+    right: 0;
+    width: auto;
+    text-align: left;
+  }
+  .rv-stage .rv-results {
+    grid-template-rows: repeat(3, 40px);
+    padding-left: 16px;
+  }
+  .rv-result-name {
+    width: 74px;
+  }
+  .rv-rare {
+    grid-column: 1;
+    padding-left: 16px;
+    white-space: normal;
+  }
+}
+
+@media (max-width: 640px) {
+  .rv-card {
+    padding: 14px 14px 12px;
+  }
+  .sw h1.rv-site {
+    font-size: 24px;
+  }
+  .rv-pool {
+    flex-wrap: wrap;
+  }
+  .rv-pool-bar {
+    order: 3;
+    flex-basis: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rv-pool-bar i {
+    transition: none;
+  }
+}

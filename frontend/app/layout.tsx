@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import "./race.css";
+import "./race-views.css";
 
 export const metadata: Metadata = {
   title: "Arsune — Pay only for bugs that Arsune proves",

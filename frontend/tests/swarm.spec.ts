@@ -258,19 +258,18 @@ test("dry mode labels money as simulation and has no NearBlocks links", async ({
   expect(await page.getByTestId("sim-label").count()).toBeGreaterThanOrEqual(3);
   await expect(page.getByRole("link", { name: "NearBlocks" })).toHaveCount(0);
   await expect(page.getByTestId("ledger")).toContainText("Simulated");
-  await expect(page.getByTestId("total-paid-to-hunters")).toContainText(
-    "2.125",
+  await expect(page.getByTestId("line-claims")).toHaveText("2");
+  await expect(page.getByTestId("line-paid")).toHaveText("1");
+  // Paid to hunters 2.125 plus paid to scouts 0.375.
+  await expect(page.getByTestId("line-paid-amount")).toHaveText("+2.50 USDC");
+  await expect(page.getByTestId("line-lost")).toHaveText("1");
+  await expect(page.getByTestId("line-repeat")).toHaveText("0");
+  await expect(page.getByTestId("line-checking")).toHaveCount(0);
+  await expect(page.getByTestId("line-rare")).toHaveCount(0);
+  // Money in is the completed fund (50.00) plus the forfeited bond (0.10).
+  await expect(page.getByTestId("pool-bar")).toContainText(
+    "50.00 of 50.10 USDC left",
   );
-  await expect(page.getByTestId("total-pool-funded")).toHaveText(/50\.00/);
-  await expect(page.getByTestId("total-paid-to-scouts")).toContainText("0.375");
-  await expect(page.getByTestId("total-bonds-forfeited")).toContainText("0.1");
-  await expect(page.getByTestId("total-proven-bugs")).toContainText("1");
-  await expect(page.getByTestId("total-false-claims-rejected")).toContainText(
-    "1",
-  );
-  await expect(
-    page.getByTestId("total-cost-of-false-claims-to-the-owner"),
-  ).toContainText("0");
   await expect(page.getByTestId("tips")).toContainText("sold");
   await expect(page.getByTestId("tips")).toContainText("declined");
   await expect(page.getByTestId("tips")).toContainText("countered");
@@ -286,6 +285,82 @@ test("dry mode labels money as simulation and has no NearBlocks links", async ({
   await expect(
     page.getByRole("link", { name: "Live board", exact: true }),
   ).toHaveAttribute("aria-current", "page");
+});
+
+test("the line shows rare results in one small line", async ({ page }) => {
+  const [paid, rejected] = bounty("dry").claims;
+  await mock(page, {
+    bounty: {
+      claims: [
+        paid,
+        rejected,
+        {
+          ...rejected,
+          id: "c3",
+          status: "unverified",
+          outcome: "unverified",
+          checker_reason: "The page did not finish loading.",
+        },
+        { ...paid, id: "c4", status: "unfunded", outcome: "proven" },
+        { ...rejected, id: "c5", status: "checking", outcome: null },
+      ],
+    },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("line-claims")).toHaveText("5");
+  await expect(page.getByTestId("line-rare")).toHaveText(
+    "1 could not be checked · 1 proven, but the pool was empty · bond back",
+  );
+  await expect(page.getByTestId("line-paid")).toHaveText("1");
+  await expect(page.getByTestId("line-lost")).toHaveText("1");
+  await expect(page.getByTestId("line-checking")).toHaveText("1 being checked");
+  await expect(page.getByTestId("line-agents")).toHaveText("12");
+  await expect(page.getByTestId("race-line")).toContainText(
+    "12 agents search the site",
+  );
+});
+
+test("Latest names the newest decided claim", async ({ page }) => {
+  const [paid, rejected] = bounty("dry").claims;
+  const ledger = bounty("dry").ledger.map((r) =>
+    r.kind === "reward_out" || r.kind === "scout_share"
+      ? { ...r, claim_id: "c1" }
+      : r,
+  );
+  await mock(page, {
+    bounty: {
+      claims: [
+        {
+          ...rejected,
+          id: "c3",
+          status: "checking",
+          outcome: null,
+          created_at: "2026-11-09T10:06:00Z",
+        },
+        { ...paid, updated_at: "2026-11-09T10:05:00Z" },
+        rejected,
+      ],
+      ledger,
+    },
+  });
+  await page.goto("/swarm");
+  const latest = page.getByTestId("line-latest");
+  await expect(latest).toHaveText(
+    'hunter-01 proved "Broken link to /checkout" on /cart → paid +2.125 USDC · scout-a.testnet +0.375',
+  );
+  await expect(latest).toHaveAttribute("aria-live", "polite");
+  const all = page.getByTestId("line-see-all");
+  await expect(all).toHaveText("See all 3 claims ↓");
+  await expect(all).toHaveAttribute("href", "#claims");
+  await expect(page.locator("#claims")).toContainText("Claim stream");
+});
+
+test("the header says the race state in few words", async ({ page }) => {
+  await mock(page);
+  await page.goto("/swarm");
+  await expect(page.getByText("Race running · 12 agents")).toBeVisible();
+  await expect(page.getByText("Live swarm board")).toHaveCount(0);
+  await expect(page.locator("h1")).toHaveText("shop.example");
 });
 
 test("near_intents mode links real payments to NearBlocks only", async ({

@@ -13,6 +13,8 @@ import {
 } from "../claim-text";
 import SiteHeader from "../site-header";
 import { clock, pagePath, share, usdc } from "./format";
+import RaceLine, { PoolBar } from "./race-line";
+import { poolOf, resultOf, type Result } from "./race-model";
 import styles from "./swarm.module.css";
 import type {
   Agent,
@@ -64,8 +66,6 @@ const CLAIM_FILTERS: [string, string][] = [
   ["duplicate", "Repeats"],
 ];
 
-type Result = "earned" | "lost" | "broke" | "none";
-
 // AI agents decide with a language model; their strategy is "ai" or "ai-scout".
 function isAi(a: Agent) {
   return a.strategy === "ai" || a.strategy === "ai-scout";
@@ -76,13 +76,6 @@ function tierText(a: Agent) {
   const bond =
     a.required_bond != null ? ` · bond ${usdc(a.required_bond)} USDC` : "";
   return `${a.tier.replace("_", " ")}${bond}`;
-}
-
-function resultOf(a: Agent): Result {
-  if (a.state === "broke") return "broke";
-  if (a.bonds_lost > a.earned) return "lost";
-  if (a.earned > 0) return "earned";
-  return "none";
 }
 
 const FILTER_GROUPS: Record<string, string> = {
@@ -128,12 +121,6 @@ async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`${url} returned ${res.status}`);
   return res.json();
-}
-
-function sum(rows: LedgerRow[], kind: string) {
-  return rows
-    .filter((r) => r.kind === kind && r.status === "completed")
-    .reduce((a, r) => a + r.amount, 0);
 }
 
 function deriveHunters(b: Bounty | null): HunterStat[] {
@@ -189,7 +176,7 @@ function agentsFromHunters(hunters: HunterStat[]): Agent[] {
 function SimTag({ dry }: { dry: boolean }) {
   return dry ? (
     <span className="sw-sim" data-testid="sim-label">
-      Simulation — no real money
+      Simulation · no real money
     </span>
   ) : null;
 }
@@ -320,17 +307,6 @@ export default function SwarmPage() {
   const ledger = useMemo(() => [...(bounty?.ledger ?? [])].reverse(), [bounty]);
   const dry = bounty?.settlement_mode === "dry";
   const rows = bounty?.ledger ?? [];
-  const totals = {
-    funded: sum(rows, "fund"),
-    hunters: sum(rows, "reward_out"),
-    scouts: sum(rows, "scout_share"),
-    fees: sum(rows, "fee"),
-    forfeited: sum(rows, "bond_forfeit"),
-    proven: (bounty?.claims ?? []).filter((c) => claimGroup(c) === "proven")
-      .length,
-    rejected: (bounty?.claims ?? []).filter((c) => claimGroup(c) === "false")
-      .length,
-  };
   const byAccount = useMemo(
     () => new Map((swarm?.agents ?? []).map((a) => [a.account, a])),
     [swarm],
@@ -396,21 +372,24 @@ export default function SwarmPage() {
     <main>
       <SiteHeader current="/swarm" />
       <div className="sw">
-        <div className="sw-head">
-          <div>
-            <p className="eyebrow">Live swarm board</p>
-            <h1>
-              {agents.length || "No"} agents{" "}
-              {swarm && !swarm.finished ? "racing to break" : "raced on"}{" "}
-              <span className="sw-site">
-                {bounty ? bounty.url.replace(/^https?:\/\//, "") : "a site"}
-              </span>
-            </h1>
-            <p className="sw-sub">
-              Only bugs that Arsune proves in a fresh browser get paid. False
-              claims lose their bond.
-            </p>
-          </div>
+        <div className="rv-head">
+          <h1 className="rv-site">
+            {bounty ? bounty.url.replace(/^https?:\/\//, "") : "Bug race"}
+          </h1>
+          <span className="sw-live" aria-live="polite">
+            <i className={swarm && !finished ? "sw-pulse" : ""} />
+            {other
+              ? "No race for this bounty now"
+              : idle
+                ? "No race has run yet"
+                : swarm
+                  ? finished
+                    ? "Race finished"
+                    : `Race running · ${swarm.agents.length} agents`
+                  : swarmDown
+                    ? "Swarm runner offline"
+                    : "Connecting"}
+          </span>
           <div className="sw-meta">
             <SimTag dry={!!dry} />
             {bounty && !dry && (
@@ -418,20 +397,6 @@ export default function SwarmPage() {
                 {settlementBadge(bounty.settlement_mode)}
               </span>
             )}
-            <span className="sw-live" aria-live="polite">
-              <i className={swarm && !swarm.finished ? "sw-pulse" : ""} />
-              {other
-                ? "No race for this bounty now"
-                : idle
-                  ? "No race has run yet"
-                  : swarm
-                    ? swarm.finished
-                      ? "Run finished"
-                      : "Live"
-                    : swarmDown
-                      ? "Swarm runner offline"
-                      : "Connecting"}
-            </span>
           </div>
         </div>
 
@@ -477,54 +442,36 @@ export default function SwarmPage() {
           </div>
         )}
 
-        <section className="sw-totals" aria-label="Totals">
-          {[
-            ["Pool funded", usdc(totals.funded), true],
-            ["Paid to hunters", usdc(totals.hunters), true],
-            ["Paid to scouts", usdc(totals.scouts), true],
-            ["Arsune fees", usdc(totals.fees), true],
-            ["Bonds forfeited", usdc(totals.forfeited), true],
-            ["Proven bugs", String(totals.proven), false],
-            ["False claims rejected", String(totals.rejected), false],
-            ["Cost of false claims to the owner", "0", true],
-          ].map(([label, value, money]) => (
-            <div
-              className="sw-stat"
-              key={label as string}
-              data-testid={`total-${(label as string).toLowerCase().replace(/[^a-z]+/g, "-")}`}
-            >
-              <span className="sw-stat-label">{label}</span>
-              <strong>
-                {value}
-                {money && <small> USDC</small>}
-              </strong>
-            </div>
-          ))}
-          {dry && (
-            <div className="sw-totals-note">
-              <SimTag dry /> These amounts are simulated.
-            </div>
-          )}
-          {swarm?.ai && swarm.ai.agents > 0 && (
-            <div
-              className={`sw-totals-note ${styles.usage}`}
-              data-testid="ai-usage"
-            >
-              <span className={styles.badge}>AI</span>
-              <span>
-                <strong>{swarm.ai.agents}</strong> AI agents think with{" "}
-                <code>{swarm.ai.model}</code>
-              </span>
-              <span>
-                <strong>{swarm.ai.calls}</strong> model calls
-              </span>
-              <span>
-                <strong>{swarm.ai.usd_spent.toFixed(4)}</strong> of{" "}
-                {swarm.ai.budget_usd.toFixed(2)} USD AI budget spent
-              </span>
-            </div>
-          )}
-        </section>
+        {bounty && (
+          <section className="rv-card" aria-label="Race">
+            <PoolBar pool={poolOf(bounty.budget_amount, rows)} />
+            {swarm?.ai && swarm.ai.agents > 0 && (
+              <p className="rv-ai" data-testid="ai-usage">
+                <span className={styles.badge}>AI</span>
+                <span>
+                  <strong>{swarm.ai.agents}</strong> AI agents think with{" "}
+                  <code>{swarm.ai.model}</code>
+                </span>
+                <span>
+                  <strong>{swarm.ai.calls}</strong> model calls
+                </span>
+                <span>
+                  <strong>{swarm.ai.usd_spent.toFixed(4)}</strong> of{" "}
+                  {swarm.ai.budget_usd.toFixed(2)} USD AI budget spent
+                </span>
+              </p>
+            )}
+            <RaceLine
+              claims={claims}
+              ledger={rows}
+              agentCount={swarm ? swarm.agents.length : null}
+              nameOf={(account) => nameOf(account, names)}
+              titleOf={titleOf}
+              finished={finished || !swarm}
+              seeAllHref="#claims"
+            />
+          </section>
+        )}
 
         <div className="sw-cols">
           <section className="sw-panel sw-grid-panel" aria-label="Agent grid">
@@ -679,7 +626,7 @@ export default function SwarmPage() {
             )}
           </section>
 
-          <section className="sw-panel" aria-label="Claim stream">
+          <section className="sw-panel" aria-label="Claim stream" id="claims">
             <div className="sw-panel-top">
               <h2>Claim stream</h2>
               <span>{claims.length} claims</span>
