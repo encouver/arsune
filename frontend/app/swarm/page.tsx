@@ -14,7 +14,7 @@ import {
 import SiteHeader from "../site-header";
 import { clock, pagePath, share, usdc } from "./format";
 import RaceLine, { PoolBar } from "./race-line";
-import { poolOf, resultOf, type Result } from "./race-model";
+import { claimsOfAgent, poolOf } from "./race-model";
 import styles from "./swarm.module.css";
 import type {
   Agent,
@@ -24,9 +24,9 @@ import type {
   LedgerRow,
   SwarmState,
 } from "./types";
+import WhoWon from "./who-won";
 
 const POLL_MS = 1800;
-const FLASH_MS = 6000;
 const LEDGER_LABELS: Record<string, string> = {
   fund: "Bounty funded",
   bond_in: "Bond posted",
@@ -36,47 +36,12 @@ const LEDGER_LABELS: Record<string, string> = {
   fee: "Arsune fee",
   scout_share: "Scout share",
 };
-const GLYPHS: Record<string, string> = {
-  searching: "◌",
-  negotiating: "⇄",
-  claiming: "▲",
-  waiting: "…",
-  broke: "–",
-  done: "✓",
-  paid: "$",
-  lost: "✕",
-};
-
-const RESULT_GLYPHS: Record<string, string> = {
-  earned: "$",
-  lost: "✕",
-  broke: "✕",
-  none: "·",
-};
-const RESULT_LABELS: Record<string, string> = {
-  earned: "Earned",
-  lost: "Lost money",
-  broke: "Went broke",
-  none: "Found nothing",
-};
 const CLAIM_FILTERS: [string, string][] = [
   ["all", "All"],
   ["paid", "Proven"],
   ["rejected", "False"],
   ["duplicate", "Repeats"],
 ];
-
-// AI agents decide with a language model; their strategy is "ai" or "ai-scout".
-function isAi(a: Agent) {
-  return a.strategy === "ai" || a.strategy === "ai-scout";
-}
-
-function tierText(a: Agent) {
-  if (!a.tier) return "";
-  const bond =
-    a.required_bond != null ? ` · bond ${usdc(a.required_bond)} USDC` : "";
-  return `${a.tier.replace("_", " ")}${bond}`;
-}
 
 const FILTER_GROUPS: Record<string, string> = {
   paid: "proven",
@@ -88,8 +53,9 @@ function matchesFilter(c: Claim, f: string) {
   return f === "all" || claimGroup(c) === FILTER_GROUPS[f];
 }
 
-type Flash = Record<string, { kind: "paid" | "lost"; until: number }>;
 type Names = Map<string, string>;
+// The claim list shows one agent's claims; kept by account, so it survives polls.
+type AgentFilter = { account: string; role: Agent["role"]; name: string };
 
 function nameOf(account: string, names: Names): string {
   return (
@@ -181,35 +147,10 @@ function SimTag({ dry }: { dry: boolean }) {
   ) : null;
 }
 
-function useFlashes(agents: Agent[]): Flash {
-  const prev = useRef<Map<string, Agent>>(new Map());
-  const [flash, setFlash] = useState<Flash>({});
-  useEffect(() => {
-    const now = Date.now();
-    const next: Flash = {};
-    for (const a of agents) {
-      const old = prev.current.get(a.account);
-      if (old && a.earned > old.earned)
-        next[a.account] = { kind: "paid", until: now + FLASH_MS };
-      else if (old && a.bonds_lost > old.bonds_lost)
-        next[a.account] = { kind: "lost", until: now + FLASH_MS };
-    }
-    prev.current = new Map(agents.map((a) => [a.account, a]));
-    if (Object.keys(next).length) setFlash((f) => ({ ...f, ...next }));
-  }, [agents]);
-  useEffect(() => {
-    const t = setInterval(() => {
-      const now = Date.now();
-      setFlash((f) => {
-        const keep = Object.entries(f).filter(([, v]) => v.until > now);
-        return keep.length === Object.keys(f).length
-          ? f
-          : Object.fromEntries(keep);
-      });
-    }, 1000);
-    return () => clearInterval(t);
-  }, []);
-  return flash;
+function sum(rows: LedgerRow[], kind: string) {
+  return rows
+    .filter((r) => r.kind === kind && r.status === "completed")
+    .reduce((a, r) => a + r.amount, 0);
 }
 
 export default function SwarmPage() {
@@ -220,7 +161,7 @@ export default function SwarmPage() {
   const [bounty, setBounty] = useState<Bounty | null>(null);
   const [errors, setErrors] = useState<string[]>([]);
   const [loaded, setLoaded] = useState(false);
-  const [picked, setPicked] = useState<string | null>(null);
+  const [agentFilter, setAgentFilter] = useState<AgentFilter | null>(null);
   const [filter, setFilter] = useState("all");
   const swarmRef = useRef<SwarmState | null>(null);
 
@@ -292,7 +233,6 @@ export default function SwarmPage() {
     () => (swarm?.agents?.length ? swarm.agents : agentsFromHunters(hunters)),
     [swarm, hunters],
   );
-  const flash = useFlashes(agents);
   const names: Names = useMemo(
     () => new Map((rawSwarm?.agents ?? []).map((a) => [a.account, a.id])),
     [rawSwarm],
@@ -362,11 +302,17 @@ export default function SwarmPage() {
     !!swarm?.finished ||
     (agents.length > 0 &&
       agents.every((a) => a.state === "done" || a.state === "broke"));
-  const counts = { earned: 0, lost: 0, broke: 0, none: 0 };
-  for (const a of agents) counts[resultOf(a)]++;
-  const shownClaims = claims.filter((c) => matchesFilter(c, filter));
+  const agentClaims = agentFilter
+    ? claimsOfAgent(claims, agentFilter.account, agentFilter.role)
+    : claims;
+  const shownClaims = agentClaims.filter((c) => matchesFilter(c, filter));
   const titleOf = titler(claims);
-  const selected = agents.find((a) => a.id === picked) ?? null;
+
+  function pickAgent(a: Agent) {
+    if (agentFilter?.account === a.account) return setAgentFilter(null);
+    setAgentFilter({ account: a.account, role: a.role, name: a.id });
+    document.getElementById("claims")?.scrollIntoView();
+  }
 
   return (
     <main>
@@ -474,317 +420,201 @@ export default function SwarmPage() {
           </section>
         )}
 
-        <div className="sw-cols">
-          <section className="sw-panel sw-grid-panel" aria-label="Agent grid">
-            <div className="sw-panel-top">
-              <h2>Agents</h2>
-              <Legend />
-            </div>
-            {finished && agents.length > 0 && (
-              <div className="sw-results" data-testid="race-results">
-                <ul className="sw-legend" aria-label="Result colors">
-                  {(["earned", "lost", "broke", "none"] as Result[]).map(
-                    (r) => (
-                      <li key={r}>
-                        <i data-result={r} />
-                        {RESULT_LABELS[r]}
-                      </li>
-                    ),
-                  )}
-                </ul>
-                <p data-testid="result-counts">
-                  {counts.earned} agents earned · {counts.lost} lost money ·{" "}
-                  {counts.broke} went broke · {counts.none} found nothing
-                </p>
-              </div>
-            )}
-            {swarm == null && agents.length > 0 && (
-              <p className="sw-hint">
-                {other
-                  ? "No race runs for this bounty now."
-                  : idle
-                    ? "No race has run yet."
-                    : "Swarm runner not connected."}{" "}
-                Tiles come from Arsune&apos;s records of the agents.
-              </p>
-            )}
-            <div className="sw-tiles" data-testid="agent-grid">
-              {agents.map((a) => {
-                const f = flash[a.account];
-                const st = f?.kind ?? a.state;
-                const res = resultOf(a);
-                const net = a.earned - a.bonds_lost;
-                const mark =
-                  net < 0 ? `−${usdc(-net)}` : net > 0 ? `+${usdc(net)}` : null;
-                return (
-                  <button
-                    key={a.id}
-                    type="button"
-                    className={`sw-tile ${styles.tile}`}
-                    data-testid="agent-tile"
-                    data-state={st}
-                    data-outcome={res}
-                    data-result={finished ? res : undefined}
-                    data-lost={a.bonds_lost > 0 ? "true" : undefined}
-                    data-role={a.role}
-                    aria-pressed={picked === a.id}
-                    data-ai={isAi(a) ? "true" : undefined}
-                    aria-label={`${a.id}, ${isAi(a) ? "AI " : ""}${a.role}, ${st}${finished ? `, ${RESULT_LABELS[res]}` : ""}${a.bonds_lost > 0 ? `, lost ${usdc(a.bonds_lost)} in bonds` : ""}`}
-                    title={`${a.id} (${isAi(a) ? "AI " : ""}${a.role}) · ${st}\n${a.strategy}${a.tier ? `\ntier ${tierText(a)}` : ""}\nbalance ${usdc(a.balance)} · proven ${a.proven} · earned ${usdc(a.earned)} · bonds lost ${usdc(a.bonds_lost)}`}
-                    onClick={() => setPicked(picked === a.id ? null : a.id)}
-                  >
-                    <span aria-hidden="true">
-                      {finished ? RESULT_GLYPHS[res] : GLYPHS[st]}
-                    </span>
-                    {mark && (
-                      <small
-                        className={`sw-mark ${styles.mark}`}
-                        data-testid="tile-mark"
-                        data-kind={net < 0 ? "lost" : "earned"}
-                        aria-hidden="true"
-                      >
-                        {mark}
-                      </small>
-                    )}
-                    <em aria-hidden="true">{a.id.replace(/^\D+/, "")}</em>
-                    {a.role === "scout" && (
-                      <b
-                        className={styles.scoutBadge}
-                        data-testid="scout-badge"
-                        aria-hidden="true"
-                      >
-                        S
-                      </b>
-                    )}
-                    {isAi(a) && (
-                      <span
-                        className={`${styles.badge} ${styles.tileBadge}`}
-                        data-testid="ai-badge"
-                        aria-hidden="true"
-                      >
-                        AI
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-            {selected && (
-              <dl className="sw-detail" data-testid="agent-detail">
-                <div>
-                  <dt>Agent</dt>
-                  <dd title={selected.account}>
-                    {selected.id} · {selected.role}
-                  </dd>
-                </div>
-                {!isHexAccount(selected.account) && (
-                  <div>
-                    <dt>Account</dt>
-                    <dd>{selected.account}</dd>
-                  </div>
-                )}
-                <div>
-                  <dt>Strategy</dt>
-                  <dd>
-                    {selected.strategy}
-                    {isAi(selected) && " (decides with a language model)"}
-                  </dd>
-                </div>
-                {selected.tier && (
-                  <div>
-                    <dt>Reputation tier</dt>
-                    <dd data-testid="agent-tier">{tierText(selected)}</dd>
-                  </div>
-                )}
-                <div>
-                  <dt>State</dt>
-                  <dd>{selected.state}</dd>
-                </div>
-                <div>
-                  <dt>Balance</dt>
-                  <dd>{usdc(selected.balance)} USDC</dd>
-                </div>
-                <div>
-                  <dt>Proven / claims</dt>
-                  <dd>
-                    {selected.proven} / {selected.claims}
-                  </dd>
-                </div>
-                <div>
-                  <dt>Earned</dt>
-                  <dd>{usdc(selected.earned)} USDC</dd>
-                </div>
-                <div>
-                  <dt>Bonds lost</dt>
-                  <dd>{usdc(selected.bonds_lost)} USDC</dd>
-                </div>
-                {dry && (
-                  <div>
-                    <SimTag dry />
-                  </div>
-                )}
-              </dl>
-            )}
-          </section>
+        <WhoWon
+          agents={agents}
+          fallback={!swarm?.agents?.length}
+          running={!!swarm && !finished}
+          picked={agentFilter?.account ?? null}
+          onPick={pickAgent}
+        />
 
-          <section className="sw-panel" aria-label="Claim stream" id="claims">
-            <div className="sw-panel-top">
-              <h2>Claim stream</h2>
-              <span>{claims.length} claims</span>
-            </div>
-            <div className="sw-filters" role="group" aria-label="Claim filter">
-              {CLAIM_FILTERS.map(([key, label]) => (
-                <button
-                  key={key}
-                  type="button"
-                  className="sw-filter"
-                  data-testid={`filter-${key}`}
-                  data-filter={key}
-                  aria-pressed={filter === key}
-                  onClick={() => setFilter(key)}
-                >
-                  {label} ({claims.filter((c) => matchesFilter(c, key)).length})
-                </button>
-              ))}
-            </div>
-            <ol className="sw-stream" data-testid="claim-stream">
-              {shownClaims.length === 0 && (
-                <li className="sw-empty">
-                  {claims.length === 0 ? "No claims yet." : "No claims match."}
-                </li>
-              )}
-              {shownClaims.slice(0, 60).map((c) => (
-                <ClaimRow
-                  key={c.id}
-                  claim={c}
-                  title={titleOf(c)}
-                  names={names}
-                />
-              ))}
-            </ol>
-          </section>
-        </div>
-
-        <div className="sw-cols sw-cols-3">
-          <section className="sw-panel" aria-label="Payments">
-            <div className="sw-panel-top">
-              <h2>Payments</h2>
-              <SimTag dry={!!dry} />
-            </div>
-            <ul className="sw-ledger" data-testid="ledger">
-              {ledger.length === 0 && (
-                <li className="sw-empty">No payments yet.</li>
-              )}
-              {ledger.slice(0, 60).map((r, i) => {
-                const rowDry = dry || r.settlement_mode === "dry";
-                return (
-                  <li key={r.id ?? i} data-kind={r.kind}>
-                    <span className="sw-kind">
-                      {LEDGER_LABELS[r.kind] ?? r.kind}
-                    </span>
-                    <Who account={r.account} names={names} />
-                    <strong>{usdc(r.amount)} USDC</strong>
-                    {rowDry ? (
-                      <span className="sw-sim sw-sim-small">Simulated</span>
-                    ) : r.explorer_url ? (
-                      <a href={r.explorer_url} target="_blank" rel="noreferrer">
-                        NearBlocks
-                      </a>
-                    ) : (
-                      <span className="sw-muted">pending</span>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-
-          <section className="sw-panel" aria-label="Tip market">
-            <div className="sw-panel-top">
-              <h2>Tip market</h2>
-              <span>{swarm?.tips.length ?? 0} tips</span>
-            </div>
-            <ul className="sw-tips" data-testid="tips">
-              {!swarm?.tips.length && (
-                <li className="sw-empty">No scout tips yet.</li>
-              )}
-              {swarm?.tips.map((t) => (
-                <li key={t.id} data-status={t.status}>
-                  <div>
-                    <strong>{t.scout}</strong> offers a tip:{" "}
-                    <em>{claimKind(t.claim_type)}</em>
-                    <span className="sw-muted"> {pagePath(t.urls)}</span>
-                  </div>
-                  <div className="sw-tip-flow">
-                    <span>asks {share(t.ask_share_bps)}</span>
-                    <span aria-hidden="true">→</span>
-                    <span className={`sw-chip sw-tip-${t.status}`}>
-                      {t.status}
-                    </span>
-                    {t.buyer && <span>to {t.buyer}</span>}
-                    {t.final_share_bps != null && (
-                      <span>final share {share(t.final_share_bps)}</span>
-                    )}
-                  </div>
-                  {t.note && <p className="sw-muted">{t.note}</p>}
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          <section className="sw-panel" aria-label="Leaderboard">
-            <div className="sw-panel-top">
-              <h2>Leaderboard</h2>
-              <SimTag dry={!!dry} />
-            </div>
-            <ol className="sw-board" data-testid="leaderboard">
-              {leaderboard.length === 0 && (
-                <li className="sw-empty">No hunters yet.</li>
-              )}
-              {leaderboard.map((h, i) => (
-                <li key={h.account}>
-                  <span className="sw-rank">{i + 1}</span>
-                  <Who account={h.account} names={names} />
-                  <span className="sw-muted">{h.proven} proven</span>
-                  <strong>{usdc(h.earned + h.scout_earned)} USDC</strong>
-                </li>
-              ))}
-            </ol>
-            <h3 className="sw-sub-h">Biggest losers</h3>
-            <ol className="sw-board sw-losers" data-testid="biggest-losers">
-              {losers.length === 0 && (
-                <li className="sw-empty">No bonds lost yet.</li>
-              )}
-              {losers.map(([account, n], i) => (
-                <li key={account}>
-                  <span className="sw-rank sw-rank-bad">{i + 1}</span>
-                  <Who account={account} names={names} />
-                  <span className="sw-muted">bonds lost</span>
-                  <strong className="sw-loss-amt">−{usdc(n)} USDC</strong>
-                </li>
-              ))}
-            </ol>
-          </section>
-        </div>
-
-        <section className="sw-panel" aria-label="Activity log">
+        <section className="sw-panel" aria-label="Claim stream" id="claims">
           <div className="sw-panel-top">
-            <h2>Activity</h2>
+            <h2>Claim stream</h2>
+            <span>{claims.length} claims</span>
           </div>
-          <ol className="sw-log" data-testid="activity-log">
-            {!swarm?.log.length && (
-              <li className="sw-empty">No activity yet.</li>
+          <div className="sw-filters" role="group" aria-label="Claim filter">
+            {CLAIM_FILTERS.map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className="sw-filter"
+                data-testid={`filter-${key}`}
+                data-filter={key}
+                aria-pressed={filter === key}
+                onClick={() => setFilter(key)}
+              >
+                {label} (
+                {agentClaims.filter((c) => matchesFilter(c, key)).length})
+              </button>
+            ))}
+          </div>
+          {agentFilter && (
+            <p className="rv-agent-filter" data-testid="agent-filter">
+              Claims by <b>{agentFilter.name}</b> ·{" "}
+              <button type="button" onClick={() => setAgentFilter(null)}>
+                Show all
+              </button>
+            </p>
+          )}
+          <ol className="sw-stream" data-testid="claim-stream">
+            {shownClaims.length === 0 && (
+              <li className="sw-empty">
+                {claims.length === 0 ? "No claims yet." : "No claims match."}
+              </li>
             )}
-            {swarm?.log
-              .slice(-40)
-              .reverse()
-              .map((l, i) => (
-                <li key={`${l.at}-${i}`}>
-                  <time>{clock(l.at)}</time> <strong>{l.agent}</strong> {l.text}
-                </li>
-              ))}
+            {shownClaims.slice(0, 60).map((c) => (
+              <ClaimRow key={c.id} claim={c} title={titleOf(c)} names={names} />
+            ))}
           </ol>
         </section>
+
+        <details className="rv-more" data-testid="more-details">
+          <summary>More details</summary>
+          <div className="sw-cols sw-cols-3">
+            <section className="sw-panel" aria-label="Payments">
+              <div className="sw-panel-top">
+                <h2>Payments</h2>
+                <SimTag dry={!!dry} />
+              </div>
+              <dl className="rv-pay">
+                {(
+                  [
+                    ["pay-fees", "Arsune fees", sum(rows, "fee")],
+                    [
+                      "pay-forfeited",
+                      "Bonds forfeited",
+                      sum(rows, "bond_forfeit"),
+                    ],
+                    ["pay-scouts", "Paid to scouts", sum(rows, "scout_share")],
+                  ] as const
+                ).map(([id, label, amount]) => (
+                  <div key={id} data-testid={id}>
+                    <dt>{label}</dt>
+                    <dd>{usdc(amount)} USDC</dd>
+                  </div>
+                ))}
+              </dl>
+              <ul className="sw-ledger" data-testid="ledger">
+                {ledger.length === 0 && (
+                  <li className="sw-empty">No payments yet.</li>
+                )}
+                {ledger.slice(0, 60).map((r, i) => {
+                  const rowDry = dry || r.settlement_mode === "dry";
+                  return (
+                    <li key={r.id ?? i} data-kind={r.kind}>
+                      <span className="sw-kind">
+                        {LEDGER_LABELS[r.kind] ?? r.kind}
+                      </span>
+                      <Who account={r.account} names={names} />
+                      <strong>{usdc(r.amount)} USDC</strong>
+                      {rowDry ? (
+                        <span className="sw-sim sw-sim-small">Simulated</span>
+                      ) : r.explorer_url ? (
+                        <a
+                          href={r.explorer_url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          NearBlocks
+                        </a>
+                      ) : (
+                        <span className="sw-muted">pending</span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+
+            <section className="sw-panel" aria-label="Tip market">
+              <div className="sw-panel-top">
+                <h2>Tip market</h2>
+                <span>{swarm?.tips.length ?? 0} tips</span>
+              </div>
+              <ul className="sw-tips" data-testid="tips">
+                {!swarm?.tips.length && (
+                  <li className="sw-empty">No scout tips yet.</li>
+                )}
+                {swarm?.tips.map((t) => (
+                  <li key={t.id} data-status={t.status}>
+                    <div>
+                      <strong>{t.scout}</strong> offers a tip:{" "}
+                      <em>{claimKind(t.claim_type)}</em>
+                      <span className="sw-muted"> {pagePath(t.urls)}</span>
+                    </div>
+                    <div className="sw-tip-flow">
+                      <span>asks {share(t.ask_share_bps)}</span>
+                      <span aria-hidden="true">→</span>
+                      <span className={`sw-chip sw-tip-${t.status}`}>
+                        {t.status}
+                      </span>
+                      {t.buyer && <span>to {t.buyer}</span>}
+                      {t.final_share_bps != null && (
+                        <span>final share {share(t.final_share_bps)}</span>
+                      )}
+                    </div>
+                    {t.note && <p className="sw-muted">{t.note}</p>}
+                  </li>
+                ))}
+              </ul>
+            </section>
+
+            <section className="sw-panel" aria-label="Leaderboard">
+              <div className="sw-panel-top">
+                <h2>Leaderboard</h2>
+                <SimTag dry={!!dry} />
+              </div>
+              <ol className="sw-board" data-testid="leaderboard">
+                {leaderboard.length === 0 && (
+                  <li className="sw-empty">No hunters yet.</li>
+                )}
+                {leaderboard.map((h, i) => (
+                  <li key={h.account}>
+                    <span className="sw-rank">{i + 1}</span>
+                    <Who account={h.account} names={names} />
+                    <span className="sw-muted">{h.proven} proven</span>
+                    <strong>{usdc(h.earned + h.scout_earned)} USDC</strong>
+                  </li>
+                ))}
+              </ol>
+              <h3 className="sw-sub-h">Biggest losers</h3>
+              <ol className="sw-board sw-losers" data-testid="biggest-losers">
+                {losers.length === 0 && (
+                  <li className="sw-empty">No bonds lost yet.</li>
+                )}
+                {losers.map(([account, n], i) => (
+                  <li key={account}>
+                    <span className="sw-rank sw-rank-bad">{i + 1}</span>
+                    <Who account={account} names={names} />
+                    <span className="sw-muted">bonds lost</span>
+                    <strong className="sw-loss-amt">−{usdc(n)} USDC</strong>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          </div>
+
+          <section className="sw-panel" aria-label="Activity log">
+            <div className="sw-panel-top">
+              <h2>Activity</h2>
+            </div>
+            <ol className="sw-log" data-testid="activity-log">
+              {!swarm?.log.length && (
+                <li className="sw-empty">No activity yet.</li>
+              )}
+              {swarm?.log
+                .slice(-40)
+                .reverse()
+                .map((l, i) => (
+                  <li key={`${l.at}-${i}`}>
+                    <time>{clock(l.at)}</time> <strong>{l.agent}</strong>{" "}
+                    {l.text}
+                  </li>
+                ))}
+            </ol>
+          </section>
+        </details>
       </div>
     </main>
   );
@@ -837,27 +667,5 @@ function ClaimRow({
       </div>
       {reason && <p className="sw-reason">{reason}</p>}
     </li>
-  );
-}
-
-function Legend() {
-  const items: [string, string][] = [
-    ["searching", "Searching"],
-    ["negotiating", "Negotiating"],
-    ["claiming", "Claiming"],
-    ["waiting", "Waiting"],
-    ["paid", "Paid"],
-    ["lost", "Lost bond"],
-    ["broke", "Broke"],
-  ];
-  return (
-    <ul className="sw-legend" aria-label="Tile colors">
-      {items.map(([s, l]) => (
-        <li key={s}>
-          <i data-state={s} />
-          {l}
-        </li>
-      ))}
-    </ul>
   );
 }
