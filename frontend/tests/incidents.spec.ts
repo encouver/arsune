@@ -12,11 +12,7 @@ test("synthetic incident has checked evidence and opens from saved history", asy
 }) => {
   const failures: string[] = [];
   page.on("pageerror", (error) => failures.push(error.message));
-  await page.goto("/");
-  await page.getByText("More tools", { exact: true }).click();
-  await page
-    .getByRole("link", { name: "Incident investigation", exact: true })
-    .click();
+  await page.goto("/incidents");
   await page.getByRole("button", { name: "Load synthetic example" }).click();
   await expect(page.getByLabel("Service", { exact: true })).toHaveValue(
     "checkout",

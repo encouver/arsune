@@ -18,9 +18,7 @@ test("local demo uses real website and incident checks with a timeout control", 
 }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto("/");
-  await page.getByText("More tools", { exact: true }).click();
-  await page.getByRole("link", { name: "Local demo", exact: true }).click();
+  await page.goto("/demo");
   await expect(
     page.getByRole("heading", { name: /Try both checks/ }),
   ).toBeVisible();
@@ -183,39 +181,36 @@ test("download keeps unsafe source text inert offline and shows server errors", 
   }
 });
 
-test("every page shows the same brand, the main path, and a tools menu", async ({
+test("every page shows the same brand and the three race links", async ({
   page,
 }) => {
   const main = [
     ["/", "Start a race"],
-    ["/races", "Races"],
-    ["/swarm", "Live board"],
+    ["/races", "Your races"],
+    ["/swarm", "Live race"],
   ];
-  const tools = [
-    ["/checks", "Website check"],
-    ["/incidents", "Incident investigation"],
-    ["/demo", "Local demo"],
-  ];
+  // The older tools keep their URLs; the header links none of them.
+  const tools = ["/checks", "/incidents", "/demo"];
   // /swarm renders its header inside <main>, so it has no banner landmark to check here.
-  for (const [path, current] of [...main, ...tools].filter(
-    ([p]) => p !== "/swarm",
-  )) {
-    await page.goto(path);
+  for (const [path, current] of [
+    ...main.filter(([p]) => p !== "/swarm"),
+    ...tools.map((p) => [p, null]),
+  ]) {
+    await page.goto(path!);
     await expect(
       page.getByRole("banner").getByRole("link", { name: "Arsune home" }),
     ).toBeVisible();
     await expect(page.getByRole("banner").locator(".brand-mark")).toBeVisible();
     const nav = page.getByRole("navigation", { name: "Tasks" });
     await expect(nav.getByRole("link")).toHaveText(main.map(([, l]) => l));
-    await nav.getByText("More tools", { exact: true }).click();
-    await expect(nav.getByRole("link")).toHaveText(
-      [...main, ...tools].map(([, l]) => l),
-    );
-    for (const [href, label] of [...main, ...tools])
+    for (const [href, label] of main)
       await expect(
         nav.getByRole("link", { name: label, exact: true }),
       ).toHaveAttribute("href", href);
-    await expect(nav.locator("[aria-current='page']")).toHaveText(current);
+    await expect(page.getByText("More tools")).toHaveCount(0);
+    if (current)
+      await expect(nav.locator("[aria-current='page']")).toHaveText(current);
+    else await expect(nav.locator("[aria-current='page']")).toHaveCount(0);
   }
 });
 

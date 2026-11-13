@@ -1,7 +1,7 @@
-import MoreTools from "./more-tools";
-import { tasks, type TaskPath } from "./nav";
+import { tasks } from "./nav";
 
-export default function SiteHeader({ current }: { current: TaskPath }) {
+// `current` is the page's path; the older tools pass theirs and match no link.
+export default function SiteHeader({ current }: { current: string }) {
   return (
     <header className="site-header">
       <a href="/" className="brand" aria-label="Arsune home">
@@ -20,7 +20,6 @@ export default function SiteHeader({ current }: { current: TaskPath }) {
             {label}
           </a>
         ))}
-        <MoreTools current={current} />
       </nav>
     </header>
   );
