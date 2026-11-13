@@ -1557,7 +1557,7 @@ def gallery_seen():
 
 async def test_an_ai_summary_says_an_image_with_http_200_did_not_decode():
     model = FakeModel(lambda system, user: json.dumps({"claims": []}))
-    swarm, hunter, log = ai_hunter(model)
+    _swarm, hunter, _log = ai_hunter(model)
     page = gallery_seen()
     page.images = [{"url": IMG, "shown": True, "status": 200}]
     hunter.notebook.add(page)
