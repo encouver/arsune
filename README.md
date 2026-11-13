@@ -12,6 +12,8 @@ Arsune checks every claim again in a fresh browser, with plain browser code and 
 
 Built for the NEAR hackathon (deadline 14 November 2026, 23:59 UTC).
 
+**Try it:** https://arsune.augevi.com (simulation money: no real money moves; 15 agents per race, one race at a time).
+
 ## Tracks
 
 | Track | How Arsune fits |
@@ -44,9 +46,15 @@ What you see on the Live race page (`/swarm`) within about 2 minutes:
 
 Last full run (9 Nov 2026, `docker compose up --build --wait`): the race ended in 104 seconds. 226 claims: **66 of 66 bugs proven and paid once**, 0 decoys paid, 39 false claims rejected, 81 duplicates, 40 unverified. Hunters got 54.01 USDC, scouts 11.99 USDC, Arsune 6.60 USDC in fees, and 4 USDC of bonds were lost. 8 of 110 agents went broke. The numbers change a little from run to run, because agents choose pages and tips at random.
 
-![Live race page after a full race](docs/img/swarm-board.png)
+Screenshots of the public demo (https://arsune.augevi.com, simulation money):
 
-<!-- TODO: the screenshots in docs/img show the page before the UI change; take new ones. -->
+![Start page: the story, the three steps, and the form to start a bug race](docs/img/start-page.png)
+
+![Live race page while a race runs: pool bar, the find-claim-check flow, and the "Who won" board with moving agent dots](docs/img/live-race.png)
+
+![Owner page after the race: the step bar, the result story, and the first proven bugs with evidence links](docs/img/owner-result.png)
+
+The same live race page on a phone ([screenshot](docs/img/live-race-phone.png)), and after the race ([screenshot](docs/img/race-result.png)).
 
 | To | Run |
 | --- | --- |
@@ -221,6 +229,8 @@ A price of 0 means a free model: its calls never spend the AI budget. To go back
 
 ![Live race page with AI agents](docs/img/swarm-ai.png)
 
+*(Earlier AI race, before the UI update.)*
+
 ### Run AI agents on Claude
 
 The AI agents can call Claude through the official Anthropic SDK. Set the provider, the model and its prices. The key comes from the environment (`ANTHROPIC_API_KEY`) or from `ARSUNE_SWARM_MODEL_API_KEY`; no base URL is needed. With this provider the swarm reads only `ARSUNE_SWARM_MODEL_*`, never the shared `ARSUNE_MODEL_*` settings, so it cannot send another provider's key to Anthropic.
@@ -255,6 +265,8 @@ Result of a run on Claude:
 On 10 November 2026, three AI hunters and one AI scout ran on `claude-opus-5-5`, with one scripted scout and no scripted hunters (`--hunters 0 --ai-hunters 3 --scouts 1 --ai-scouts 1 --pages 25 --pace 1 --seed 11`). After the fixes in [docs/MODEL-EVAL.md](docs/MODEL-EVAL.md#after-fixes), the hunters made 56 claims: 52 proven, 0 rejected, 4 duplicates. They proved every seeded bug on the pages that they read. They made 16 counter-offers and bought 5 tips from the AI scout at 10% or 15%; 4 were proven and 1 was a duplicate. All 31 model calls answered valid JSON. The race took 87 s and spent 0.52 USD of a 1.50 USD AI budget. In the same rerun, `claude-haiku-5-5` proved 54 bugs for 0.014 USD but bought no tip. Before the fixes, `claude-sonnet-5-5` proved 52 bugs in 66 s for 0.23 USD but almost did not trade. [docs/MODEL-EVAL.md](docs/MODEL-EVAL.md) compares all four models, with the local `llama3:latest`.
 
 ![Live race page near the end of the Opus race](docs/img/swarm-claude.png)
+
+*(Earlier AI race, before the UI update.)*
 
 ## Escrow contract
 

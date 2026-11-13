@@ -82,6 +82,10 @@ Notes:
 
 ## 5. Judge checklist
 
+### Live demo
+
+Open https://arsune.augevi.com, select Start a race, then "Try the demo shop" and "Start a bug race". Set the proof with the demo button, add simulated money, and select "Start the race". Then open "Live race". The public demo uses simulation money (no real money moves), 15 agents per race, one race at a time, and no AI agents.
+
 ### Run it with no keys and no money
 
 You need Docker with Compose v2.

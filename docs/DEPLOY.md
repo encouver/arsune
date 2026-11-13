@@ -1,5 +1,7 @@
 # Deploy Arsune to arsune.augevi.com
 
+Public demo: https://arsune.augevi.com (simulation money).
+
 ## What runs where
 
 One shared server: `augevi@api.staging.personaizit.com` (159.195.12.68). Traefik owns ports 80 and 443,
