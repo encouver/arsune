@@ -19,7 +19,8 @@ import {
   usdc,
   utcTime,
 } from "./api";
-import { CopyButton } from "./ui";
+import { lineCounts, resultStory } from "../swarm/race-model";
+import { CopyButton, ShowHide } from "./ui";
 
 const LEDGER_LABELS: Record<string, string> = {
   fund: "Money added",
@@ -32,11 +33,15 @@ const LEDGER_LABELS: Record<string, string> = {
   withdraw: "Withdrawn",
 };
 
+// Proven bugs and claims being checked stay open; the other groups wait behind "Show".
+const OPEN: Group[] = ["pending", "proven"];
+
 /** The claims of a bounty, grouped by what Arsune decided, in plain words. */
 export function Results({ bounty }: { bounty: OwnerBounty }) {
   const claims = bounty.claims;
   if (claims.length === 0) return null;
   const counts = countGroups(claims);
+  const story = resultStory(lineCounts(claims, bounty.ledger));
   const titleOf = titler(claims);
   const bonds = new Map(
     bounty.ledger
@@ -56,17 +61,18 @@ export function Results({ bounty }: { bounty: OwnerBounty }) {
           {countText(counts)}
         </span>
       </div>
-      {GROUP_ORDER.filter((g) => counts[g] > 0).map((g) => (
-        <section
-          key={g}
-          className="bo-group"
-          data-group={g}
-          data-testid={`group-${g}`}
-          aria-label={GROUPS[g].title}
-        >
+      {story && (
+        <p className="bo-story" data-testid="result-story">
+          {story}
+        </p>
+      )}
+      {GROUP_ORDER.filter((g) => counts[g] > 0).map((g) => {
+        const heading = (
           <h3>
             {GROUPS[g].title} <span>{counts[g]}</span>
           </h3>
+        );
+        const list = (
           <ul className="bo-result-list">
             {claims
               .filter((c) => claimGroup(c) === g)
@@ -80,8 +86,33 @@ export function Results({ bounty }: { bounty: OwnerBounty }) {
                 />
               ))}
           </ul>
-        </section>
-      ))}
+        );
+        return OPEN.includes(g) ? (
+          <section
+            key={g}
+            className="bo-group"
+            data-group={g}
+            data-testid={`group-${g}`}
+            aria-label={GROUPS[g].title}
+          >
+            {heading}
+            {list}
+          </section>
+        ) : (
+          <details
+            key={g}
+            className="bo-group"
+            data-group={g}
+            data-testid={`group-${g}`}
+          >
+            <summary>
+              {heading}
+              <ShowHide />
+            </summary>
+            {list}
+          </details>
+        );
+      })}
     </section>
   );
 }
@@ -234,9 +265,7 @@ function Payment({ row: r }: { row: LedgerRow }) {
         {r.account}
       </span>
       <strong>{usdc(r.amount)} USDC</strong>
-      {r.settlement_mode === "dry" ? (
-        <span className="sw-sim sw-sim-small">Simulated</span>
-      ) : r.explorer_url ? (
+      {r.settlement_mode === "dry" ? null : r.explorer_url ? (
         <a href={r.explorer_url} target="_blank" rel="noreferrer">
           NearBlocks
         </a>

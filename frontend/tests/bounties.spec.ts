@@ -176,6 +176,16 @@ function fundRow(amount: number) {
   };
 }
 
+function reward(claim_id: string, amount: number) {
+  return {
+    ...fundRow(amount),
+    id: `r-${claim_id}`,
+    claim_id,
+    kind: "reward_out",
+    account: HUNTER,
+  };
+}
+
 /** An open, funded bounty: the race can start. */
 function makeReady(api: Api) {
   Object.assign(api.bounty, { status: "open", budget_amount: 10_000_000 });
@@ -205,6 +215,8 @@ async function mockApi(
     const json = (data: unknown, status = 200) =>
       route.fulfill({ status, json: data });
     if (path === "/api/funding/options") return json(opts);
+    if (path === "/api/bounties" && req.method() === "GET")
+      return json({ items: [b], settlement_mode: mode });
     if (path === "/api/bounties" && req.method() === "POST") {
       Object.assign(b, {
         url: body.url,
@@ -374,36 +386,31 @@ async function mockApi(
 
 const START_URL = /^http:\/\/[^/]+\/$/;
 
-test("the header shows the main path first and the other tools in a menu", async ({
-  page,
-}) => {
+test("the header has three links and no tools menu", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await mockApi(page, "dry");
   await page.goto("/");
   const nav = page.getByRole("navigation", { name: "Tasks" });
   await expect(nav.getByRole("link")).toHaveText([
     "Start a race",
-    "Races",
-    "Live board",
+    "Your races",
+    "Live race",
   ]);
+  for (const [label, href] of [
+    ["Start a race", "/"],
+    ["Your races", "/races"],
+    ["Live race", "/swarm"],
+  ])
+    await expect(
+      nav.getByRole("link", { name: label, exact: true }),
+    ).toHaveAttribute("href", href);
   await expect(nav.locator("[aria-current='page']")).toHaveText("Start a race");
-  await nav.getByText("More tools", { exact: true }).click();
-  const menu = nav.locator(".task-menu");
-  await expect(menu.getByRole("link")).toHaveText([
-    "Website check",
-    "Incident investigation",
-    "Local demo",
-  ]);
-  for (const link of await menu.getByRole("link").all()) {
+  await expect(page.getByText("More tools")).toHaveCount(0);
+  for (const link of await nav.getByRole("link").all()) {
     const box = (await link.boundingBox())!;
     expect(box.x).toBeGreaterThanOrEqual(0);
     expect(box.x + box.width).toBeLessThanOrEqual(390);
   }
-  await page.keyboard.press("Escape");
-  await expect(menu).toBeHidden();
-  await nav.getByText("More tools", { exact: true }).click();
-  await page.getByRole("heading", { name: "Start a bug race" }).click();
-  await expect(menu).toBeHidden();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -428,7 +435,26 @@ test("start page: validates, creates the race and opens its page", async ({
   const api = await mockApi(page, "dry");
   api.host = host();
   await page.goto("/");
-  await expect(page.getByTestId("sim-label").first()).toBeVisible();
+  await expect(page.getByTestId("sim-label")).toHaveText(
+    "Simulation · no real money",
+  );
+  // The start page has no agent choice; step 4 offers it when it is a real choice.
+  await expect(page.getByRole("radio")).toHaveCount(0);
+  // The problem first, then the promise; "bond" is defined once, here.
+  await expect(page.locator("h1")).toHaveText(
+    "AI builds sites fast. Bugs ship with them.Let agents race to find them. Pay only for proof.",
+  );
+  await expect(page.locator(".lead")).toContainText(
+    "Each claim locks a bond, a small deposit.",
+  );
+  await expect(page.locator(".start-steps strong")).toHaveText([
+    "Fund a bounty pool",
+    "Agents race",
+    "Arsune checks each claim",
+  ]);
+  await expect(page.getByTestId("start-outcome")).toHaveText(
+    "You get a list of proven bugs, each with evidence that anyone can check again.",
+  );
   await page.getByRole("button", { name: "Start a bug race" }).click();
   await expect(page.getByText("Enter the full address")).toBeVisible();
   await expect(page.getByText("Enter a NEAR account ID")).toBeVisible();
@@ -449,7 +475,10 @@ test("start page: validates, creates the race and opens its page", async ({
   await expect(page.getByTestId("preview-fee")).toHaveText("0.10 USDC");
   await expect(page.getByTestId("preview-bugs")).toHaveText("11 proven bugs");
 
-  await page.getByRole("button", { name: "Use the local demo shop" }).click();
+  await expect(page.getByTestId("demo-hint")).toHaveText(
+    "A small shop with known bugs. Arsune sets the proof for you.",
+  );
+  await page.getByRole("button", { name: "Try the demo shop" }).click();
   await expect(page.getByLabel("Site URL")).toHaveValue(
     "http://127.0.0.1:8541/shop/",
   );
@@ -457,10 +486,8 @@ test("start page: validates, creates the race and opens its page", async ({
     "demo-owner.near",
   );
   await page.getByLabel("Base bond per claim").fill("0.25");
-  await expect(page.getByLabel("Free scripted agents")).toBeChecked();
-  await page.getByLabel(/Scripted \+ AI agents \(max \$0\.50/).check();
   await page.getByRole("button", { name: "Start a bug race" }).click();
-  await expect(page).toHaveURL(new RegExp(`/bounties/${ID}\\?agents=ai$`));
+  await expect(page).toHaveURL(new RegExp(`/bounties/${ID}$`));
   const create = api.calls.find(
     (c) => c.path === "/api/bounties" && c.method === "POST",
   );
@@ -474,9 +501,8 @@ test("start page: validates, creates the race and opens its page", async ({
   await expect(page.getByTestId("step-1-status")).toHaveText(
     "Waiting for proof",
   );
-  // The agent choice from the start page waits in step 4.
   await expect(
-    page.getByTestId("step-4").getByLabel(/Scripted \+ AI agents/),
+    page.getByTestId("step-4").getByLabel("Standard agents (free)"),
   ).toBeChecked();
   await expect(page.getByTestId("step-4-status")).toHaveText("After funding");
 });
@@ -563,9 +589,7 @@ test("dry flow: demo proof, site check, one-click funding, then ready to race", 
   await expect(page.getByTestId("site-check")).toContainText(
     "completely at 1280 and 390 pixels wide",
   );
-  await expect(page.getByTestId("step-2-status")).toHaveText(
-    "Loads on desktop and mobile",
-  );
+  await expect(page.getByTestId("step-2-status")).toHaveText("Done");
   await expect(page.getByTestId("bounty-status")).toHaveText("Open");
   const order = api.calls.filter((c) => c.method === "POST").map((c) => c.path);
   expect(order).toEqual([
@@ -577,11 +601,10 @@ test("dry flow: demo proof, site check, one-click funding, then ready to race", 
   await expect(page.getByTestId("funded-total")).toHaveText(
     "Not funded yet. The planned budget is 10.00 USDC.",
   );
-  await expect(page.getByTestId("crosschain-unavailable")).toBeHidden();
-  await page.getByText("Other ways to fund").click();
-  await expect(page.getByTestId("crosschain-unavailable")).toContainText(
-    "dry mode",
-  );
+  // No real money moves in a simulation: simulated money is the only way to fund.
+  await expect(page.getByText("Other ways to fund")).toHaveCount(0);
+  await expect(page.getByTestId("crosschain-option")).toHaveCount(0);
+  await expect(page.getByTestId("direct-option")).toHaveCount(0);
   await expect(page.getByLabel("Amount to add")).toHaveValue("10.00");
   await page.getByLabel("Amount to add").fill("abc");
   await expect(
@@ -595,7 +618,12 @@ test("dry flow: demo proof, site check, one-click funding, then ready to race", 
   await expect(page.getByTestId("funded-total")).toHaveText(
     "Funded 10.00 USDC · pays for 9 bugs · 10.00 USDC left",
   );
-  await expect(page.getByTestId("fund-rows")).toContainText("Simulated");
+  // A simulated payment row has no link and no extra tag: the header says it all.
+  await expect(page.getByTestId("fund-rows")).toHaveText(
+    "Money added10.00 USDC",
+  );
+  await expect(page.getByTestId("fund-rows").getByRole("link")).toHaveCount(0);
+  await expect(page.getByTestId("sim-label")).toHaveCount(1);
   await expect(page.getByTestId("step-3-status")).toHaveText("Funded");
   const fund = api.calls.find((c) => c.path.endsWith("/fund-simulated"));
   expect(fund?.body).toEqual({ amount: 10_000_000 });
@@ -664,7 +692,11 @@ test("manual proof gives exact instructions and shows the checker's refusal", as
 
   api.verifyError = undefined;
   await page.getByRole("button", { name: "Check ownership" }).click();
-  await expect(page.getByTestId("proof-done")).toBeVisible();
+  // A done step folds to one line; its message waits behind "Show".
+  await expect(page.getByTestId("step-1-status")).toHaveText("Done");
+  await expect(page.getByTestId("proof-done")).toContainText(
+    "Ownership proven",
+  );
 });
 
 test("a site that Arsune cannot load completely does not open, and the owner checks again", async ({
@@ -692,9 +724,7 @@ test("a site that Arsune cannot load completely does not open, and the owner che
 
   api.siteProblem = undefined;
   await page.getByRole("button", { name: "Check again" }).click();
-  await expect(page.getByTestId("step-2-status")).toHaveText(
-    "Loads on desktop and mobile",
-  );
+  await expect(page.getByTestId("step-2-status")).toHaveText("Done");
   await expect(page.getByTestId("bounty-status")).toHaveText("Open");
   const posts = api.calls.filter((c) => c.method === "POST").map((c) => c.path);
   expect(posts).toEqual([
@@ -711,9 +741,7 @@ test("an open bounty checks its site again on request", async ({ page }) => {
     "Checked when a race starts",
   );
   await page.getByRole("button", { name: "Check now" }).click();
-  await expect(page.getByTestId("step-2-status")).toHaveText(
-    "Loads on desktop and mobile",
-  );
+  await expect(page.getByTestId("step-2-status")).toHaveText("Done");
   const posts = api.calls.filter((c) => c.method === "POST").map((c) => c.path);
   expect(posts).toEqual([`/api/bounties/${ID}/site-check`]);
 });
@@ -850,7 +878,7 @@ test("an unknown bounty says so", async ({ page }) => {
 test("a failed signed transfer gets a new fund_id and memo, a 422 keeps them", async ({
   page,
 }) => {
-  const api = await mockApi(page, "dry", "https://shop.example.com/");
+  const api = await mockApi(page, "escrow", "https://shop.example.com/");
   api.bounty.status = "open";
   const replies = [504, 422];
   await page.route(`**/api/bounties/${ID}/fund`, (route) => {
@@ -858,8 +886,6 @@ test("a failed signed transfer gets a new fund_id and memo, a 422 keeps them", a
     return route.fulfill({ status, json: { detail: "no" } });
   });
   await page.goto(`/bounties/${ID}`);
-  await page.getByText("Other ways to fund").click();
-  await page.getByText("Signed transfer instructions").click();
   await page.getByLabel("Signer account").fill("alice.near");
   await page.getByLabel("Signed transfer (JSON)").fill("{}");
   const memo = page.getByTestId("fund-memo");
@@ -972,6 +998,73 @@ const CLAIMS = [
   }),
 ];
 
+test("dry mode shows one simulation label on each page, in its header", async ({
+  page,
+}) => {
+  const api = await mockApi(page, "dry", "https://shop.example.com/");
+  makeReady(api);
+  api.bounty.claims = CLAIMS;
+  api.bounty.ledger.push(reward(PROVEN, 900_000));
+  for (const [path, head] of [
+    ["/", ".panel-title"],
+    ["/races", ".sw-meta"],
+    ["/swarm", ".sw-meta"],
+    [`/bounties/${ID}`, ".sw-meta"],
+  ]) {
+    await page.goto(path);
+    const label = page.getByTestId("sim-label");
+    await expect(label).toHaveText("Simulation · no real money");
+    await expect(page.locator(head).getByTestId("sim-label")).toHaveCount(1);
+    // No "Simulated" tags on payment rows, not even in closed parts.
+    await expect(page.locator("body")).not.toContainText("Simulated");
+    await expect(page.locator("body")).not.toContainText("no real money —");
+  }
+});
+
+test("a done step shows one line, and its body waits behind Show", async ({
+  page,
+}) => {
+  const api = await mockApi(page, "dry", "https://shop.example.com/");
+  makeReady(api);
+  api.bounty.site_check = {
+    job_id: "j1",
+    state: "passed",
+    url: api.bounty.url,
+    reason: `Arsune loaded ${api.bounty.url} completely at 1280 and 390 pixels wide.`,
+    problems: [],
+    note: null,
+    checked_at: "2026-11-09T10:01:00Z",
+    fresh_until: null,
+  };
+  await page.goto(`/bounties/${ID}`);
+  for (const [n, title] of [
+    [1, "Prove that you own the site"],
+    [2, "Arsune loads your site"],
+  ] as const) {
+    await expect(page.getByTestId(`step-${n}-status`)).toHaveText("Done");
+    const done = page.getByTestId(`step-${n}-done`);
+    await expect(done).not.toHaveAttribute("open");
+    const line = done.locator(":scope > summary");
+    await expect(line).toContainText(title);
+    await expect(line.locator(".bo-show")).toBeVisible();
+    await expect(line.locator(".bo-hide")).toBeHidden();
+    expect((await line.boundingBox())!.height).toBeLessThan(40);
+  }
+  await expect(page.getByTestId("proof-done")).toBeHidden();
+  const again = page.getByRole("button", { name: "Check again" });
+  await expect(again).toBeHidden();
+  const line = page.getByTestId("step-2-done").locator(":scope > summary");
+  await line.click();
+  await expect(again).toBeVisible();
+  await expect(line.locator(".bo-hide")).toBeVisible();
+  await expect(line.locator(".bo-show")).toBeHidden();
+  // Steps that still need the owner keep their bodies open.
+  await expect(page.getByTestId("funded-total")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Start the race" }),
+  ).toBeVisible();
+});
+
 test("results come first, in plain words; hashes and IDs stay in Details", async ({
   page,
   context,
@@ -981,12 +1074,33 @@ test("results come first, in plain words; hashes and IDs stay in Details", async
   const api = await mockApi(page, "dry", "https://shop.example.com/");
   makeReady(api);
   api.bounty.claims = CLAIMS;
+  api.bounty.ledger.push(
+    reward(PROVEN, 900_000),
+    reward("0b5b2a37-55a9-4b39-8b0f-96f7a3e1c2d4", 900_000),
+  );
   await page.goto(`/bounties/${ID}`);
   const results = page.getByTestId("results");
   await expect(results.getByTestId("claim-result")).toHaveCount(6);
   await expect(page.getByTestId("results-summary")).toHaveText(
     "6 claims · 2 proven · 1 false · 1 repeat · 1 not checked · 1 being checked",
   );
+  // The outcome as sentences, above the list.
+  await expect(page.getByTestId("result-story")).toHaveText(
+    "Your race found 2 bugs. 2 are paid (1.80 USDC). " +
+      "1 false claim cost you nothing: its bond went into your pool. " +
+      "1 repeat got its bond back.",
+  );
+  // Proven bugs and claims being checked stay open; the other groups are closed.
+  for (const g of ["proven", "pending"])
+    await expect(
+      page.getByTestId(`group-${g}`).getByTestId("claim-title").first(),
+    ).toBeVisible();
+  for (const g of ["false", "repeat", "unchecked"]) {
+    const group = page.getByTestId(`group-${g}`);
+    await expect(group).not.toHaveAttribute("open");
+    await expect(group.locator(":scope > summary .bo-show")).toBeVisible();
+    await expect(group.getByTestId("claim-title")).toBeHidden();
+  }
   // Results sit above the steps.
   const top = (await results.boundingBox())!.y;
   expect(top).toBeLessThan((await page.getByTestId("step-1").boundingBox())!.y);
@@ -1007,6 +1121,10 @@ test("results come first, in plain words; hashes and IDs stay in Details", async
   await expect(falseClaims.getByRole("heading")).toHaveText(
     "False claims (bond lost) 1",
   );
+  await falseClaims.locator(":scope > summary").click();
+  await expect(falseClaims).toHaveAttribute("open");
+  await expect(falseClaims.locator(":scope > summary .bo-hide")).toBeVisible();
+  await expect(falseClaims.getByTestId("claim-title")).toBeVisible();
   await expect(falseClaims.getByTestId("claim-title")).toHaveText(
     "Broken link to /roi-calculator",
   );
@@ -1076,15 +1194,17 @@ test("step 4 starts the race, shows this race live, and stops it", async ({
   await page.goto(`/bounties/${ID}`);
   const step = page.getByTestId("step-4");
   await expect(page.getByTestId("step-4-status")).toHaveText("Ready to start");
-  await expect(step.getByLabel("Free scripted agents")).toBeChecked();
-  await expect(step.getByTestId("ai-option-note")).toHaveText(
-    "Adds 3 AI hunters and 1 AI scout. Arsune stops them at $0.50.",
+  // The race host has AI agents, so the owner gets a real choice.
+  await expect(step.getByRole("radio")).toHaveCount(2);
+  await expect(step.getByLabel("Standard agents (free)")).toBeChecked();
+  await expect(step.locator(".mode-options label")).toHaveText([
+    "Standard agents (free)12 hunters and 3 scouts with fixed rules.",
+    "Standard + AI agentsAI agents also search. They use model credits.",
+  ]);
+  await expect(page.getByTestId("race-hint")).toHaveText(
+    "15 agents will search shop.example.com/. You pay only for proven bugs.",
   );
-  await step
-    .getByLabel("Scripted + AI agents (max $0.50, model openai/gpt-5.6-luna)", {
-      exact: false,
-    })
-    .check();
+  await step.getByLabel("Standard + AI agents").check();
   await expect(page.getByTestId("race-hint")).toHaveText(
     "19 agents will search shop.example.com/. You pay only for proven bugs.",
   );
@@ -1116,13 +1236,6 @@ test("step 4 starts the race, shows this race live, and stops it", async ({
     CLAIMS[0],
     CLAIMS[1],
   ];
-  const reward = (claim_id: string, amount: number) => ({
-    ...fundRow(amount),
-    id: `r-${claim_id}`,
-    claim_id,
-    kind: "reward_out",
-    account: HUNTER,
-  });
   api.bounty.ledger.push(reward(PROVEN, 900_000), reward("older", 5_000_000));
   await expect(live.getByTestId("line-claims")).toHaveText("2");
   await expect(live.getByTestId("line-paid")).toHaveText("1");
@@ -1194,7 +1307,7 @@ test("a race host that refuses the start shows its reason", async ({
     expect(s.body).toEqual({ bounty_id: ID, ai_agents: false });
 });
 
-test("AI agents are off when the race host has no model key", async ({
+test("without AI agents on the race host, step 4 shows no choice and no reason", async ({
   page,
 }) => {
   const api = await mockApi(page, "dry");
@@ -1202,20 +1315,16 @@ test("AI agents are off when the race host has no model key", async ({
   api.host = host({ ai_available: false, ai_model: null });
   await page.goto(`/bounties/${ID}`);
   const step = page.getByTestId("step-4");
-  await expect(step.getByLabel(/Scripted \+ AI agents/)).toBeDisabled();
-  await expect(step.getByTestId("ai-option-note")).toHaveText(
-    "AI agents are off: this race host has no model key.",
+  await expect(page.getByTestId("step-4-status")).toHaveText("Ready to start");
+  await expect(page.getByTestId("race-hint")).toHaveText(
+    "15 agents will search 127.0.0.1:8541/shop/. You pay only for proven bugs.",
   );
-  await expect(step.getByLabel("Free scripted agents")).toBeChecked();
+  await expect(step.getByRole("radio")).toHaveCount(0);
+  await expect(step).not.toContainText("AI");
+  await expect(step).not.toContainText("model");
   await page.getByRole("button", { name: "Start the race" }).click();
   const start = api.calls.find((c) => c.path === "/swarm-api/races");
   expect(start?.body).toEqual({ bounty_id: ID, ai_agents: false });
-
-  await page.goto("/");
-  await expect(page.getByLabel(/Scripted \+ AI agents/)).toBeDisabled();
-  await expect(page.getByTestId("ai-option-note")).toHaveText(
-    "AI agents are off: this race host has no model key.",
-  );
 });
 
 test("with the race host down, step 4 says so and cannot start", async ({
@@ -1233,9 +1342,7 @@ test("with the race host down, step 4 says so and cannot start", async ({
   await expect(
     page.getByRole("button", { name: "Start the race" }),
   ).toBeDisabled();
-  await expect(page.getByTestId("ai-option-note")).toHaveText(
-    "AI agents are off: the race host is not running.",
-  );
+  await expect(page.getByTestId("step-4").getByRole("radio")).toHaveCount(0);
   expect(api.calls.some((c) => c.path === "/swarm-api/races")).toBe(false);
 });
 

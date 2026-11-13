@@ -18,7 +18,7 @@ import {
   usdc,
   utcTime,
 } from "./api";
-import { Code, Message, SimTag } from "./ui";
+import { Code, Message } from "./ui";
 
 type Refresh = () => Promise<void>;
 
@@ -126,25 +126,6 @@ export function FundStep({
     }
   }
 
-  const otherWays = (
-    <div className="bo-options">
-      <CrossChainOption
-        bounty={bounty}
-        options={options}
-        funding={funding}
-        amount={amount}
-        now={now}
-        onChange={onChange}
-      />
-      <DirectOption
-        bounty={bounty}
-        options={options}
-        amount={amount}
-        onChange={onChange}
-      />
-    </div>
-  );
-
   return (
     <>
       <div>
@@ -195,7 +176,6 @@ export function FundStep({
             >
               {busy ? "Adding…" : "Add simulated money"}
             </button>
-            <SimTag />
           </div>
         )}
       </div>
@@ -209,9 +189,7 @@ export function FundStep({
                 Money added
               </span>
               <strong>{usdc(r.amount)} USDC</strong>
-              {r.settlement_mode === "dry" ? (
-                <span className="sw-sim sw-sim-small">Simulated</span>
-              ) : r.explorer_url ? (
+              {r.settlement_mode === "dry" ? null : r.explorer_url ? (
                 <a href={r.explorer_url} target="_blank" rel="noreferrer">
                   NearBlocks
                 </a>
@@ -222,13 +200,24 @@ export function FundStep({
           ))}
         </ul>
       )}
-      {dry ? (
-        <details className="bo-details">
-          <summary>Other ways to fund</summary>
-          {otherWays}
-        </details>
-      ) : (
-        otherWays
+      {/* No real money moves in a simulation, so only simulated money funds it. */}
+      {!dry && (
+        <div className="bo-options">
+          <CrossChainOption
+            bounty={bounty}
+            options={options}
+            funding={funding}
+            amount={amount}
+            now={now}
+            onChange={onChange}
+          />
+          <DirectOption
+            bounty={bounty}
+            options={options}
+            amount={amount}
+            onChange={onChange}
+          />
+        </div>
       )}
     </>
   );
@@ -467,7 +456,6 @@ function DirectOption({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
-  const dry = bounty.settlement_mode === "dry";
   const escrow = bounty.settlement_mode === "escrow";
   // An escrow deposit goes to the contract and names the bounty in its `msg`.
   const receiver =
@@ -529,7 +517,7 @@ function DirectOption({
       <h3>NEAR wallet: signed transfer</h3>
       <Message kind="ok" text={done} testId="signed-done" />
       <Message kind="error" text={error} testId="signed-error" />
-      <details className="bo-details" open={!dry}>
+      <details className="bo-details" open>
         <summary>Signed transfer instructions</summary>
         <p className="bo-text">
           Sign a NEP-413 <code>transfer</code> intent for{" "}

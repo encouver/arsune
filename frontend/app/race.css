@@ -178,6 +178,28 @@
 .bo-group[data-group="false"] h3 {
   color: #9a2a1f;
 }
+/* A closed group: its heading and count, then "Show". */
+.bo-group > summary {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  cursor: pointer;
+  list-style: none;
+}
+.bo-group > summary::-webkit-details-marker {
+  display: none;
+}
+.bo-group[open] > summary {
+  margin-bottom: 4px;
+}
+.bo-group > summary h3 {
+  margin: 0;
+}
+.bo-story {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+}
 .bo-result-list {
   list-style: none;
   margin: 0;
@@ -271,6 +293,38 @@
 
 /* Steps on the race page. */
 .bo-step-label {
+  display: none;
+}
+/* A done step: one line with its title, "Done" and "Show". */
+.bo-done > summary {
+  flex-wrap: nowrap;
+  justify-content: flex-start;
+  cursor: pointer;
+  list-style: none;
+}
+.bo-done > summary::-webkit-details-marker {
+  display: none;
+}
+.bo-done > summary h2 {
+  margin-right: auto;
+}
+.bo-done[open] {
+  display: grid;
+  gap: 12px;
+}
+/* The word of a disclosure: "Show" while closed, "Hide" while open. */
+.bo-show,
+.bo-hide {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--green);
+  letter-spacing: 0;
+  text-transform: none;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+details:not([open]) > summary .bo-hide,
+details[open] > summary .bo-show {
   display: none;
 }
 .bo-chip-error {

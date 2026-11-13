@@ -139,7 +139,7 @@ export function RaceStep({
             href={`/swarm?bounty=${encodeURIComponent(bounty.id)}`}
             data-testid="board-link"
           >
-            Open the full live board →
+            Open the live race →
           </a>
           <button
             type="button"
@@ -209,7 +209,7 @@ export function RaceStep({
           href={`/swarm?bounty=${encodeURIComponent(bounty.id)}`}
           data-testid="board-link"
         >
-          See the last race on the live board →
+          See the last race →
         </a>
       )}
     </>
