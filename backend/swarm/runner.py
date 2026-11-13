@@ -307,6 +307,8 @@ async def wait_for_end(swarm: Swarm, tasks: list, duration: float, stop=None) ->
     while True:
         if stop is not None and stop.is_set():
             return STOPPED
+        if not tasks:
+            return "no agent ran"
         if all(task.done() for task in tasks):
             return "every agent is broke or done"
         if swarm.feed.status not in (None, "open"):
@@ -410,7 +412,7 @@ async def run(
             state.log("swarm", f"Arsune's reason: {feed.bounty.get('paused_reason')}")
         else:
             state.log("swarm", f"The swarm stops: {reason}.")
-        _, late = await asyncio.wait(tasks, timeout=20)
+        _, late = await asyncio.wait(tasks, timeout=20) if tasks else (set(), set())
         for task in late:
             task.cancel()
         await asyncio.gather(*tasks, feed_task, return_exceptions=True)
