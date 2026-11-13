@@ -4,6 +4,7 @@ import {
   agentRows,
   claimsOfAgent,
   DOT_CAP,
+  finishedStory,
   isWorking,
   latestSentence,
   lineCounts,
@@ -12,13 +13,16 @@ import {
   poolOf,
   rareText,
   resultOf,
+  resultStory,
+  runningStory,
   signedUsdc,
   stageOf,
+  withRecords,
   type LineClaim,
   type LineCounts,
   type LineLedgerRow,
 } from "../app/swarm/race-model";
-import type { Agent } from "../app/swarm/types";
+import type { Agent, HunterStat } from "../app/swarm/types";
 
 // Unit tests of the pure race model: no browser page.
 
@@ -105,17 +109,18 @@ test("lineCounts counts each claim once, by group", () => {
   });
 });
 
+const base: LineCounts = {
+  claims: 0,
+  checking: 0,
+  paid: 0,
+  lost: 0,
+  repeat: 0,
+  unchecked: 0,
+  unfunded: 0,
+  paidAmount: 0,
+};
+
 test("rareText names only the rare results that are not zero", () => {
-  const base: LineCounts = {
-    claims: 0,
-    checking: 0,
-    paid: 0,
-    lost: 0,
-    repeat: 0,
-    unchecked: 0,
-    unfunded: 0,
-    paidAmount: 0,
-  };
   expect(rareText({ ...base, unchecked: 3, unfunded: 2 })).toBe(
     "3 could not be checked · 2 proven, but the pool was empty · bond back",
   );
@@ -389,4 +394,145 @@ test("latestSentence leaves out the page when the claim has none", () => {
     expect(text).not.toMatch(/ on\s*(→|$)/);
     expect(text).not.toContain("  ");
   }
+});
+
+function record(account: string, over: Partial<HunterStat> = {}): HunterStat {
+  return {
+    account,
+    claims: 0,
+    proven: 0,
+    rejected: 0,
+    duplicate: 0,
+    unverified: 0,
+    pending: 0,
+    earned: 0,
+    bonds_lost: 0,
+    scout_earned: 0,
+    ...over,
+  };
+}
+
+test("withRecords takes money from Arsune's records and state from the race host", () => {
+  // The race host stopped counting: it says 0. Arsune's records say 2.00 earned.
+  const host = [
+    agent("hunter-01", { earned: 0, state: "done" }),
+    agent("hunter-02", { earned: 700_000, bonds_lost: 100_000 }),
+    agent("scout-01", { role: "scout", earned: 0 }),
+    agent("hunter-03", { bonds_lost: 300_000, state: "broke" }),
+  ];
+  const records = [
+    record("hunter-01.near", { earned: 2_000_000 }),
+    record("scout-01.near", { earned: 100_000, scout_earned: 400_000 }),
+    record("hunter-03.near", { bonds_lost: 300_000 }),
+  ];
+  const merged = withRecords(host, records);
+  const [hunter, unlisted, scout, broke] = merged;
+  expect(hunter).toEqual({ ...host[0], earned: 2_000_000, bonds_lost: 0 });
+  expect(agentRows(merged).earned.map((a) => a.id)).toContain("hunter-01");
+  expect(agentLabel(hunter, false)).toBe("hunter-01 · mobile · +2.00 USDC");
+  // An agent the API does not list keeps the host's numbers.
+  expect(unlisted).toEqual(host[1]);
+  // A scout's money is its own reward plus its tip shares.
+  expect(scout.earned).toBe(500_000);
+  // The state still comes from the race host.
+  expect(resultOf(broke)).toBe("broke");
+  expect(hunter.state).toBe("done");
+  expect(host[0].earned).toBe(0);
+});
+
+test("runningStory names the agents and the site", () => {
+  expect(runningStory(110, "shop.example/shop/")).toBe(
+    "110 agents search shop.example/shop/. Each claim locks a bond. Arsune checks it in a fresh browser.",
+  );
+  expect(runningStory(1, "shop.example")).toBe(
+    "1 agent searches shop.example. Each claim locks a bond. Arsune checks it in a fresh browser.",
+  );
+});
+
+test("finishedStory tells the result and leaves out false claims when there are none", () => {
+  expect(
+    finishedStory({ ...base, paid: 7, lost: 3, paidAmount: 15_400_000 }),
+  ).toBe(
+    "Race finished. 7 bugs proven and paid (15.40 USDC). 3 false claims lost their bond. False claims cost the owner nothing.",
+  );
+  expect(
+    finishedStory({ ...base, paid: 1, lost: 1, paidAmount: 2_140_000 }),
+  ).toBe(
+    "Race finished. 1 bug proven and paid (2.14 USDC). 1 false claim lost its bond. False claims cost the owner nothing.",
+  );
+  expect(finishedStory({ ...base, paid: 2, paidAmount: 4_000_000 })).toBe(
+    "Race finished. 2 bugs proven and paid (4.00 USDC).",
+  );
+  // The first result sentence stays, even at 0.
+  expect(finishedStory({ ...base, lost: 2 })).toBe(
+    "Race finished. 0 bugs proven and paid (0.00 USDC). 2 false claims lost their bond. False claims cost the owner nothing.",
+  );
+  // Repeats, unfunded and unchecked claims are not part of this line.
+  expect(finishedStory({ ...base, repeat: 4, unfunded: 1, unchecked: 2 })).toBe(
+    "Race finished. 0 bugs proven and paid (0.00 USDC).",
+  );
+});
+
+test("resultStory tells the owner the outcome, leaving out counts of 0", () => {
+  expect(
+    resultStory({
+      ...base,
+      paid: 5,
+      unfunded: 2,
+      lost: 3,
+      repeat: 4,
+      paidAmount: 11_000_000,
+    }),
+  ).toBe(
+    "Your race found 7 bugs. 5 are paid (11.00 USDC). 2 were not paid: the budget ran out. " +
+      "3 false claims cost you nothing: their bonds went into your pool. 4 repeats got their bond back.",
+  );
+  expect(
+    resultStory({
+      ...base,
+      paid: 1,
+      unfunded: 1,
+      lost: 1,
+      repeat: 1,
+      paidAmount: 2_000_000,
+    }),
+  ).toBe(
+    "Your race found 2 bugs. 1 is paid (2.00 USDC). 1 was not paid: the budget ran out. " +
+      "1 false claim cost you nothing: its bond went into your pool. 1 repeat got its bond back.",
+  );
+  expect(resultStory({ ...base, paid: 1, paidAmount: 1_000_000 })).toBe(
+    "Your race found 1 bug. 1 is paid (1.00 USDC).",
+  );
+  expect(resultStory({ ...base, lost: 2 })).toBe(
+    "Your race found 0 bugs. 2 false claims cost you nothing: their bonds went into your pool.",
+  );
+  expect(resultStory({ ...base, unchecked: 1 })).toBe(
+    "Your race found 0 bugs.",
+  );
+  // No story before a claim has a result.
+  expect(resultStory({ ...base, claims: 3, checking: 3 })).toBeNull();
+});
+
+test("the stories count with claimGroup and the summary line's money", () => {
+  const claims = [
+    claim("1", { status: "paid", outcome: "proven" }),
+    claim("2", { status: "unfunded", outcome: "proven" }),
+    claim("3", { status: "rejected", outcome: "rejected" }),
+    claim("4", { status: "duplicate", outcome: "duplicate" }),
+    claim("5", { status: "checking", outcome: null }),
+  ];
+  const ledger = [
+    row("reward_out", 1_700_000),
+    row("scout_share", 300_000),
+    row("reward_out", 900_000, { status: "pending" }),
+    row("fee", 200_000),
+  ];
+  const counts = lineCounts(claims, ledger);
+  expect(resultStory(counts)).toBe(
+    "Your race found 2 bugs. 1 is paid (2.00 USDC). 1 was not paid: the budget ran out. " +
+      "1 false claim cost you nothing: its bond went into your pool. 1 repeat got its bond back.",
+  );
+  expect(finishedStory(counts)).toBe(
+    "Race finished. 1 bug proven and paid (2.00 USDC). 1 false claim lost its bond. False claims cost the owner nothing.",
+  );
 });

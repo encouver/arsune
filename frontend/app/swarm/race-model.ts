@@ -2,7 +2,7 @@
 
 import { claimGroup, claimPage, type ClaimText } from "../claim-text";
 import { usdc } from "./format";
-import type { Agent } from "./types";
+import type { Agent, HunterStat } from "./types";
 
 export const DOT_CAP = 12;
 
@@ -156,6 +156,70 @@ export function latestSentence(
     text = `${who} proved ${title}, but the pool was empty → bond back`;
   else text = `${who}: Arsune could not check ${title} → bond back`;
   return { claimId: c.id, text };
+}
+
+// "1 bug", "3 bugs"
+function counted(n: number, one: string, many: string): string {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+/** The running race in one line. */
+export function runningStory(agents: number, site: string): string {
+  return `${counted(agents, "agent searches", "agents search")} ${site}. Each claim locks a bond. Arsune checks it in a fresh browser.`;
+}
+
+/** The finished race as sentences. The false-claim sentences are left out when none lost a bond. */
+export function finishedStory(counts: LineCounts): string {
+  const parts = [
+    "Race finished.",
+    `${counted(counts.paid, "bug", "bugs")} proven and paid (${usdc(counts.paidAmount)} USDC).`,
+  ];
+  if (counts.lost)
+    parts.push(
+      `${counted(counts.lost, "false claim lost its", "false claims lost their")} bond.`,
+      "False claims cost the owner nothing.",
+    );
+  return parts.join(" ");
+}
+
+/** The owner's outcome: null until a claim has a result. A sentence whose count is 0 is left out. */
+export function resultStory(counts: LineCounts): string | null {
+  const proven = counts.paid + counts.unfunded;
+  if (proven + counts.lost + counts.repeat + counts.unchecked === 0)
+    return null;
+  const parts = [`Your race found ${counted(proven, "bug", "bugs")}.`];
+  if (counts.paid)
+    parts.push(
+      `${counted(counts.paid, "is", "are")} paid (${usdc(counts.paidAmount)} USDC).`,
+    );
+  // An unfunded claim is never paid later: its bond is refunded and the fault stays open.
+  if (counts.unfunded)
+    parts.push(
+      `${counted(counts.unfunded, "was", "were")} not paid: the budget ran out.`,
+    );
+  if (counts.lost)
+    parts.push(
+      `${counted(counts.lost, "false claim cost you nothing: its bond", "false claims cost you nothing: their bonds")} went into your pool.`,
+    );
+  if (counts.repeat)
+    parts.push(
+      `${counted(counts.repeat, "repeat got its", "repeats got their")} bond back.`,
+    );
+  return parts.join(" ");
+}
+
+/**
+ * Money from Arsune's records for the agents it lists. The race host's counters stop when
+ * its runner stops, so they are kept only for agents that the API does not list.
+ */
+export function withRecords(agents: Agent[], hunters: HunterStat[]): Agent[] {
+  const records = new Map(hunters.map((h) => [h.account, h]));
+  return agents.map((a) => {
+    const h = records.get(a.account);
+    return h
+      ? { ...a, earned: h.earned + h.scout_earned, bonds_lost: h.bonds_lost }
+      : a;
+  });
 }
 
 export function resultOf(a: Agent): Result {
