@@ -1,10 +1,19 @@
 "use client";
 
-import type { JSX, ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type JSX,
+  type ReactNode,
+} from "react";
 import { usdc } from "./format";
 import {
+  DOT_CAP,
   latestSentence,
   lineCounts,
+  pickNewDots,
   rareText,
   signedUsdc,
   stageOf,
@@ -12,6 +21,7 @@ import {
   type LineLedgerRow,
   type NameOf,
   type Pool,
+  type Stage,
 } from "./race-model";
 
 export type RaceLineProps = {
@@ -24,7 +34,102 @@ export type RaceLineProps = {
   // true: no dots move.
   finished: boolean;
   seeAllHref: string;
+  // The bounty (or race) on show; when it changes, its claims count as old again.
+  resetKey?: string;
 };
+
+// A dot is one claim. It walks Find → Claim → Check → fork → its result row, one place
+// per step, waits where its claim waits, then fades.
+type Place = "find" | "claim" | "check" | "fork" | "end" | "gone";
+type Dot = { id: string; place: Place; stage?: Stage };
+
+const STEP_MS = 650;
+const RESULTS: Stage[] = ["paid", "lost", "repeat", "other"];
+
+function nextPlace(place: Place, stage: Stage): Place | null {
+  if (place === "find") return "claim";
+  if (place === "claim") return stage === "claim" ? "claim" : "check";
+  if (place === "check") return RESULTS.includes(stage) ? "fork" : "check";
+  if (place === "fork") return "end";
+  if (place === "end") return "gone";
+  return null;
+}
+
+// The stage is fixed when the dot reaches its row: a later change (a payment) does not move it.
+function stepDots(dots: Dot[], stages: Map<string, Stage>): Dot[] {
+  let changed = false;
+  const next: Dot[] = [];
+  for (const d of dots) {
+    const stage = d.stage ?? stages.get(d.id) ?? "other";
+    const place = nextPlace(d.place, stage);
+    if (place !== d.place) changed = true;
+    if (place === d.place) next.push(d);
+    else if (place === "end") next.push({ id: d.id, place, stage });
+    else if (place) next.push({ ...d, place });
+  }
+  return changed ? next : dots;
+}
+
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReduced(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  return reduced;
+}
+
+function useDots(claims: LineClaim[], still: boolean, resetKey?: string) {
+  const [dots, setDots] = useState<Dot[]>([]);
+  const seen = useRef<Set<string> | null>(null);
+  const key = useRef(resetKey);
+  const live = useRef(0);
+  const stages = useMemo(
+    () => new Map(claims.map((c) => [c.id, stageOf(c)])),
+    [claims],
+  );
+  const stagesRef = useRef(stages);
+
+  useEffect(() => {
+    live.current = dots.length;
+  }, [dots]);
+
+  useEffect(() => {
+    stagesRef.current = stages;
+    if (key.current !== resetKey) {
+      key.current = resetKey;
+      seen.current = null;
+      live.current = 0;
+      setDots([]);
+    }
+    const free = still ? 0 : DOT_CAP - live.current;
+    const picked = pickNewDots(seen.current, claims, free);
+    seen.current = picked.seen;
+    if (picked.fresh.length === 0) return;
+    live.current += picked.fresh.length;
+    const fresh = picked.fresh.map((id): Dot => ({ id, place: "find" }));
+    setDots((d) => [...d, ...fresh]);
+  }, [claims, stages, still, resetKey]);
+
+  useEffect(() => {
+    if (still) setDots([]);
+  }, [still]);
+
+  const moving = dots.length > 0;
+  useEffect(() => {
+    if (!moving) return;
+    const timer = setInterval(
+      () => setDots((d) => stepDots(d, stagesRef.current)),
+      STEP_MS,
+    );
+    return () => clearInterval(timer);
+  }, [moving]);
+
+  return { dots: still ? [] : dots, stages };
+}
 
 export function PoolBar({ pool }: { pool: Pool }): JSX.Element | null {
   if (pool.fraction === null) return null;
@@ -119,8 +224,12 @@ export default function RaceLine({
   agentCount,
   nameOf,
   titleOf,
+  finished,
   seeAllHref,
+  resetKey,
 }: RaceLineProps): JSX.Element {
+  const reduced = useReducedMotion();
+  const { dots, stages } = useDots(claims, finished || reduced, resetKey);
   const counts = lineCounts(claims, ledger);
   const rare = rareText(counts);
   const latest = latestSentence(claims, ledger, nameOf, titleOf);
@@ -196,6 +305,22 @@ export default function RaceLine({
             testId="line-repeat"
           />
         </ul>
+        {dots.length > 0 && (
+          <div className="rv-dots">
+            {dots.map((d) => (
+              <span
+                key={d.id}
+                className="rv-dot"
+                data-testid="race-dot"
+                data-claim-id={d.id}
+                data-stage={d.stage ?? stages.get(d.id) ?? "other"}
+                data-place={d.place}
+              >
+                <i />
+              </span>
+            ))}
+          </div>
+        )}
         {rare && (
           <p className="rv-rare" data-testid="line-rare">
             <i className="rv-swatch" />

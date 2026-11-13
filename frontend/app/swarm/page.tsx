@@ -469,6 +469,7 @@ export default function SwarmPage() {
               titleOf={titleOf}
               finished={finished || !swarm}
               seeAllHref="#claims"
+              resetKey={bounty.id}
             />
           </section>
         )}

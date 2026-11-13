@@ -225,26 +225,30 @@ async function mock(
   page: Page,
   opts: {
     mode?: Mode;
-    swarm?: unknown | null;
+    // A function is called on each poll; null answers 502.
+    swarm?: unknown | null | (() => unknown | null);
     fail?: () => boolean;
-    bounty?: Record<string, unknown>;
+    bounty?: Record<string, unknown> | (() => Record<string, unknown>);
   } = {},
 ) {
   const mode = opts.mode ?? "dry";
   await page.route("**/swarm-state", (route) => {
-    if (opts.fail?.() || opts.swarm === null)
+    const sw = typeof opts.swarm === "function" ? opts.swarm() : opts.swarm;
+    if (opts.fail?.() || sw === null)
       return route.fulfill({
-        status: opts.swarm === null ? 502 : 500,
+        status: sw === null ? 502 : 500,
         body: "down",
       });
-    return route.fulfill({ json: opts.swarm ?? swarm() });
+    return route.fulfill({ json: sw ?? swarm() });
   });
   await page.route("**/api/bounties", (route) =>
     route.fulfill({ json: { items: [bounty(mode)], settlement_mode: mode } }),
   );
   await page.route("**/api/bounties/*", (route) => {
     if (opts.fail?.()) return route.fulfill({ status: 500, body: "down" });
-    return route.fulfill({ json: { ...bounty(mode), ...opts.bounty } });
+    const over =
+      typeof opts.bounty === "function" ? opts.bounty() : opts.bounty;
+    return route.fulfill({ json: { ...bounty(mode), ...over } });
   });
 }
 
@@ -361,6 +365,128 @@ test("the header says the race state in few words", async ({ page }) => {
   await expect(page.getByText("Race running · 12 agents")).toBeVisible();
   await expect(page.getByText("Live swarm board")).toHaveCount(0);
   await expect(page.locator("h1")).toHaveText("shop.example");
+});
+
+// A claim the race makes after the page loaded.
+function newClaim(i: number, over: Record<string, unknown> = {}) {
+  return {
+    ...bounty("dry").claims[1],
+    id: `n${i}`,
+    status: "received",
+    outcome: null,
+    checker_reason: null,
+    created_at: `2026-11-09T10:${String(10 + i).padStart(2, "0")}:00Z`,
+    ...over,
+  };
+}
+
+test("old claims make no dots on first load", async ({ page }) => {
+  let polls = 0;
+  const old = bounty("dry").claims;
+  await mock(page, {
+    bounty: () => {
+      polls++;
+      return { claims: [...old, { ...old[1], id: "c3", status: "duplicate" }] };
+    },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("line-claims")).toHaveText("3");
+  await expect.poll(() => polls).toBeGreaterThanOrEqual(3);
+  await expect(page.getByTestId("race-dot")).toHaveCount(0);
+});
+
+test("a new claim makes one dot that ends in its result", async ({ page }) => {
+  let polls = 0;
+  const old = bounty("dry").claims;
+  await mock(page, {
+    bounty: () => {
+      polls++;
+      if (polls <= 1) return {};
+      if (polls <= 4) return { claims: [newClaim(1), ...old] };
+      return {
+        claims: [newClaim(1, { status: "paid", outcome: "proven" }), ...old],
+      };
+    },
+  });
+  await page.goto("/swarm");
+  const dot = page.locator('[data-testid="race-dot"][data-claim-id="n1"]');
+  await expect(dot).toHaveCount(1);
+  await expect(dot).toHaveAttribute("data-stage", "claim");
+  await expect(dot).toHaveAttribute("data-stage", "paid");
+  await expect(dot).toHaveCount(0);
+  await expect(page.getByTestId("line-paid")).toHaveText("2");
+  await expect(page.getByTestId("race-dot")).toHaveCount(0);
+});
+
+test("at most 12 dots move at once", async ({ page }) => {
+  let polls = 0;
+  const old = bounty("dry").claims;
+  const many = Array.from({ length: 20 }, (_, i) => newClaim(i));
+  await mock(page, {
+    bounty: () => (++polls <= 1 ? {} : { claims: [...many, ...old] }),
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("line-claims")).toHaveText("22");
+  const dots = page.getByTestId("race-dot");
+  await expect.poll(() => dots.count()).toBeGreaterThan(0);
+  for (let i = 0; i < 3; i++) {
+    const at = polls;
+    await expect.poll(() => polls).toBeGreaterThan(at);
+    expect(await dots.count()).toBeLessThanOrEqual(12);
+  }
+  await expect(dots).toHaveCount(12);
+});
+
+test("no dots move with reduced motion", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  let polls = 0;
+  const old = bounty("dry").claims;
+  await mock(page, {
+    bounty: () =>
+      ++polls <= 1 ? {} : { claims: [newClaim(1), newClaim(2), ...old] },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("line-claims")).toHaveText("4");
+  const at = polls;
+  await expect.poll(() => polls).toBeGreaterThan(at + 1);
+  await expect(page.getByTestId("race-dot")).toHaveCount(0);
+});
+
+test("no dots move when the race is finished", async ({ page }) => {
+  let polls = 0;
+  const old = bounty("dry").claims;
+  await mock(page, {
+    swarm: { ...swarm(), finished: true },
+    bounty: () =>
+      ++polls <= 1 ? {} : { claims: [newClaim(1), newClaim(2), ...old] },
+  });
+  await page.goto("/swarm");
+  await expect(page.getByText("Race finished")).toBeVisible();
+  await expect(page.getByTestId("line-claims")).toHaveText("4");
+  const at = polls;
+  await expect.poll(() => polls).toBeGreaterThan(at + 1);
+  await expect(page.getByTestId("race-dot")).toHaveCount(0);
+});
+
+test("switching bounty makes no dots for its old claims", async ({ page }) => {
+  let polls = 0;
+  let switched = false;
+  const other = Array.from({ length: 5 }, (_, i) =>
+    newClaim(i, { id: `b2-${i}`, status: "rejected", outcome: "rejected" }),
+  );
+  await mock(page, {
+    swarm: () => {
+      switched = ++polls > 2;
+      return { ...swarm(), bounty_id: switched ? "b2" : "b1" };
+    },
+    bounty: () => (switched ? { id: "b2", claims: other } : {}),
+  });
+  await page.goto("/swarm");
+  await expect(page.getByTestId("line-claims")).toHaveText("2");
+  await expect(page.getByTestId("line-claims")).toHaveText("5");
+  const at = polls;
+  await expect.poll(() => polls).toBeGreaterThan(at + 1);
+  await expect(page.getByTestId("race-dot")).toHaveCount(0);
 });
 
 test("near_intents mode links real payments to NearBlocks only", async ({

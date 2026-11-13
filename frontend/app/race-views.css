@@ -80,6 +80,20 @@
 .rv-stage {
   --rv-res: 270px;
   --rv-y: 87px;
+  /* Where a dot sits at each place. In a dot, 100% is the width of the stage. */
+  --x-find: 80px;
+  --x-claim: calc(80px + (100% - var(--rv-res) - 80px) * 0.38);
+  --x-check: calc(80px + (100% - var(--rv-res) - 80px) * 0.76);
+  --x-fork: calc(80px + (100% - var(--rv-res) - 80px) * 0.88);
+  --x-end: calc(100% - var(--rv-res) + 6px);
+  --y-find: 87px;
+  --y-claim: 87px;
+  --y-check: 87px;
+  --y-fork: 87px;
+  --y-paid: 29px;
+  --y-lost: 87px;
+  --y-repeat: 145px;
+  --y-other: 183px;
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--rv-res);
@@ -223,6 +237,89 @@
   box-shadow: inset 0 0 0 2px var(--rv-grey);
 }
 
+/* Dots: each one is a real claim. The step circles sit above them. */
+.rv-dots {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+.rv-dot {
+  --dx: var(--x-find);
+  --dy: var(--y-find);
+  position: absolute;
+  inset: 0;
+  transform: translate(var(--dx), var(--dy));
+  transition:
+    transform 0.6s ease-in-out,
+    opacity 0.5s ease-out;
+  animation: rv-in 0.4s ease-out;
+}
+.rv-dot i {
+  position: absolute;
+  left: -6px;
+  top: -6px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--rv-gold);
+  transition: background-color 0.4s;
+}
+.rv-dot[data-place="find"] i {
+  background: var(--ink);
+}
+.rv-dot[data-place="claim"] {
+  --dx: var(--x-claim);
+  --dy: var(--y-claim);
+}
+.rv-dot[data-place="check"] {
+  --dx: var(--x-check);
+  --dy: var(--y-check);
+}
+.rv-dot[data-place="fork"] {
+  --dx: var(--x-fork);
+  --dy: var(--y-fork);
+}
+.rv-dot[data-place="end"],
+.rv-dot[data-place="gone"] {
+  --dx: var(--x-end);
+  --dy: var(--y-other);
+}
+.rv-dot[data-place="gone"] {
+  opacity: 0;
+}
+.rv-dot[data-place="end"][data-stage="paid"],
+.rv-dot[data-place="gone"][data-stage="paid"] {
+  --dy: var(--y-paid);
+}
+.rv-dot[data-place="end"][data-stage="lost"],
+.rv-dot[data-place="gone"][data-stage="lost"] {
+  --dy: var(--y-lost);
+}
+.rv-dot[data-place="end"][data-stage="repeat"],
+.rv-dot[data-place="gone"][data-stage="repeat"] {
+  --dy: var(--y-repeat);
+}
+.rv-dot[data-place="end"] i,
+.rv-dot[data-place="gone"] i,
+.rv-dot[data-stage="repeat"]:not([data-place="find"], [data-place="claim"]) i {
+  background: var(--rv-grey);
+}
+.rv-dot[data-place="end"][data-stage="paid"] i,
+.rv-dot[data-place="gone"][data-stage="paid"] i {
+  background: var(--rv-paid);
+}
+.rv-dot[data-place="end"][data-stage="lost"] i,
+.rv-dot[data-place="gone"][data-stage="lost"] i {
+  background: var(--rv-lost);
+}
+@keyframes rv-in {
+  from {
+    opacity: 0;
+  }
+}
+
 /* Visually hidden: the line as text for screen readers. */
 .rv-sr {
   position: absolute;
@@ -290,6 +387,19 @@
 @container rv-line (max-width: 720px) {
   .rv-stage {
     grid-template-columns: minmax(0, 1fr);
+    --x-find: 22px;
+    --x-claim: 22px;
+    --x-check: 22px;
+    --x-fork: 22px;
+    --x-end: 22px;
+    --y-find: 32px;
+    --y-claim: 96px;
+    --y-check: 160px;
+    --y-fork: 192px;
+    --y-paid: 212px;
+    --y-lost: 252px;
+    --y-repeat: 292px;
+    --y-other: 321px;
   }
   .rv-stage::before {
     content: "";
