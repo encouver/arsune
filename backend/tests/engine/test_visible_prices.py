@@ -14,6 +14,9 @@ from app.browser.observations import observe_page
 from app.browser.session import inspection_browser
 from app.core.scan import VIEWPORTS
 from app.workers.workflow import run_scan
+from ports import free_port
+
+PORT = free_port()
 
 
 @pytest.fixture(scope="module")
@@ -21,10 +24,10 @@ def price_site():
     from app.core.config import settings
 
     previous = settings.demo_url
-    settings.demo_url = "http://127.0.0.1:18547"
+    settings.demo_url = f"http://127.0.0.1:{PORT}"
     with subprocess.Popen(
         [sys.executable, "-m", "app.demo"],
-        env={**os.environ, "ARSUNE_DEMO_PORT": "18547"},
+        env={**os.environ, "ARSUNE_DEMO_PORT": str(PORT)},
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     ) as process:

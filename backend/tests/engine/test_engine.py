@@ -12,6 +12,9 @@ from app.agents.model import ModelConfigurationError, generate_candidates
 from app.browser.policy import TargetPolicyError, validate_target
 from app.core.scan import VIEWPORTS
 from app.workers.workflow import run_scan
+from ports import free_port
+
+PORT = free_port()
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -19,8 +22,8 @@ def demo_server():
     from app.core.config import settings
 
     old_demo = settings.demo_url
-    settings.demo_url = "http://127.0.0.1:18541"
-    environment = {**os.environ, "ARSUNE_DEMO_PORT": "18541"}
+    settings.demo_url = f"http://127.0.0.1:{PORT}"
+    environment = {**os.environ, "ARSUNE_DEMO_PORT": str(PORT)}
     with subprocess.Popen(
         [sys.executable, "-m", "app.demo"],
         stdout=subprocess.DEVNULL,
@@ -29,7 +32,7 @@ def demo_server():
     ) as process:
         for _ in range(50):
             try:
-                if httpx.get("http://127.0.0.1:18541/faulty/", timeout=0.2).status_code == 200:
+                if httpx.get(f"http://127.0.0.1:{PORT}/faulty/", timeout=0.2).status_code == 200:
                     break
             except httpx.HTTPError:
                 time.sleep(0.1)
@@ -45,7 +48,7 @@ def demo_server():
 async def test_real_browser_faults_rejection_cap_and_corrected(demo_server, tmp_path):
     snapshots = []
     report = await run_scan(
-        "http://127.0.0.1:18541/faulty/",
+        f"http://127.0.0.1:{PORT}/faulty/",
         tmp_path / "faulty",
         inject_demo_false_positive=True,
         save_checkpoint=lambda state: snapshots.append(copy.deepcopy(state)),
@@ -69,14 +72,14 @@ async def test_real_browser_faults_rejection_cap_and_corrected(demo_server, tmp_
             assert (tmp_path / "faulty" / evidence["screenshot"]).is_file()
     assert all(o["url"] in report["inspected_pages"] for o in report["observations"])
     resumed = await run_scan(
-        "http://127.0.0.1:18541/faulty/",
+        f"http://127.0.0.1:{PORT}/faulty/",
         tmp_path / "faulty",
         inject_demo_false_positive=True,
         checkpoint=snapshots[-1],
     )
     assert [f["id"] for f in resumed["findings"]] == [f["id"] for f in report["findings"]]
     assert resumed["coverage"]["requests"] == report["coverage"]["requests"]
-    corrected = await run_scan("http://127.0.0.1:18541/corrected/", tmp_path / "corrected")
+    corrected = await run_scan(f"http://127.0.0.1:{PORT}/corrected/", tmp_path / "corrected")
     assert corrected["confirmed"] == []
     (tmp_path / "faulty-report.json").write_text(json.dumps(report, indent=2))
 
@@ -87,7 +90,7 @@ async def test_real_browser_faults_rejection_cap_and_corrected(demo_server, tmp_
         "file:///etc/passwd",
         "http://user:secret@example.com",
         "http://127.0.0.1:8542/",
-        "http://localhost:18541/",
+        f"http://localhost:{PORT}/",
         "http://169.254.169.254/",
         "http://[::1]/",
     ],
@@ -99,20 +102,20 @@ async def test_policy_rejects_private_and_unsafe(url):
 
 async def test_policy_demo_exact_origin():
     assert (
-        await validate_target("http://127.0.0.1:18541/faulty/#here")
-        == "http://127.0.0.1:18541/faulty/"
+        await validate_target(f"http://127.0.0.1:{PORT}/faulty/#here")
+        == f"http://127.0.0.1:{PORT}/faulty/"
     )
 
 
 async def test_browser_redirect_and_subresource_policy(demo_server, tmp_path):
     redirect = await run_scan(
-        "http://127.0.0.1:18541/faulty/redirect-private", tmp_path / "redirect"
+        f"http://127.0.0.1:{PORT}/faulty/redirect-private", tmp_path / "redirect"
     )
     assert redirect["confirmed"] == []
     assert "http://127.0.0.1:8542/internal" in redirect["coverage"]["blocked_requests"]
     assert redirect["coverage"]["incomplete_pages"]
     resource = await run_scan(
-        "http://127.0.0.1:18541/faulty/resource-policy", tmp_path / "resource"
+        f"http://127.0.0.1:{PORT}/faulty/resource-policy", tmp_path / "resource"
     )
     assert "http://127.0.0.1:8542/internal" in resource["coverage"]["blocked_requests"]
 
@@ -257,7 +260,7 @@ async def test_uncertain_model_reservation_is_not_repeated(demo_server, tmp_path
         return [], {}
 
     monkeypatch.setattr(specialists, "generate_candidates", fake_provider)
-    url = "http://127.0.0.1:18541/faulty/healthy"
+    url = f"http://127.0.0.1:{PORT}/faulty/healthy"
     state = {
         "selected": [url],
         "observations": [{"url": url, "viewport": viewport} for viewport in VIEWPORTS.values()],
@@ -302,7 +305,7 @@ async def test_model_does_not_see_page_loads_that_arsune_did_not_complete(monkey
 
 
 async def test_exhausted_request_budget_survives_resume(demo_server, tmp_path):
-    url = "http://127.0.0.1:18541/faulty/"
+    url = f"http://127.0.0.1:{PORT}/faulty/"
     state = {
         "selected": [url],
         "observations": [],
@@ -407,6 +410,6 @@ async def test_scan_completes_when_every_model_suggestion_is_invalid(
         return [suggestion(urls=["http://private/"])], {"reserved_cost_usd": 0}
 
     monkeypatch.setattr(specialists, "generate_candidates", invalid)
-    report = await run_scan("http://127.0.0.1:18541/faulty/", tmp_path, mode="model")
+    report = await run_scan(f"http://127.0.0.1:{PORT}/faulty/", tmp_path, mode="model")
     assert report["confirmed"] == []
     assert report["coverage"]["dropped_suggestions"] == 3
