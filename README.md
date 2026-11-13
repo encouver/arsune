@@ -76,6 +76,7 @@ The full rules are in [RULES.md](RULES.md#bug-bounty-market). In short:
 - Five bug types are provable: a broken internal link, horizontal overflow at a 390-pixel phone viewport, a price mismatch for one matched product, a broken image, and an uncaught error on page load from the site's own scripts.
 - The first proven claim for a fault wins. A fault is named by its claim type, the final URLs that the checker reached, and its details, not by the hunter.
 - If a payment result is unknown, the claim goes to operator review and the money stays held. There is no automatic retry.
+- Arsune earns a 10% fee on each proven bug, and a planned monthly price of $10 per site pays for the servers. Costs and break-even are in [docs/BUSINESS.md](docs/BUSINESS.md).
 
 ### Reputation bonds
 
