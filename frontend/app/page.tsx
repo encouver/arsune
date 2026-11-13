@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation";
 import { FormEvent, ReactNode, useEffect, useState } from "react";
-import AgentChoice from "./bounties/agent-choice";
 import {
   ACCOUNT,
   api,
@@ -15,7 +14,6 @@ import {
   usdc,
 } from "./bounties/api";
 import { Message, SimTag } from "./bounties/ui";
-import { getHost, type Host } from "./race-host";
 import SiteHeader from "./site-header";
 
 type Form = {
@@ -60,9 +58,7 @@ export default function StartRacePage() {
   const router = useRouter();
   const [options, setOptions] = useState<Options | null>(null);
   const [optionsError, setOptionsError] = useState<string | null>(null);
-  const [host, setHost] = useState<Host | null | undefined>(undefined);
   const [form, setForm] = useState<Form>(START);
-  const [ai, setAi] = useState(false);
   const [advanced, setAdvanced] = useState(false);
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -72,7 +68,6 @@ export default function StartRacePage() {
     api<Options>("/api/funding/options")
       .then(setOptions)
       .catch((e) => setOptionsError(errorText(e)));
-    getHost().then(setHost);
   }, []);
 
   const issues = problems(form);
@@ -103,7 +98,7 @@ export default function StartRacePage() {
         bond_amount: parseUsdc(form.bond),
         budget: parseUsdc(form.budget),
       });
-      router.push(`/bounties/${bounty.id}${ai ? "?agents=ai" : ""}`);
+      router.push(`/bounties/${bounty.id}`);
     } catch (err) {
       setError(errorText(err));
       setBusy(false);
@@ -156,32 +151,39 @@ export default function StartRacePage() {
               <span className="short-line" /> PROOF-PAID BUG RACE
             </p>
             <h1>
-              Find the bugs your visitors hit.
+              AI builds sites fast. Bugs ship with them.
               <br />
-              <span>Pay only for bugs Arsune proves.</span>
+              <span>Let agents race to find them. Pay only for proof.</span>
             </h1>
             <p className="lead">
-              Agents search your site and claim bugs. Arsune checks each claim
-              again in a fresh browser. A false claim costs the agent its bond.
-              It costs you nothing.
+              Agents search your site and claim bugs. Each claim locks a bond, a
+              small deposit. Arsune checks every claim again in a fresh browser.
+              You pay only for bugs it proves.
             </p>
             <ol className="start-steps" aria-label="How a race works">
               <li>
-                <strong>Arsune loads your site</strong>
-                <span>On desktop and mobile, before any agent starts.</span>
+                <strong>Fund a bounty pool</strong>
+                <span>
+                  You set the reward per bug. Nothing is paid until a bug is
+                  proven.
+                </span>
               </li>
               <li>
-                <strong>Agents search</strong>
-                <span>Each claim needs a bond from the agent.</span>
+                <strong>Agents race</strong>
+                <span>Hunters claim bugs. Scouts sell tips to hunters.</span>
               </li>
               <li>
                 <strong>Arsune checks each claim</strong>
                 <span>
-                  Proven bugs get paid. False claims lose the bond. Repeats get
-                  the bond back.
+                  Proven: the agent is paid. False: the agent loses its bond,
+                  and the bond goes into your pool. Repeat: the bond comes back.
                 </span>
               </li>
             </ol>
+            <p className="start-outcome" data-testid="start-outcome">
+              You get a list of proven bugs, each with evidence that anyone can
+              check again.
+            </p>
           </div>
 
           <div className="scan-panel start-panel">
@@ -222,7 +224,6 @@ export default function StartRacePage() {
                   aria-invalid={!!shown.owner}
                 />,
               )}
-              <AgentChoice host={host} ai={ai} onChange={setAi} />
               <details
                 className="bo-details start-advanced"
                 open={advanced}
@@ -292,12 +293,11 @@ export default function StartRacePage() {
                       }))
                     }
                   >
-                    Use the local demo shop
+                    Try the demo shop
                   </button>
                 </div>
-                <small>
-                  A small shop with known bugs. Arsune can set its proof for
-                  you.
+                <small data-testid="demo-hint">
+                  A small shop with known bugs. Arsune sets the proof for you.
                 </small>
               </div>
             )}
