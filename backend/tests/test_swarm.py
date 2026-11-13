@@ -1538,6 +1538,18 @@ def gallery_seen():
     return page
 
 
+async def test_an_ai_summary_says_an_image_with_http_200_did_not_decode():
+    model = FakeModel(lambda system, user: json.dumps({"claims": []}))
+    swarm, hunter, log = ai_hunter(model)
+    page = gallery_seen()
+    page.images = [{"url": IMG, "shown": True, "status": 200}]
+    hunter.notebook.add(page)
+    await hunter.consult([])
+    user = model.requests[0]["messages"][1]["content"]
+    assert "I1 /site/img/dashboard.png answered HTTP 200 but did not decode" in user
+    assert "HTTP 200 shown" not in user
+
+
 async def test_an_ai_hunter_claims_a_broken_image_and_a_page_error():
     claims = [
         {"type": "broken_image", "page": "p3", "image": "I1", "why": "dashboard.png answers 404"},

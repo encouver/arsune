@@ -313,12 +313,15 @@ def describe(seen: Seen, notebook: Notebook, claimed: tuple[set, set]) -> str:
     images = []
     for image in seen.images:
         key = fingerprint("broken_image", [url], {"page": url, "image": image["url"]})
-        answer = f"HTTP {image['status']}" if image["status"] else "no answer"
+        status = image["status"]
         shown = "shown" if image["shown"] else "hidden"
+        if status and 200 <= status < 300:
+            # "HTTP 200 shown" read as "not broken" to models; say the bytes did not decode.
+            answer = f"answered HTTP {status} but did not decode, {shown}"
+        else:
+            answer = f"HTTP {status} {shown}" if status else f"no answer {shown}"
         mark = " (claimed)" if key in keys else ""
-        images.append(
-            f"{notebook.id('I', image['url'])} {path(image['url'])} {answer} {shown}{mark}"
-        )
+        images.append(f"{notebook.id('I', image['url'])} {path(image['url'])} {answer}{mark}")
     if images:
         lines.append("  images that do not load: " + "; ".join(images))
     errors = []
