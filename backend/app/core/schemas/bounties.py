@@ -32,7 +32,7 @@ class CreateBounty(BaseModel):
     fee_bps: int = Field(1000, strict=True, ge=0, le=10_000)
     budget: Amount
     # Earlier bounties of the same owner: their proof token can serve this one.
-    reuse_proof: list[ReuseProof] = Field(default_factory=list, max_length=10)
+    reuse_proof: list[ReuseProof] = Field(default_factory=list, max_length=100)
 
 
 class FundBounty(BaseModel):

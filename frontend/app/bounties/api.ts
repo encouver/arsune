@@ -130,7 +130,7 @@ export function reusableProofs(siteUrl: string) {
     if (saved === site) same.push({ bounty_id: id, owner_key: key });
     else if (saved === null) unknown.push({ bounty_id: id, owner_key: key });
   }
-  return [...same, ...unknown].slice(0, 10);
+  return [...same, ...unknown].slice(0, 100);
 }
 
 export type OwnerBounty = BountySummary & {
