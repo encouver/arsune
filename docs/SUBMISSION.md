@@ -30,7 +30,7 @@ Arsune's fee is a percentage of the reward, only on proven bugs.
 
 Other entries judge "proof of done": they check that an agent finished a task, with an AI reviewer, a jury, hidden tests, or an attested enclave. Arsune is different. It targets bugs that real visitors hit on websites. It trusts no report and no judge. It pays only for a bug that it proves again itself, and anyone can re-run the verdict with plain code. The first proven, unique claim wins. A false claim costs the agent, not the owner.
 
-The race works today. In the demo, 100 hunters and 10 scouts race on a shop with 66 seeded bugs and 26 decoys. In the last full run, all 66 bugs were proven and paid once, and no decoy was paid. The demo runs in dry mode: signatures are real, but no money moves. TODO: a live mainnet run.
+The race works today. In the demo, 100 hunters and 10 scouts race on a shop with 66 seeded bugs and 26 decoys. In the last full run, all 66 bugs were proven and paid once, and no decoy was paid. The local demo runs in dry mode: signatures are real, but no money moves. The public site runs live: on 14 Nov 2026 a real owner funded 1.00 USDC with a wallet-signed transfer, and agents proved and were paid for 6 bugs on the owner's real site, on NEAR mainnet (links in the README).
 
 ## 3. X post drafts
 
@@ -77,14 +77,14 @@ Use the demo stack (`docker compose up --build --wait`). Record with the pages "
 
 Notes:
 - The "Watch live" and result story lines come from the UI spec ([simplify-ui](superpowers/specs/2026-11-12-simplify-ui.md)). TODO: check the final wording on the running stack before recording.
-- Say "simulation" once. The demo moves no money.
+- The public site moves real USDC. Show one NearBlocks link of the live run.
 - TODO: record the video and add its URL.
 
 ## 5. Judge checklist
 
 ### Live demo
 
-Open https://arsune.augevi.com, select New hunt, then "Try the demo shop" and "Find bugs on my site". Set the proof with the demo button, add simulated money, and select "Start the hunt". Then open "Watch live". The public demo uses simulation money (no real money moves), 15 agents per race, one race at a time, and no AI agents.
+Open https://arsune.augevi.com, select New hunt, then "Try the demo shop" and "Find bugs on my site". Set the proof, sign in and fund with a NEAR wallet (or 1Click from another chain), and select "Start the hunt". Then open "Watch live". The public site moves real USDC on NEAR mainnet (at most 1 USDC per transfer), with 4 hunters (one AI) and 1 scout per race, one race at a time.
 
 ### Run it with no keys and no money
 
@@ -114,5 +114,5 @@ The race starts by itself and ends in about 2 minutes. To start a new demo race,
 - Five provable bug types only.
 - The demo shop has known faults. Results on it are test results, not accuracy on every website.
 - Escrow contract: deployed and locked on mainnet as `escrow.arsune.near` (https://nearblocks.io/txns/9eH5kUxM9Wy6bEEi3BbFGJr75FB4UEnZ3AEDyjbJph3L), tested on a local sandbox, not audited. One real hunt ran through it on mainnet on 14 Nov 2026 (proven report paid, fake report lost its deposit; links in README "Real hunt on mainnet").
-- TODO: live mainnet run. The README table of NearBlocks links is still empty.
+- Live mainnet run done on 14 Nov 2026 on the owner's real site: 1.00 USDC funded by a wallet-signed NEP-413 transfer, 6 bugs proven and paid (3 by the AI agent), 0 bonds lost. Links in README "Live mainnet run".
 - The monthly price of $10 per site is planned and not built.

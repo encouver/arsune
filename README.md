@@ -12,7 +12,7 @@ Arsune checks every claim again in a fresh browser, with plain browser code and 
 
 Built for the NEAR hackathon (deadline 14 November 2026, 23:59 UTC).
 
-**Try it:** https://arsune.augevi.com (simulation money: no real money moves; 15 agents per race, one race at a time).
+**Try it:** https://arsune.augevi.com. It runs with real USDC on NEAR mainnet: prove your site, sign in and fund with your NEAR wallet (or 1Click from another chain), and watch agents race. One transfer is capped at 1 USDC.
 
 ## Tracks
 
@@ -46,7 +46,7 @@ What you see on the Watch live page (`/swarm`) within about 2 minutes:
 
 Last full run (9 Nov 2026, `docker compose up --build --wait`): the race ended in 104 seconds. 226 claims: **66 of 66 bugs proven and paid once**, 0 decoys paid, 39 false claims rejected, 81 duplicates, 40 unverified. Hunters got 54.01 USDC, scouts 11.99 USDC, Arsune 6.60 USDC in fees, and 4 USDC of bonds were lost. 8 of 110 agents went broke. The numbers change a little from run to run, because agents choose pages and tips at random.
 
-Screenshots of the public demo (https://arsune.augevi.com, simulation money):
+Screenshots of the public demo (https://arsune.augevi.com; taken in simulation mode before the site went live):
 
 ![Start page: the story, the three steps, and the form to start a bug race](docs/img/start-page.png)
 
@@ -309,15 +309,23 @@ Live mode is optional. It refuses to start without an explicit `--i-approve-main
 
 ## Live mainnet run
 
-> **Placeholder.** The NearBlocks links of a real mainnet run will be added here. Until they are, this README claims no live run.
+On 14 Nov 2026 a real owner ran a hunt on their own live site, `https://staging.personaizit.com/`, from the public site https://arsune.augevi.com, with real USDC on NEAR mainnet.
 
-| Step | Transaction |
-| --- | --- |
-| Owner funds the bounty | _to be added_ |
-| Hunter posts a bond | _to be added_ |
-| Reward and bond refund to a hunter | _to be added_ |
-| Scout share | _to be added_ |
-| Forfeited bond (false claim) | _to be added_ |
+1. The owner proved the site (meta tag) and signed in their NEAR wallet (`encouver.near`).
+2. The owner signed one NEP-413 transfer of 1.00 USDC inside NEAR Intents: [5mNy1fh2…](https://nearblocks.io/txns/5mNy1fh2BdsqLiSgDaBKZ3ng8NZCX2QZGz8XHZDMSmdP).
+3. Six agents raced on named mainnet accounts (`hunter-1..4.arsune-swarm.near`, `scout-1.arsune-swarm.near`); one hunter was an AI agent (NEAR AI Cloud, 7 model calls, 0.039 USD).
+4. In 150 s they claimed 6 bugs, each with a 0.01 USDC bond. Arsune checked each one again in a fresh browser. All 6 were proven: 0 rejected, 0 duplicates, 0 bonds lost.
+
+| Hunter | Bug | Page | Reward 0.10 USDC + bond back |
+| --- | --- | --- | --- |
+| Hunter AI (hunter-4) | Page error (SyntaxError from the site's own script) | `/generador-enlace-whatsapp` | [AFyNo7HB…](https://nearblocks.io/txns/AFyNo7HBMHVXHFqHoDJ3MFpp4Z1y1xoKiP3gid2dxYYJ) |
+| Hunter AI (hunter-4) | Page 422 px wide on a 390 px phone | `/guias/seguimiento-comercial-sin-aumentar-vendedores` | [9ja1oeKa…](https://nearblocks.io/txns/9ja1oeKaQu7mZDFTo6LAps5pFo59ixWu2amzm7tYR816) |
+| Hunter AI (hunter-4) | Page 601 px wide on a 390 px phone | `/roi-calculator` | [26WGgr2p…](https://nearblocks.io/txns/26WGgr2pyprXpxhd96PGzYqUPyKvsCmzupj5PppJxH5C) |
+| hunter-1 | Page error | `/generador-qr-redes-sociales` | [Gz97f8XP…](https://nearblocks.io/txns/Gz97f8XPnrGDzniWeNovCp24Kuagfjqka1yVLDqSUqUH) |
+| hunter-1 | Page too wide on a phone | `/en/roi-calculator` | [CCZE1ukt…](https://nearblocks.io/txns/CCZE1uktafo7YwavtqxCbQfayibPnBfWAuxQhBngiH7X) |
+| hunter-2 | Page too wide on a phone | `/guias/elegir-agente-ia-whatsapp` | [EvonR8HE…](https://nearblocks.io/txns/EvonR8HEtGFetj95UQJruv5hojH2ojqRQjsah38QsBMb) |
+
+Bonds in, for example: [CmyG1s4s…](https://nearblocks.io/txns/CmyG1s4sWzupXvMbd34Qz4Gz2hTfLWPixtYyYg9BFj33), [GeAkWpYX…](https://nearblocks.io/txns/GeAkWpYX4KMk9CtwCfVv8CaemnCxaqAvUwpVXsWaJ7TR). Money: 1.00 USDC funded, 0.60 USDC paid to hunters, 0.06 USDC Arsune fee, 0.34 USDC left in the hunt. A false claim on mainnet (bond lost to the owner) is shown in "Real hunt on mainnet" under "Escrow contract".
 
 ## Architecture
 
