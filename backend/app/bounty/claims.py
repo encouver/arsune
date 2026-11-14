@@ -15,12 +15,16 @@ CLAIM_TYPES = {
     "price_mismatch": ("key",),
     "broken_image": ("page", "image"),
     "page_error": ("page", "message"),
+    "access_leak": ("steps",),
 }
 # Claim types whose only page is details["page"]; the other key names what fails on it.
 PAGE_FAULTS = ("broken_image", "page_error")
 # NEAR account ID rules, which also accept 64-character implicit accounts.
 ACCOUNT = re.compile(r"(?=.{2,64}$)([a-z\d]+[-_])*[a-z\d]+(\.([a-z\d]+[-_])*[a-z\d]+)*")
 MAX_UNRESOLVED_CLAIMS = 3
+MAX_STEPS = 6
+MAX_STEP_BODY = 4096
+STEP_PATH = re.compile(r"/(?!/)[^\s#\\]{0,2047}")
 
 
 class ClaimError(ValueError):
@@ -35,6 +39,40 @@ def fingerprint(claim_type: str, urls: list[str], details: dict) -> str:
     """Identify the fault, not the hunter, so equal claims from different hunters match."""
     value = json.dumps([claim_type, sorted(urls), details], sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def step_page(path: str) -> str:
+    """The path of a step without its query string, with repeated and trailing slashes gone."""
+    page = re.sub(r"/+", "/", path.split("?", 1)[0])
+    return page.rstrip("/") or "/"
+
+
+def access_fingerprint(marker_index: int, method: str, path: str) -> str:
+    """One leak is one marker shown by one endpoint, whatever the query or the hunter."""
+    value = json.dumps(["access_leak", marker_index, f"{method} {step_page(path)}"])
+    return hashlib.sha256(value.encode()).hexdigest()
+
+
+def scoped_steps(steps) -> list[dict]:
+    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_STEPS:
+        raise ClaimError(f"An access claim needs 1 to {MAX_STEPS} steps.")
+    clean = []
+    for step in steps:
+        if not isinstance(step, dict) or set(step) != {"method", "path", "body"}:
+            raise ClaimError("Each step must contain exactly: method, path, body.")
+        method, path, body = step["method"], step["path"], step["body"]
+        if method not in ("GET", "POST"):
+            raise ClaimError("A step method must be GET or POST.")
+        if not isinstance(path, str) or not STEP_PATH.fullmatch(path):
+            raise ClaimError("A step path must start with one / and name a path on the site.")
+        if method == "GET" and body is not None:
+            raise ClaimError("A GET step has no body.")
+        if method == "POST" and not isinstance(body, dict):
+            raise ClaimError("A POST step body must be a JSON object.")
+        if body is not None and len(json.dumps(body)) > MAX_STEP_BODY:
+            raise ClaimError(f"A step body must be at most {MAX_STEP_BODY} bytes of JSON.")
+        clean.append({"method": method, "path": path, "body": body})
+    return clean
 
 
 def spell_url(parts) -> str:
@@ -72,6 +110,11 @@ def final_fingerprint(claim_type: str, urls: list[str], details: dict, evidence:
     def land(url):
         return final.get(url, url)
 
+    if claim_type == "access_leak":
+        shown = next((o for o in evidence if o.get("marker") is not None), None)
+        if shown:
+            return access_fingerprint(shown["marker"], shown["method"], shown["path"])
+        return fingerprint(claim_type, urls, details)
     if claim_type == "price_mismatch":
         return fingerprint(claim_type, [land(u) for u in urls], details)
     if claim_type in PAGE_FAULTS:
@@ -105,6 +148,16 @@ async def scoped_claim(site_origin: str, claim_type: str, urls: list, details: d
             raise ClaimError("Every claim URL must be on the bounty site.")
         return value
 
+    if claim_type == "access_leak":
+        steps = scoped_steps(details["steps"])
+        page = await on_site(site_origin + step_page(steps[-1]["path"]))
+        # The query string of the last step may be part of the URL; the page is what counts.
+        given = [u.split("?", 1)[0] if isinstance(u, str) else u for u in urls]
+        if len(given) != 1 or step_page(urlsplit(await on_site(given[0])).path) != step_page(
+            urlsplit(page).path
+        ):
+            raise ClaimError("The claim URL must be the site origin plus the last step path.")
+        return [page], {"steps": steps}
     urls = [await on_site(u) for u in urls]
     if len(set(urls)) != len(urls):
         raise ClaimError("Claim URLs must not repeat.")

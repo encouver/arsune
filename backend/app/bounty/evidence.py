@@ -30,6 +30,11 @@ OBSERVATION_KEYS = (
     "page_errors",
     "page_errors_truncated",
     "resource_issues",
+    # An access-leak step: which marker number matched and a quote with the marker hidden.
+    "method",
+    "path",
+    "marker",
+    "quote",
 )
 
 

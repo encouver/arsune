@@ -117,22 +117,24 @@ def start_check(job_id, generation):
             known = {"status": "duplicate", "checker_reason": claim.checker_reason, "evidence": []}
         elif holder := proven_holder(session, claim):
             known = known_duplicate(holder)
-        return item, session.get(Bounty, claim.bounty_id).url, known
+        bounty = session.get(Bounty, claim.bounty_id)
+        # The security test stays out of the item, so its markers never reach the result.
+        return item, bounty.url, known, bounty.access_test
 
 
 async def check_claim(job_id, generation, checkpoint, save_checkpoint, output_dir):
     if "result" in checkpoint:
         return checkpoint["result"]
-    item, site_url, known = start_check(job_id, generation)
+    item, site_url, known, access_test = start_check(job_id, generation)
     if known:
         result = {**item, **known}
     else:
-        result = await browser_check(job_id, item, site_url, output_dir)
+        result = await browser_check(job_id, item, site_url, output_dir, access_test)
     save_checkpoint({"result": result})
     return result
 
 
-async def browser_check(job_id, item, site_url, output_dir):
+async def browser_check(job_id, item, site_url, output_dir, access_test=None):
     state = {"selected": list(item["urls"])}
 
     async def keep():
@@ -149,7 +151,7 @@ async def browser_check(job_id, item, site_url, output_dir):
                 async def observe(target, viewport):
                     return await observe_page(context, target, viewport, output_dir, site_url)
 
-                result = await check_candidate(item, observe)
+                result = await check_candidate(item, observe, context, access_test)
         result["coverage"] = {
             "blocked_requests": blocked,
             "redirects": state.get("redirects", []),
@@ -170,7 +172,7 @@ async def browser_check(job_id, item, site_url, output_dir):
 
 
 def evidence_summary(result):
-    keys = ("url", "final_url", "viewport", "status", "captured_at", "screenshot")
+    keys = ("url", "final_url", "viewport", "status", "captured_at", "screenshot", "marker")
     return [
         {key: o.get(key) for key in keys} | {"layout_complete": o.get("layout_complete", True)}
         for o in result.get("evidence", [])

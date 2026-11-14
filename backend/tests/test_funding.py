@@ -708,7 +708,7 @@ def test_migration_0007_adds_and_removes_funding_requests():
             assert "funding_requests" not in inspect(connection).get_table_names(schema=schema)
             command.upgrade(config, "0007")
             assert "funding_requests" in inspect(connection).get_table_names(schema=schema)
-            # Only the columns of later revisions (0008 to 0010) differ from the models, with
+            # Only the columns of later revisions (0008 to 0011) differ from the models, with
             # the index and foreign key of 0010's site check column.
             later = compare_metadata(MigrationContext.configure(connection), Base.metadata)
             assert {(d[2], d[3].name) for d in later if d[0] == "add_column"} == {
@@ -718,6 +718,8 @@ def test_migration_0007_adds_and_removes_funding_requests():
                 ("bounties", "unchecked_claims"),
                 ("claims", "evidence_hash"),
                 ("claims", "evidence_bundle"),
+                ("bounties", "access_test"),
+                ("bounties", "owner_key_hash"),
             }
             assert {d[0] for d in later} <= {"add_column", "add_index", "add_fk"}
             connection.execute(

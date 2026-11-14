@@ -18,6 +18,8 @@ SITE_CHECK_COLUMNS = {
     ("bounties", "paused_reason"),
     ("bounties", "unchecked_claims"),
 }
+# The security test columns of 0011.
+ACCESS_TEST_COLUMNS = {("bounties", "access_test"), ("bounties", "owner_key_hash")}
 
 
 def added_columns(connection):
@@ -168,9 +170,10 @@ def test_migration_0008_marks_closed_bounties_as_closed_by_a_spent_budget():
                 ("claims", "evidence_hash"),
                 ("claims", "evidence_bundle"),
                 *SITE_CHECK_COLUMNS,
+                *ACCESS_TEST_COLUMNS,
             }
             command.upgrade(config, "0009")
-            assert added_columns(connection) == SITE_CHECK_COLUMNS
+            assert added_columns(connection) == SITE_CHECK_COLUMNS | ACCESS_TEST_COLUMNS
             command.downgrade(config, "0008")
             claim_columns = inspect(connection).get_columns("claims", schema=schema)
             assert not {"evidence_hash", "evidence_bundle"} & {c["name"] for c in claim_columns}
@@ -232,7 +235,7 @@ def test_migration_0010_adds_the_site_check_and_downgrade_opens_paused_bounties(
                     now(), now())""")
             )
             command.upgrade(config, "0010")
-            assert not compare_metadata(MigrationContext.configure(connection), Base.metadata)
+            assert added_columns(connection) == ACCESS_TEST_COLUMNS
             row = connection.execute(
                 text("SELECT site_check_job_id, paused_reason, unchecked_claims FROM bounties")
             ).one()
@@ -253,7 +256,7 @@ def test_migration_0010_adds_the_site_check_and_downgrade_opens_paused_bounties(
             assert connection.execute(text("SELECT status FROM bounties")).scalar() == "open"
             assert connection.execute(text("SELECT status FROM jobs")).scalar() == "failed"
             assert not connection.execute(text("SELECT count(*) FROM pending_actions")).scalar()
-            assert added_columns(connection) == SITE_CHECK_COLUMNS
+            assert added_columns(connection) == SITE_CHECK_COLUMNS | ACCESS_TEST_COLUMNS
             command.upgrade(config, "head")
             assert not compare_metadata(MigrationContext.configure(connection), Base.metadata)
     finally:

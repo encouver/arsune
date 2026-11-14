@@ -9,7 +9,7 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 
-from app.bounty import budget, reputation, settlement, site_check
+from app.bounty import access, budget, reputation, settlement, site_check
 from app.bounty.claims import (
     ACCOUNT,
     MAX_UNRESOLVED_CLAIMS,
@@ -130,6 +130,9 @@ def bounty_summary(bounty, mode):
         "budget_amount": bounty.budget_amount,
         "budget_target": bounty.budget_target,
         "settlement_mode": mode,
+        # Test account A for security claims; the markers are never shown here.
+        "test_account": access.public_view(bounty.access_test),
+        "security_test_ready": access.ready(bounty.access_test),
         "created_at": bounty.created_at,
         "updated_at": bounty.updated_at,
     }
@@ -269,11 +272,14 @@ async def create_bounty(request: CreateBounty):
         raise HTTPException(422, "The reward and bond exceed the largest permitted payment.")
     if settings.settlement_mode == "escrow" and request.fee_bps > MAX_ESCROW_FEE_BPS:
         raise HTTPException(422, f"The escrow permits a fee of at most {MAX_ESCROW_FEE_BPS} bps.")
+    owner_key, owner_key_hash = access.new_owner_key()
     with Session.begin() as session:
         bounty = Bounty(
             id=str(uuid4()),
             url=url,
             origin=origin(url),
+            access_test=access.initial(origin(url) == origin(settings.demo_url)),
+            owner_key_hash=owner_key_hash,
             owner_account=request.owner_account,
             proof_token=secrets.token_urlsafe(24),
             status="pending_proof",
@@ -285,7 +291,35 @@ async def create_bounty(request: CreateBounty):
         )
         session.add(bounty)
         session.flush()
-        return bounty_detail(session, bounty)
+        # Shown only here: the owner needs it for owner-only actions such as the security test.
+        return {**bounty_detail(session, bounty), "owner_key": owner_key}
+
+
+def owned_bounty(session, bounty_id, owner_key, lock=False):
+    bounty = find_bounty(session, bounty_id, lock=lock)
+    if not access.owner_key_matches(bounty.owner_key_hash, owner_key):
+        raise HTTPException(403, "Only the bounty owner can do this. Send the owner key.")
+    return bounty
+
+
+def get_access_test(bounty_id, owner_key):
+    with Session() as session:
+        return access.owner_view(owned_bounty(session, bounty_id, owner_key).access_test)
+
+
+def set_access_test(bounty_id, owner_key, request):
+    try:
+        login = access.checked_login(request.login_path, request.login_body)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    with Session.begin() as session:
+        bounty = owned_bounty(session, bounty_id, owner_key, lock=True)
+        if bounty.status == "closed":
+            raise HTTPException(409, not_open(bounty))
+        current = bounty.access_test or {"markers": access.new_markers()}
+        bounty.access_test = {**current, "login": login}
+        bounty.updated_at = utcnow()
+        return access.owner_view(bounty.access_test)
 
 
 def list_bounties(limit=50):
@@ -375,6 +409,8 @@ async def verify_bounty(bounty_id):
                 409, "Only a bounty that waits for proof, or a paused bounty, can be verified."
             )
         url, token, needs_proof = bounty.url, bounty.proof_token, bounty.status == "pending_proof"
+        if not access.ready(bounty.access_test):
+            raise HTTPException(409, access.SETUP_FIRST)
     if needs_proof:
         try:
             await proof_matches(url, token)

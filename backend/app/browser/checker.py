@@ -1,4 +1,8 @@
-from urllib.parse import urlsplit
+import asyncio
+import json
+from urllib.parse import unquote, urlsplit
+
+from playwright.async_api import Error as BrowserError
 
 from app.browser.policy import origin
 from app.core.scan import VIEWPORTS
@@ -136,7 +140,103 @@ def check_page_error(page, message):
     return "unverified", "The page did not load completely, so the error cannot be ruled out."
 
 
-async def check_candidate(item, observe):
+MAX_STEP_BYTES = 256 * 1024
+STEP_SECONDS = 10
+STEP_FAILED = (BrowserError, TimeoutError, ValueError)
+QUOTE_CHARS = 80
+NO_LEAK = "No step showed data that account A must not see."
+NO_TEST = (
+    "This bounty has no security test (test account A and markers), so Arsune cannot check "
+    "an access claim."
+)
+
+
+def marker_quote(text, marker, markers):
+    """At most QUOTE_CHARS characters around the marker, with every marker hidden."""
+    text = text.replace(marker, "\x01")
+    for other in markers:
+        text = text.replace(other, "[MARKER]")
+    at = text.find("\x01")
+    side = (QUOTE_CHARS - len("[MARKER]")) // 2
+    quote = text[max(0, at - side) : at] + "[MARKER]" + text[at + 1 : at + 1 + side]
+    return " ".join(quote.replace("\x01", "[MARKER]").split())
+
+
+def echoed_markers(steps, markers):
+    """Markers that a step sends itself; a site that echoes its input proves nothing."""
+    sent = unquote(json.dumps(steps)).casefold()
+    return {n for n, marker in enumerate(markers) if marker.casefold() in sent}
+
+
+async def replay_step(context, site_origin, step):
+    """Run one step with the context's request client: same origin, no redirects, capped."""
+    url = site_origin + step["path"]
+    if urlsplit(url).scheme + "://" + urlsplit(url).netloc != site_origin:
+        raise ValueError("A step left the bounty site.")
+    options = {"method": step["method"], "max_redirects": 0, "timeout": STEP_SECONDS * 1000}
+    if step["method"] == "POST":
+        options["data"] = step["body"]
+    async with asyncio.timeout(STEP_SECONDS + 1):
+        response = await context.request.fetch(url, **options)
+        try:
+            length = int(response.headers.get("content-length") or 0)
+            body = b"" if length > MAX_STEP_BYTES else (await response.body())[:MAX_STEP_BYTES]
+            return response.status, body.decode("utf-8", "replace")
+        finally:
+            await response.dispose()
+
+
+async def check_access_leak(item, context, access_test):
+    """Log in as account A in a clean context, replay the steps, and look for the markers."""
+    login, markers = (access_test or {}).get("login"), (access_test or {}).get("markers") or []
+    if not login or not markers or context is None:
+        return "unverified", NO_TEST, []
+    steps = item.get("details", {}).get("steps") or []
+    site_origin = origin(item["urls"][0])
+    echoed = echoed_markers(steps, markers)
+    try:
+        status, _ = await replay_step(
+            context, site_origin, {"method": "POST", "path": login["path"], "body": login["body"]}
+        )
+    except STEP_FAILED:
+        return "unverified", "Arsune could not log in as test account A.", []
+    if not 200 <= status < 400:
+        return "unverified", f"The login of test account A returned HTTP {status}.", []
+    evidence = []
+    for number, step in enumerate(steps, 1):
+        record = {
+            "url": site_origin + step["path"],
+            "method": step["method"],
+            "path": step["path"],
+            "marker": None,
+        }
+        try:
+            record["status"], text = await replay_step(context, site_origin, step)
+        except STEP_FAILED:
+            record["status"], record["error"] = None, "The step did not finish."
+            evidence.append(record)
+            continue
+        shown = next((n for n, m in enumerate(markers) if n not in echoed and m in text), None)
+        if shown is not None:
+            record["marker"] = shown + 1
+            record["quote"] = marker_quote(text, markers[shown], markers)
+            evidence.append(record)
+            reason = (
+                f"Step {number} ({step['method']} {step['path']}) returned HTTP "
+                f"{record['status']} with marker {shown + 1} of {len(markers)}, data that "
+                f'account A must not see: "{record["quote"]}"'
+            )
+            return "confirmed", reason, evidence
+        evidence.append(record)
+    if any(r["status"] is None for r in evidence):
+        return "unverified", "A step did not finish, so the leak cannot be ruled out.", evidence
+    return "rejected", NO_LEAK, evidence
+
+
+async def check_candidate(item, observe, context=None, access_test=None):
+    if item["claim_type"] == "access_leak":
+        status, reason, evidence = await check_access_leak(item, context, access_test)
+        return access_result(item, status, reason, evidence)
     fresh = [
         await observe(
             u,
@@ -241,6 +341,26 @@ async def check_candidate(item, observe):
             "broken_image": "Restore the image file or correct the image address.",
             "page_error": "Correct the script so that the page loads without an uncaught error.",
         }.get(item["claim_type"], "Review the supplied reproduction steps."),
+    }
+    if status == "rejected":
+        result["visitor_impact"] = "The fresh check did not reproduce this claimed fault."
+        result["suggested_correction"] = "No repair is needed for this tested claim."
+    elif status == "unverified":
+        result["visitor_impact"] = "The effect on visitors is not known."
+        result["suggested_correction"] = "Collect more evidence before deciding on a repair."
+    return result
+
+
+def access_result(item, status, reason, evidence):
+    result = {
+        **item,
+        "status": status,
+        "checker_reason": reason,
+        "evidence": evidence,
+        "visitor_impact": "A logged-in user can read data that belongs to someone else or "
+        "that only the site's staff should see.",
+        "suggested_correction": "Check on the server that the logged-in user may read each "
+        "record, table row, admin answer, and bot instruction before you return it.",
     }
     if status == "rejected":
         result["visitor_impact"] = "The fresh check did not reproduce this claimed fault."

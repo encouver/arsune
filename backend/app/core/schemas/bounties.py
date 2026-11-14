@@ -57,3 +57,10 @@ class CreateClaim(BaseModel):
     bond_intent: dict[str, Any]
 
     _intent = field_validator("bond_intent")(bounded_intent)
+
+
+class SetAccessTest(BaseModel):
+    """Test account A: the login step that Arsune's checker replays before a claim's steps."""
+
+    login_path: str = Field(min_length=1, max_length=2048)
+    login_body: dict[str, Any]

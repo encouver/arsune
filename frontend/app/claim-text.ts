@@ -62,6 +62,7 @@ const KINDS: Record<string, string> = {
   broken_link: "Broken link",
   broken_image: "Image does not load",
   price_mismatch: "Price differs between pages",
+  access_leak: "Access you should not have",
 };
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
@@ -93,6 +94,13 @@ export function claimKind(type: string): string {
     KINDS[type] ??
     type.replaceAll("_", " ").replace(/^./, (c) => c.toUpperCase())
   );
+}
+
+/** The last step of an access claim: { method, path }. */
+function lastStep(d: Record<string, unknown>) {
+  const steps = Array.isArray(d.steps) ? d.steps : [];
+  const step = steps[steps.length - 1] as Record<string, unknown> | undefined;
+  return step ? { method: text(step.method), path: text(step.path) } : null;
 }
 
 function overflow(reason?: string | null) {
@@ -134,6 +142,12 @@ export function claimTitle(c: ClaimText): string {
         ? `Image does not load: ${cut(where(image, d.page), 70)}`
         : KINDS.broken_image;
     }
+    case "access_leak": {
+      const step = lastStep(d);
+      return step?.path
+        ? `${step.method} ${cut(step.path, 80)} shows data that account A must not see`
+        : KINDS.access_leak;
+    }
     default:
       return claimKind(c.claim_type);
   }
@@ -153,6 +167,8 @@ export function claimPage(c: ClaimText): string {
       return where(d.page || urls[0]);
     case "price_mismatch":
       return urls.map((u) => where(u)).join(" and ");
+    case "access_leak":
+      return lastStep(d)?.path || where(urls[0]) || "/";
     default:
       return where(urls[0]) || "/";
   }

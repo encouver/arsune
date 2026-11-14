@@ -1,7 +1,7 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Header
 from fastapi.responses import Response
 
-from app.core.schemas.bounties import CreateBounty, CreateClaim, FundBounty
+from app.core.schemas.bounties import CreateBounty, CreateClaim, FundBounty, SetAccessTest
 from app.v1.services import bounties
 
 router = APIRouter()
@@ -25,6 +25,17 @@ def list_bounties():
 @router.get("/bounties/{bounty_id}")
 def get_bounty(bounty_id: str):
     return bounties.get_bounty(bounty_id)
+
+
+@router.get("/bounties/{bounty_id}/access-test")
+def get_access_test(bounty_id: str, x_owner_key: str | None = Header(None)):
+    """Owner only: test account A and the secret markers to plant."""
+    return bounties.get_access_test(bounty_id, x_owner_key)
+
+
+@router.put("/bounties/{bounty_id}/access-test")
+def set_access_test(bounty_id: str, request: SetAccessTest, x_owner_key: str | None = Header(None)):
+    return bounties.set_access_test(bounty_id, x_owner_key, request)
 
 
 def accepted_while_checking(response: Response, site_check: dict | None):

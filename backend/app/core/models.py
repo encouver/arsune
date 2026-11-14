@@ -111,6 +111,11 @@ class Bounty(Base):
     paused_reason: Mapped[str | None] = mapped_column(Text)
     # Decided claims in a row that Arsune's own limits left unverified.
     unchecked_claims: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # The security test (app.bounty.access): {"login": {"path", "body"} | None, "markers": [...]}.
+    # The markers are secret: only the owner view shows them.
+    access_test: Mapped[dict | None] = mapped_column(JSON)
+    # sha256 of the owner key that create returns once; owner-only actions need the key.
+    owner_key_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

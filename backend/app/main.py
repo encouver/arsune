@@ -8,7 +8,7 @@ app = FastAPI(title="Arsune", docs_url="/api/docs")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.ui_origin],
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_methods=["GET", "POST", "PUT"],
+    allow_headers=["Content-Type", "X-Owner-Key"],
 )
 app.include_router(api_router)

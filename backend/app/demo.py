@@ -8,9 +8,11 @@ import brotli
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
-from app.demo_shop import shop_response
+from app.demo_shop import shop_api, shop_response
 
 app = FastAPI()
+# Before the catch-all /shop/{path} route, so the shop API answers its own paths.
+app.include_router(shop_api)
 comparison_state = "faulty"
 bounty_token = os.getenv("ARSUNE_DEMO_BOUNTY_TOKEN", "")
 HEAVY_CSS = b"/*" + b"x" * 1_900_000 + b"*/body{margin:16px}"
