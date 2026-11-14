@@ -105,6 +105,29 @@ export type AccessTest = {
 export const ownerKeyName = (bountyId: string) =>
   `arsune-owner-key:${bountyId}`;
 
+export const ownerSiteName = (bountyId: string) =>
+  `arsune-owner-site:${bountyId}`;
+
+// Earlier bounties of this browser on the same site: the server reuses their proof token.
+export function reusableProofs(siteUrl: string) {
+  let site: string;
+  try {
+    site = new URL(siteUrl).origin;
+  } catch {
+    return [];
+  }
+  const pairs: { bounty_id: string; owner_key: string }[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const name = localStorage.key(i) ?? "";
+    if (!name.startsWith("arsune-owner-site:")) continue;
+    if (localStorage.getItem(name) !== site) continue;
+    const id = name.slice("arsune-owner-site:".length);
+    const key = localStorage.getItem(ownerKeyName(id));
+    if (key) pairs.push({ bounty_id: id, owner_key: key });
+  }
+  return pairs.slice(-10);
+}
+
 export type OwnerBounty = BountySummary & {
   test_account?: {
     login_url: string;

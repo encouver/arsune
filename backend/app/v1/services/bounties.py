@@ -257,6 +257,29 @@ def claim_detail(session, claim):
     }
 
 
+def reusable_proof_token(session, site_origin, pairs):
+    """The token of the owner's newest earlier bounty on this origin, else a fresh token.
+
+    The token is public on the site, so reuse needs the owner key of that earlier bounty.
+    A pair that does not qualify is ignored without any answer.
+    """
+    ids = [pair.bounty_id for pair in pairs]
+    rows = session.scalars(
+        select(Bounty)
+        .where(
+            Bounty.id.in_(ids),
+            Bounty.origin == site_origin,
+            Bounty.status != "pending_proof",
+        )
+        .order_by(Bounty.created_at.desc())
+    ).all()
+    keys = {pair.bounty_id: pair.owner_key for pair in pairs}
+    for old in rows:
+        if access.owner_key_matches(old.owner_key_hash, keys[old.id]):
+            return old.proof_token
+    return secrets.token_urlsafe(24)
+
+
 async def create_bounty(request: CreateBounty):
     require_account(request.owner_account, "owner")
     try:
@@ -274,6 +297,7 @@ async def create_bounty(request: CreateBounty):
         raise HTTPException(422, f"The escrow permits a fee of at most {MAX_ESCROW_FEE_BPS} bps.")
     owner_key, owner_key_hash = access.new_owner_key()
     with Session.begin() as session:
+        proof_token = reusable_proof_token(session, origin(url), request.reuse_proof)
         bounty = Bounty(
             id=str(uuid4()),
             url=url,
@@ -281,7 +305,7 @@ async def create_bounty(request: CreateBounty):
             access_test=access.initial(url if origin(url) == origin(settings.demo_url) else None),
             owner_key_hash=owner_key_hash,
             owner_account=request.owner_account,
-            proof_token=secrets.token_urlsafe(24),
+            proof_token=proof_token,
             status="pending_proof",
             reward_amount=request.reward_amount,
             bond_amount=request.bond_amount,

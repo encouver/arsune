@@ -19,6 +19,11 @@ def bounded_intent(value: dict[str, Any]) -> dict[str, Any]:
     return value
 
 
+class ReuseProof(BaseModel):
+    bounty_id: str = Field(max_length=64)
+    owner_key: str = Field(max_length=200)
+
+
 class CreateBounty(BaseModel):
     url: str = Field(min_length=8, max_length=2048)
     owner_account: Account
@@ -26,6 +31,8 @@ class CreateBounty(BaseModel):
     bond_amount: Amount
     fee_bps: int = Field(1000, strict=True, ge=0, le=10_000)
     budget: Amount
+    # Earlier bounties of the same owner: their proof token can serve this one.
+    reuse_proof: list[ReuseProof] = Field(default_factory=list, max_length=10)
 
 
 class FundBounty(BaseModel):

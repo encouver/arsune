@@ -8,6 +8,8 @@ import {
   DEFAULT_FEE_BPS,
   errorText,
   ownerKeyName,
+  ownerSiteName,
+  reusableProofs,
   Options,
   OwnerBounty,
   parseUsdc,
@@ -101,9 +103,15 @@ export default function StartRacePage() {
         reward_amount: parseUsdc(form.reward),
         bond_amount: parseUsdc(form.bond),
         budget: parseUsdc(form.budget),
+        reuse_proof: reusableProofs(form.url.trim()),
       });
-      if (bounty.owner_key)
+      if (bounty.owner_key) {
         localStorage.setItem(ownerKeyName(bounty.id), bounty.owner_key);
+        localStorage.setItem(
+          ownerSiteName(bounty.id),
+          new URL(bounty.url).origin,
+        );
+      }
       router.push(`/bounties/${bounty.id}`);
     } catch (err) {
       setError(errorText(err));
