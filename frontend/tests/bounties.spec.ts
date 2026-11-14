@@ -446,18 +446,18 @@ test("start page: validates, creates the race and opens its page", async ({
   await expect(page.getByRole("radio")).toHaveCount(0);
   // The problem first, then the promise; "deposit" is defined once, here.
   await expect(page.locator("h1")).toHaveText(
-    "Your site has bugs. Your visitors find them first.Let AI agents find them now. Pay only for the bugs we prove.",
+    "AI-built sites leak data.Let agents find the leaks before attackers do. Pay only for proof.",
   );
   await expect(page.locator(".lead")).toContainText(
-    "To report a bug, an agent must put down a small deposit.",
+    "You pay only for proven leaks.",
   );
   await expect(page.locator(".start-steps strong")).toHaveText([
-    "Set your budget",
-    "Agents hunt",
+    "Set a test user",
+    "Agents attack",
     "You get proof",
   ]);
   await expect(page.getByTestId("start-outcome")).toHaveCount(0);
-  await page.getByRole("button", { name: "Find bugs on my site" }).click();
+  await page.getByRole("button", { name: "Test my site" }).click();
   await expect(page.getByText("Enter the full address")).toBeVisible();
   await expect(page.getByText("Enter a NEAR account ID")).toBeVisible();
   expect(api.calls.some((c) => c.path === "/api/bounties")).toBe(false);
@@ -488,7 +488,7 @@ test("start page: validates, creates the race and opens its page", async ({
     "demo-owner.near",
   );
   await page.getByLabel("Deposit per report").fill("0.25");
-  await page.getByRole("button", { name: "Find bugs on my site" }).click();
+  await page.getByRole("button", { name: "Test my site" }).click();
   await expect(page).toHaveURL(new RegExp(`/bounties/${ID}$`));
   const create = api.calls.find(
     (c) => c.path === "/api/bounties" && c.method === "POST",
@@ -515,7 +515,7 @@ test("the demo shop starts with a 50 USDC budget", async ({ page }) => {
   await expect(page.getByTestId("start-terms")).toHaveText(
     "1.00 USDC per proven bug · at most 50.00 USDC in total",
   );
-  await page.getByRole("button", { name: "Find bugs on my site" }).click();
+  await page.getByRole("button", { name: "Test my site" }).click();
   await expect(page).toHaveURL(new RegExp(`/bounties/${ID}$`));
   const create = api.calls.find(
     (c) => c.path === "/api/bounties" && c.method === "POST",
@@ -534,7 +534,7 @@ test("an invalid advanced field opens the advanced section", async ({
   await page.getByLabel("Reward per proven bug").fill("abc");
   await page.getByText("Advanced: reward, deposit, budget").click();
   await expect(page.getByLabel("Reward per proven bug")).toBeHidden();
-  await page.getByRole("button", { name: "Find bugs on my site" }).click();
+  await page.getByRole("button", { name: "Test my site" }).click();
   await expect(page.getByLabel("Reward per proven bug")).toBeVisible();
   await expect(page.locator("#reward-error")).toHaveText(
     "Enter an amount above 0, with at most 6 decimals.",
@@ -552,7 +552,7 @@ test("start page shows the API error", async ({ page }) => {
   await page.goto("/");
   await page.getByLabel("Site URL").fill("http://10.0.0.5/");
   await page.getByLabel("Your NEAR account").fill("me.near");
-  await page.getByRole("button", { name: "Find bugs on my site" }).click();
+  await page.getByRole("button", { name: "Test my site" }).click();
   await expect(page.getByTestId("create-error")).toHaveText(
     "Private network addresses are not permitted.",
   );

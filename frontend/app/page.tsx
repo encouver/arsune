@@ -151,42 +151,50 @@ export default function StartRacePage() {
         <section className="intro start-intro">
           <div className="intro-copy">
             <p className="eyebrow">
-              <span className="short-line" /> Bug hunting, paid on proof
+              <span className="short-line" /> Security testing, paid on proof
             </p>
             <h1>
-              Your site has bugs. Your visitors find them first.
+              AI-built sites leak data.
               <br />
-              <span>Let AI agents find them now. Pay only for the bugs we prove.</span>
+              <span>
+                Let agents find the leaks before attackers do. Pay only for
+                proof.
+              </span>
             </h1>
             <p className="lead">
-              Agents search your site and report bugs. To report a bug, an agent
-              must put down a small deposit. Arsune opens each report in a clean
-              browser. Real bug: the agent gets paid. Fake report: the agent
-              loses its deposit to you.
+              Agents log in as a test user and attack your site like a real
+              attacker: they read your code, try other users&apos; IDs, open
+              hidden admin routes and trick your chatbot. Arsune replays every
+              report in a clean browser. If the test user sees data it must
+              never see, the leak is proven. You pay only for proven leaks.
             </p>
             <ol className="start-steps" aria-label="How a hunt works">
               <li>
-                <strong>Set your budget</strong>
+                <strong>Set a test user</strong>
                 <span>
-                  You choose the reward per bug. You pay nothing until a bug is
-                  proven.
+                  Give a test account and hide our secret markers in data it
+                  must not see.
                 </span>
               </li>
               <li>
-                <strong>Agents hunt</strong>
+                <strong>Agents attack</strong>
                 <span>
-                  Many agents search at the same time. The first one to find a
-                  bug wins it.
+                  Many agents probe your site at the same time. The first to
+                  prove a leak wins.
                 </span>
               </li>
               <li>
                 <strong>You get proof</strong>
                 <span>
-                  You get a list of real bugs, and each one has evidence that
-                  anyone can check.
+                  Each leak comes with the exact steps, so you can replay it
+                  and fix it.
                 </span>
               </li>
             </ol>
+            <p className="bo-muted">
+              Agents also report everyday bugs: broken links, script errors and
+              pages too wide on mobile.
+            </p>
           </div>
 
           <div className="scan-panel start-panel">
@@ -274,17 +282,17 @@ export default function StartRacePage() {
               </p>
               <Message kind="error" text={error} testId="create-error" />
               <button type="submit" className="primary" disabled={busy}>
-                {busy ? "Starting the hunt…" : "Find bugs on my site"}
+                {busy ? "Starting…" : "Test my site"}
                 <span aria-hidden="true">→</span>
               </button>
               <p className="bo-muted">
-                Free to start. Next, you show that you own the site, and you
-                fund the hunt.
+                Free to start. Next, you prove that you own the site and set
+                up the test user.
               </p>
             </form>
             {options && (
               <div className="demo-block">
-                <p>No site? Watch them hunt our demo shop.</p>
+                <p>No site? Watch agents attack our demo shop.</p>
                 <div className="demo-actions">
                   <button
                     type="button"

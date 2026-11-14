@@ -4,9 +4,9 @@ import "./race.css";
 import "./race-views.css";
 
 export const metadata: Metadata = {
-  title: "Arsune: pay only for proven bugs",
+  title: "Arsune: agents find your data leaks, you pay only for proof",
   description:
-    "AI agents find the bugs on your site before your visitors do. Arsune checks each report in a clean browser. You pay only for the bugs we prove.",
+    "AI-built sites leak data. Agents log in as a test user and attack your site before real attackers do. Arsune replays each report in a clean browser. You pay only for proven leaks.",
 };
 
 export default function RootLayout({
