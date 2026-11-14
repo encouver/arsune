@@ -583,3 +583,94 @@ def test_deploy_is_one_locked_transaction(deploy_script, capsys):
     assert actions[2][5:] == (Path(deploy_script.test_args[1])).read_bytes()
     assert b'{"intents_contract":"intents.near","token_id":"' + TOKEN.encode() in actions[3]
     assert "Deployed and locked" in capsys.readouterr().out
+
+
+class ParentRpc(DeployRpc):
+    """arsune.near does not exist; near.create_account makes it with the relayer key."""
+
+    create_fails = False
+
+    def __init__(self, url):
+        super().__init__(url)
+        self.parent_exists = False
+        self.calls = []
+
+    def call(self, method, params):
+        account = params.get("account_id") if isinstance(params, dict) else None
+        if account == "arsune.near":
+            if not self.parent_exists and params["request_type"] != "view_access_key_list":
+                raise NearRpcError({"name": "HANDLER_ERROR", "cause": {"name": "UNKNOWN_ACCOUNT"}})
+            if params["request_type"] == "view_access_key_list":
+                key = deploy_key_text()
+                return {"keys": [{"public_key": key, "access_key": {"permission": "FullAccess"}}]}
+        return super().call(method, params)
+
+    def call_function(self, signer_id, key, receiver_id, method, args, *, gas, deposit=0):
+        self.calls.append((signer_id, receiver_id, method, args, gas, deposit))
+        self.parent_exists = not self.create_fails
+        return "TxParent", {}
+
+    def send_actions(self, signer_id, key, receiver_id, actions):
+        assert self.parent_exists
+        return super().send_actions(signer_id, key, receiver_id, actions)
+
+
+def deploy_key_text():
+    from app.settlement.near_tx import load_signing_key, public_key_text
+
+    return public_key_text(load_signing_key(DeployRpc.module.settings.near_private_key))
+
+
+@pytest.fixture
+def parent_script(deploy_script, monkeypatch):
+    DeployRpc.module = deploy_script
+    config = deploy_script.settings
+    monkeypatch.setattr(config, "near_account_id", "a" * 64)
+    monkeypatch.setattr(deploy_script, "NearRpc", ParentRpc)
+    deploy_script.test_args = deploy_script.test_args[:2] + [
+        "--parent",
+        "arsune.near",
+        "--create-parent",
+    ]
+    return deploy_script
+
+
+def test_create_parent_plan_lists_the_step_and_signs_nothing(parent_script, capsys):
+    assert parent_script.main(parent_script.test_args) == 0
+    output = capsys.readouterr().out
+    assert "Step 1: create arsune.near by calling near.create_account" in output
+    assert deploy_key_text() in output
+    assert "TOTAL needed incl. up-front gas hold" in output
+    assert ParentRpc.last.calls == [] and ParentRpc.last.sent == []
+
+
+def test_create_parent_total_is_checked_by_max_near(parent_script, capsys):
+    args = parent_script.test_args + ["--max-near", str(10**21), "--i-approve-mainnet"]
+    assert parent_script.main(args) == 2
+    assert "above --max-near" in capsys.readouterr().out
+    assert ParentRpc.last.calls == []
+
+
+def test_create_parent_needs_a_registry_subaccount(parent_script, capsys):
+    args = ["--wasm", parent_script.test_args[1], "--parent", "a.b.near", "--create-parent"]
+    assert parent_script.main(args) == 2
+    assert "--create-parent needs" in capsys.readouterr().out
+
+
+def test_create_parent_then_deploys_signed_by_the_parent(parent_script, capsys):
+    assert parent_script.main(parent_script.test_args + ["--i-approve-mainnet"]) == 0
+    signer, receiver, method, args, _gas, deposit = ParentRpc.last.calls[0]
+    assert (signer, receiver, method) == ("a" * 64, "near", "create_account")
+    assert args == {"new_account_id": "arsune.near", "new_public_key": deploy_key_text()}
+    assert deposit > 0
+    ((deploy_signer, escrow_id, actions),) = ParentRpc.last.sent
+    assert (deploy_signer, escrow_id) == ("arsune.near", "escrow.arsune.near")
+    assert [action[0] for action in actions] == [0, 3, 1, 2]
+    assert "Deployed and locked" in capsys.readouterr().out
+
+
+def test_create_parent_failure_stops_before_the_deploy(parent_script, capsys, monkeypatch):
+    monkeypatch.setattr(ParentRpc, "create_fails", True)
+    assert parent_script.main(parent_script.test_args + ["--i-approve-mainnet"]) == 3
+    assert "does not exist after create_account" in capsys.readouterr().out
+    assert ParentRpc.last.sent == []

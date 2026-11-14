@@ -14,6 +14,14 @@ parent signs the actions as a NEP-366 delegate action; Arsune relays it and pays
 storage NEAR (the relayer pays the deposits of delegated actions). If --parent is Arsune's own
 named account, Arsune sends the actions directly.
 
+--parent arsune.near --create-parent: arsune.near is a sub-account of the registry account
+"near", not a real top-level name, so the "near" linkdrop contract may create it:
+near.create_account(new_account_id, new_public_key) with an attached deposit. The new account
+gets Arsune's relayer key as its only full-access key and signs the escrow deploy itself with that
+key (no swarm file, no delegate action). The deposit covers the parent's storage and everything the
+parent then pays for the escrow deploy. Approve mode creates the parent first, checks it on chain,
+then deploys.
+
 The escrow has no global judge: each bounty names its judge in create_bounty. Arsune creates
 bounties with judge = ARSUNE_NEAR_ACCOUNT_ID. Without --i-approve-mainnet only read-only RPC
 calls are made and nothing is signed.
@@ -85,6 +93,10 @@ DEPLOY_PER_BYTE = 2 * 47_683_715 + 64_572_944
 FUNCTION_CALL = 200_000_000_000 + 780_000_000_000
 MARGIN = 5 * TGAS
 MAX_DEFAULT_NEAR = 3 * YOCTO
+REGISTRY = "near"
+# near.create_account: a cross-contract create + transfer + add key, then a callback.
+CREATE_PARENT_GAS = 50 * TGAS
+PARENT_BYTES = ACCOUNT_BYTES + 100  # account record + one full-access key, with margin
 
 
 def near(yocto: int) -> str:
@@ -163,9 +175,32 @@ def access_keys(rpc: NearRpc, account_id: str) -> list:
     return result.get("keys", [])
 
 
-def signer_for(parent: str):
-    """(key of the parent, relayed?) -- Arsune's own account signs directly."""
-    if parent == settings.near_account_id:
+def parent_is_creatable(parent: str) -> bool:
+    """Only direct sub-accounts of the registry account can be made by near.create_account."""
+    name = parent.removesuffix(f".{REGISTRY}")
+    return name != parent and "." not in name and 2 <= len(name) < 32
+
+
+def create_parent_args(parent: str) -> dict:
+    key = load_signing_key(settings.near_private_key)
+    return {"new_account_id": parent, "new_public_key": public_key_text(key)}
+
+
+def parent_funding(info: dict) -> int:
+    """Deposit for the new parent: its own storage plus all it pays for the escrow deploy
+    (escrow NEAR, creation charge, gas hold). What the deploy does not burn stays on the parent."""
+    return (
+        PARENT_BYTES * STORAGE_BYTE_COST
+        + info["storage"]
+        + ACCOUNT_CREATION_CHARGE
+        + info["upfront"]
+    )
+
+
+def signer_for(parent: str, own_key_on_parent: bool = False):
+    """(key of the parent, relayed?) -- Arsune's own key signs directly when it is the
+    parent's key (the relayer account itself, or a parent created with the relayer key)."""
+    if parent == settings.near_account_id or own_key_on_parent:
         return load_signing_key(settings.near_private_key), False
     accounts = load_swarm_accounts()
     account = accounts.get("parent")
@@ -200,6 +235,22 @@ def print_plan(args, info: dict) -> None:
         print(f"  {label:<60} {near(amount):>10}")
     print(f"  {'total spent by the relayer':<60} {near(info['total']):>10}")
     print(f"  {'held up front for gas (refunded down to use)':<60} {near(info['upfront']):>10}")
+    if info["create_parent"]:
+        print(
+            f"\nStep 1: create {args.parent} by calling {REGISTRY}.create_account "
+            f"(args {json.dumps(create_parent_args(args.parent))})"
+        )
+        print(f"  attached deposit  {near(info['funding'])} NEAR "
+              f"(parent storage {near(PARENT_BYTES * STORAGE_BYTE_COST)} + escrow storage and spare "
+              f"{near(info['storage'])} + creation charge {near(ACCOUNT_CREATION_CHARGE)} "
+              f"+ deploy gas hold {near(info['upfront'])})")  # fmt: skip
+        print(
+            f"  gas for this call, upper bound {near(CREATE_PARENT_GAS * price)} NEAR "
+            f"({CREATE_PARENT_GAS // TGAS} Tgas), held up front {near(info['create_upfront'])}"
+        )
+        print("Step 2: the parent signs the escrow deploy with the relayer key (direct).")
+        print(f"  TOTAL spent by the relayer (steps 1 and 2) {near(info['plan_total'])} NEAR")
+        print(f"  TOTAL needed incl. up-front gas hold       {near(info['need'])} NEAR")
     print(f"  relayer NEAR balance {near(info['balance'])}")
     deposit = escrow.storage_deposit(args.claims)
     print(
@@ -209,6 +260,26 @@ def print_plan(args, info: dict) -> None:
         "goes back to the creator at withdraw_remaining; used claim records stay as the public "
         "record."
     )
+
+
+def create_parent(rpc, args, info) -> int:
+    key = load_signing_key(settings.near_private_key)
+    tx_hash, _ = rpc.call_function(
+        settings.near_account_id, key, REGISTRY, "create_account", create_parent_args(args.parent),
+        gas=CREATE_PARENT_GAS, deposit=info["funding"],
+    )  # fmt: skip
+    print(f"Sent: create {args.parent}, tx {tx_hash}  https://nearblocks.io/txns/{tx_hash}")
+    # The linkdrop callback refunds and still succeeds when the creation fails: check the chain.
+    if view_account(rpc, args.parent) is None:
+        print(f"FAILED: {args.parent} does not exist after create_account")
+        return 3
+    ours = public_key_text(key)
+    keys = [k for k in access_keys(rpc, args.parent) if k.get("public_key") == ours]
+    if not keys or keys[0].get("access_key", {}).get("permission") != "FullAccess":
+        print(f"FAILED: {args.parent} has no full-access key {ours}")
+        return 3
+    print(f"Created {args.parent} with full-access key {ours}.")
+    return 0
 
 
 def deploy(rpc, args, info, parent_key) -> int:
@@ -253,6 +324,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--spare", type=int, default=5 * 10**22, help="yoctoNEAR, default 0.05")
     parser.add_argument("--max-near", type=int, default=MAX_DEFAULT_NEAR, help="yoctoNEAR")
     parser.add_argument("--claims", type=int, default=150, help="claims per bounty, for the plan")
+    parser.add_argument(
+        "--create-parent", action="store_true",
+        help=f"create --parent (a sub-account of {REGISTRY}) with the relayer key if it is missing",
+    )  # fmt: skip
     parser.add_argument("--i-approve-mainnet", action="store_true")
     args = parser.parse_args(argv)
 
@@ -263,37 +338,57 @@ def main(argv: list[str] | None = None) -> int:
     code = args.wasm.read_bytes()
     try:
         exports = wasm_exports(code)
-        parent_key, relayed = signer_for(args.parent)
     except (SettlementError, IndexError, UnicodeDecodeError) as error:
         return refuse(str(error) or "the wasm file is malformed")
     if exports != EXPORTS:
         return refuse(f"unexpected wasm exports: {sorted(exports ^ EXPORTS)}")
     digest = hashlib.sha256(code).digest()
+    our_key_text = public_key_text(load_signing_key(settings.near_private_key))
     info = {
         "code": code,
         "size": len(code),
         "sha256": digest.hex(),
         "code_hash": base58.b58encode(digest).decode(),
         "escrow_id": f"{args.name}.{args.parent}",
-        "relayed": relayed,
         "storage": escrow_storage(len(code), args.spare),
         "gas": deploy_gas(len(code)),
     }
     if len(info["escrow_id"]) > 64:
         return refuse(f"{info['escrow_id']} is longer than 64 characters")
 
+    if args.create_parent and not parent_is_creatable(args.parent):
+        return refuse(f"--create-parent needs a name like x.{REGISTRY}, not {args.parent}")
+
     rpc = NearRpc(settings.near_rpc_url)
     try:
         info["gas_price"] = int(rpc.call("gas_price", [None])["gas_price"])
         info["balance"] = near_balance(rpc, settings.near_account_id)
         taken = view_account(rpc, info["escrow_id"]) is not None
-        parent_ok = access_key(rpc, args.parent, public_key_text(parent_key)) is not None
+        parent_missing = view_account(rpc, args.parent) is None
+        info["create_parent"] = args.create_parent and parent_missing
+        own_key = access_key(rpc, args.parent, our_key_text) if not parent_missing else None
+        own_full = own_key is not None and own_key.get("permission", "FullAccess") == "FullAccess"
+        try:
+            parent_key, relayed = signer_for(args.parent, info["create_parent"] or own_full)
+        except SettlementError as error:
+            return refuse(str(error))
+        parent_ok = info["create_parent"] or (
+            access_key(rpc, args.parent, public_key_text(parent_key)) is not None
+        )
         intents_ok = view_account(rpc, args.intents) is not None
     except (SettlementError, NearRpcError) as error:
         print(f"FAILED to read chain state: {error}")
         return 3
+    info["relayed"] = relayed
     info["total"] = info["storage"] + ACCOUNT_CREATION_CHARGE + info["gas"] * info["gas_price"]
     info["upfront"] = upfront_gas_cost(info["gas"], info["gas_price"])
+    info["need"] = info["total"] + info["upfront"]
+    if info["create_parent"]:
+        info["funding"] = parent_funding(info)
+        info["create_upfront"] = upfront_gas_cost(CREATE_PARENT_GAS, info["gas_price"])
+        info["plan_total"] = info["funding"] + CREATE_PARENT_GAS * info["gas_price"]
+        info["need"] = info["plan_total"] + info["create_upfront"]
+        info["total"] = info["plan_total"]
     print_plan(args, info)
 
     if taken:
@@ -304,13 +399,14 @@ def main(argv: list[str] | None = None) -> int:
         return refuse(f"{args.intents} does not exist")
     if info["total"] > args.max_near:
         return refuse(f"total {near(info['total'])} NEAR is above --max-near {near(args.max_near)}")
-    if info["balance"] < info["total"] + info["upfront"]:
-        need = near(info["total"] + info["upfront"])
-        return refuse(f"the relayer needs {need} NEAR (spend + up-front gas hold)")
+    if info["balance"] < info["need"]:
+        return refuse(f"the relayer needs {near(info['need'])} NEAR (spend + up-front gas hold)")
     if not args.i_approve_mainnet:
         print("\nNot sent. Re-run with --i-approve-mainnet to deploy on mainnet.")
         return 0
     try:
+        if info["create_parent"] and (code := create_parent(rpc, args, info)) != 0:
+            return code
         return deploy(rpc, args, info, parent_key)
     except SettlementError as error:
         print(f"FAILED: {error}")
