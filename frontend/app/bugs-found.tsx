@@ -10,11 +10,37 @@ type BugClaim = ClaimText & {
   evidence_url?: string | null;
 };
 
-function listText(site: string, rows: { title: string; page: string }[]) {
-  return [
-    `Bugs found on ${site} by Arsune (${rows.length} proven)`,
-    ...rows.map((r) => `- ${r.title} — ${r.page}`),
-  ].join("\n");
+type Row = {
+  id: string;
+  title: string;
+  fullPath?: string;
+  security: boolean;
+  page: string;
+  href: string;
+};
+
+function plural(n: number, one: string, many: string) {
+  return `${n} ${n === 1 ? one : many}`;
+}
+
+function leakTitle(c: BugClaim, fallback: string) {
+  const steps = Array.isArray(c.details?.steps) ? c.details.steps : [];
+  const step = steps[steps.length - 1] as Record<string, unknown> | undefined;
+  const path = typeof step?.path === "string" ? step.path : "";
+  if (!path) return { title: fallback };
+  const method = typeof step?.method === "string" ? step.method : "";
+  const bare = path.split("?")[0];
+  return { title: `Leak: ${method} ${bare}`.replace("  ", " "), fullPath: path };
+}
+
+function listText(site: string, security: Row[], other: Row[]) {
+  const line = (r: Row) => `- ${r.title} — ${r.page}`;
+  const lines = [
+    `Bugs found on ${site} by Arsune (${security.length + other.length} proven)`,
+  ];
+  if (security.length) lines.push("", "Security leaks", ...security.map(line));
+  if (other.length) lines.push("", "Other bugs", ...other.map(line));
+  return lines.join("\n");
 }
 
 /** The proven bugs of a hunt, newest first, with copy and download. */
@@ -35,13 +61,21 @@ export function BugsFound({
   const proven = claims
     .filter((c) => claimGroup(c) === "proven")
     .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
-  const rows = proven.map((c) => ({
-    id: c.id,
-    title: titleOf(c),
-    page: claimPage(c),
-    href: c.evidence_url || evidenceHref,
-  }));
-  const text = listText(site, rows);
+  const rows: Row[] = proven.map((c) => {
+    const security = c.claim_type === "access_leak";
+    return {
+      id: c.id,
+      security,
+      ...(security
+        ? leakTitle(c, titleOf(c))
+        : { title: titleOf(c) }),
+      page: claimPage(c),
+      href: c.evidence_url || evidenceHref,
+    };
+  });
+  const security = rows.filter((r) => r.security);
+  const other = rows.filter((r) => !r.security);
+  const text = listText(site, security, other);
 
   // Rows that were not in the previous render get a short highlight; the first render has none.
   const seen = useRef<Set<string> | null>(null);
@@ -79,6 +113,42 @@ export function BugsFound({
     URL.revokeObjectURL(url);
   }
 
+  function renderRows(list: Row[]) {
+    return (
+      <ul className="bf-list">
+        {list.map((r) => (
+          <li
+            key={r.id}
+            className={fresh.has(r.id) ? "bf-new" : undefined}
+            data-testid={r.security ? "security-row" : "bug-row"}
+          >
+            {r.security ? (
+              <span className="bf-tag">Security</span>
+            ) : (
+              <span className="bf-mark" aria-hidden="true">
+                ✓
+              </span>
+            )}
+            <span className="bf-title" title={r.fullPath}>
+              {r.title}
+            </span>
+            <code className="bf-page" title={r.page}>
+              {r.page}
+            </code>
+            <a
+              href={r.href}
+              {...(r.href.startsWith("#")
+                ? {}
+                : { target: "_blank", rel: "noreferrer" })}
+            >
+              Evidence →
+            </a>
+          </li>
+        ))}
+      </ul>
+    );
+  }
+
   return (
     <section
       className="rv-card bf"
@@ -86,7 +156,11 @@ export function BugsFound({
       data-testid="bugs-found"
     >
       <div className="bf-head">
-        <h2>Bugs found · {rows.length} proven</h2>
+        <h2>
+          {rows.length === 0
+            ? "Bugs found · 0 proven"
+            : `Found: ${plural(security.length, "security leak", "security leaks")} · ${other.length} other ${other.length === 1 ? "bug" : "bugs"}`}
+        </h2>
         {rows.length > 0 && (
           <div className="bf-actions">
             <button type="button" onClick={copy}>
@@ -105,31 +179,26 @@ export function BugsFound({
             : "No bugs proven yet. Agents are searching."}
         </p>
       ) : (
-        <ul className="bf-list">
-          {rows.map((r) => (
-            <li
-              key={r.id}
-              className={fresh.has(r.id) ? "bf-new" : undefined}
-              data-testid="bug-row"
-            >
-              <span className="bf-mark" aria-hidden="true">
-                ✓
-              </span>
-              <span className="bf-title">{r.title}</span>
-              <code className="bf-page" title={r.page}>
-                {r.page}
-              </code>
-              <a
-                href={r.href}
-                {...(r.href.startsWith("#")
-                  ? {}
-                  : { target: "_blank", rel: "noreferrer" })}
-              >
-                Evidence →
-              </a>
-            </li>
-          ))}
-        </ul>
+        <>
+          {security.length > 0 && (
+            <>
+              <h3 className="bf-sub">Security leaks · {security.length}</h3>
+              {renderRows(security)}
+            </>
+          )}
+          {other.length > 0 &&
+            (security.length > 0 ? (
+              <details className="bf-other">
+                <summary>Other bugs · {other.length}</summary>
+                {renderRows(other)}
+              </details>
+            ) : (
+              <>
+                <h3 className="bf-sub">Other bugs · {other.length}</h3>
+                {renderRows(other)}
+              </>
+            ))}
+        </>
       )}
     </section>
   );
