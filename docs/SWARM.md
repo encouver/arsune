@@ -481,8 +481,10 @@ The profile is a set of constants in `backend/swarm/host.py` (`UI_RACE`, `AI_AGE
 - 12 scripted hunters and 3 scripted scouts with the default strategy mixes. Careless and
   copycat hunters take part, so false claims lose their bond and copies are duplicates.
 - Pace 0.5, time limit 240 s, 30 pages per agent, 6 shared browser pages.
-- With `"ai_agents": true`: also 3 AI hunters and 1 AI scout. The AI budget is the smaller of
-  `--ai-budget` and 0.50 USD.
+- When the swarm's model settings are valid: also 1 AI hunter, with no choice by the user. The
+  AI budget is the smaller of `--ai-budget` and 0.10 USD. At most `--ai-races-per-day` races
+  (default 50) per UTC day get the AI hunter; after that, races run without AI and `/host`
+  shows `ai_note`.
 
 Before any agent starts, the race asks for Arsune's site check, the same as `simulate` (see
 [Site check](#site-check)). When the check fails, no agent starts and no model is called. The
@@ -500,24 +502,25 @@ runs now, or the last race. `bounty_id` is set when the race starts. Before the 
 
 ```json
 {"busy": false, "bounty_id": "…", "run_id": "3f2a9c1b7d4e", "ai_available": false,
- "ai_model": null, "ai_max_usd": 0.5,
- "agents": {"hunters": 12, "scouts": 3, "ai_hunters": 3, "ai_scouts": 1}}
+ "ai_active": false, "ai_note": null, "ai_model": null, "ai_max_usd": 0.1,
+ "agents": {"hunters": 12, "scouts": 3, "ai_hunters": 1, "ai_scouts": 0}}
 ```
 
 - `busy` is `true` while a race runs. `bounty_id` and `run_id` are those of the race that
   `/state` shows.
-- `agents` is the UI race. `ai_hunters` and `ai_scouts` are what `"ai_agents": true` adds.
+- `agents` is the UI race. `ai_hunters` and `ai_scouts` are what a race adds when `ai_active` is `true`.
 - `ai_available` is `true` when the swarm's model settings are valid (the same check as
   `--ai-hunters`; see [AI agents](#ai-agents)). `ai_model` is then the model name. The host
-  never shows or logs a key.
+  never shows or logs a key. `ai_active` is `true` when `ai_available` and today's AI races are
+  not used up; if not, `ai_note` says "AI agents are resting until tomorrow."
 
 `POST /races` with `Content-Type: application/json` and the body
-`{"bounty_id": "<uuid>", "ai_agents": false}` (`ai_agents` is optional):
+`{"bounty_id": "<uuid>"}`:
 
 | Answer | When |
 | --- | --- |
 | 202 `{"run_id": "…", "bounty_id": "…"}` | The race starts. Read `/state` for its progress. |
-| 400 | The body is not JSON, has another field, or has a bad value. Also `"ai_agents": true` when `ai_available` is `false`: "AI agents are not configured on this server." |
+| 400 | The body is not JSON, has another field, or has a bad value. |
 | 404 | Arsune has no bounty with this ID. |
 | 409 | A race runs ("A race is already running."), or Arsune shows the bounty as not `open`, or its budget cannot pay one more reward and its fee. The host reads `GET /api/bounties/{id}` first. |
 | 502 | Arsune's API did not answer. |

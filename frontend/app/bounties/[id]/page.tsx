@@ -95,7 +95,6 @@ export default function BountyPage({
   const [options, setOptions] = useState<Options | null>(null);
   const [funding, setFunding] = useState<FundingList | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const [ai, setAi] = useState(false);
   const race = useRace(id);
 
   const load = useCallback(async () => {
@@ -361,8 +360,6 @@ export default function BountyPage({
                 race={race}
                 phase={phase}
                 lockedText={lockedText(bounty)}
-                ai={ai}
-                onAi={setAi}
               />
             </Step>
           </ol>

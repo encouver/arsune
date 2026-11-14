@@ -5,11 +5,12 @@ Arsune is the in-memory copy of its public API from test_swarm.py."""
 import asyncio
 import json
 from collections import Counter
+from datetime import date
 
 import httpx
 import pytest
 from swarm.__main__ import parse, parse_serve
-from swarm.host import AI_OFF, BUSY, IDLE, RaceHost, available_model, serve
+from swarm.host import AI_RESTING, BUSY, IDLE, RaceHost, available_model, serve
 from swarm.runner import DEFAULT_MIX, DEFAULT_SCOUT_MIX, STOPPED, Config
 from swarm.state import serve_http
 from test_swarm import (
@@ -38,7 +39,17 @@ FAST = {
     "settle_timeout": 5,
     "seed": 7,
 }
-HOST_KEYS = {"busy", "bounty_id", "run_id", "ai_available", "ai_model", "ai_max_usd", "agents"}
+HOST_KEYS = {
+    "busy",
+    "bounty_id",
+    "run_id",
+    "ai_available",
+    "ai_active",
+    "ai_note",
+    "ai_model",
+    "ai_max_usd",
+    "agents",
+}
 
 
 @pytest.fixture(autouse=True)
@@ -121,9 +132,11 @@ async def test_host_view_and_the_ui_race_profile():
         "bounty_id": None,
         "run_id": None,
         "ai_available": False,
+        "ai_active": False,
+        "ai_note": None,
         "ai_model": None,
-        "ai_max_usd": 0.5,
-        "agents": {"hunters": 12, "scouts": 3, "ai_hunters": 3, "ai_scouts": 1},
+        "ai_max_usd": 0.1,
+        "agents": {"hunters": 12, "scouts": 3, "ai_hunters": 1, "ai_scouts": 0},
     }
     status, state = await get(host, "/state")
     assert status == 200 and set(state) == STATE_KEYS
@@ -136,7 +149,7 @@ async def test_host_view_and_the_ui_race_profile():
         0,
         0,
     )
-    assert (with_ai.ai_hunters, with_ai.ai_scouts) == (3, 1)
+    assert (with_ai.ai_hunters, with_ai.ai_scouts) == (1, 0)
     assert (scripted.pace, scripted.duration, scripted.pages, scripted.browser_pages) == (
         0.5,
         240,
@@ -149,11 +162,12 @@ async def test_host_view_and_the_ui_race_profile():
     await host.close()
 
 
-@pytest.mark.parametrize("cap, expected", [(2.0, 0.5), (0.2, 0.2)])
+@pytest.mark.parametrize("cap, expected", [(2.0, 0.1), (0.05, 0.05)])
 async def test_with_model_settings_ai_is_available_and_the_key_is_never_shown(cap, expected):
     host = RaceHost("http://arsune.test", model=AI_MODEL, ai_cap_usd=cap)
     _, view = await get(host, "/host")
-    assert view["ai_available"] is True and view["ai_model"] == "fake-model"
+    assert view["ai_available"] is True and view["ai_active"] is True and view["ai_note"] is None
+    assert view["ai_model"] == "fake-model"
     assert view["ai_max_usd"] == expected == host.race_config(BOUNTY, True).ai_budget
     assert AI_MODEL.api_key not in json.dumps(view)
     await host.close()
@@ -180,7 +194,7 @@ def test_ai_is_available_only_when_the_model_settings_validate(monkeypatch, caps
 async def test_a_race_starts_with_202_and_runs_to_its_summary():
     arsune = open_arsune()
     host = make_host(arsune)
-    status, body = await post(host, "/races", {"bounty_id": BOUNTY.upper(), "ai_agents": False})
+    status, body = await post(host, "/races", {"bounty_id": BOUNTY.upper()})
     assert status == 202 and body == {"run_id": host.state.run_id, "bounty_id": BOUNTY}
     _, view = await get(host, "/host")
     assert view["busy"] is True and (view["bounty_id"], view["run_id"]) == (BOUNTY, body["run_id"])
@@ -206,7 +220,7 @@ async def test_a_race_starts_with_202_and_runs_to_its_summary():
         (b"{}", JSON),
         ({"bounty_id": "b1"}, JSON),
         ({"bounty_id": 7}, JSON),
-        ({"bounty_id": BOUNTY, "ai_agents": "yes"}, JSON),
+        ({"bounty_id": BOUNTY, "ai_agents": True}, JSON),
         ({"bounty_id": BOUNTY, "mode": "live"}, JSON),
         ({"bounty_id": BOUNTY}, {"content-type": "text/plain"}),
         ({"bounty_id": BOUNTY}, {}),
@@ -221,13 +235,39 @@ async def test_a_bad_body_is_refused_with_400(body, headers):
     await host.close()
 
 
-async def test_ai_agents_are_refused_when_the_server_has_no_model():
-    arsune = open_arsune()
-    host = make_host(arsune)
-    status, answer = await post(host, "/races", {"bounty_id": BOUNTY, "ai_agents": True})
-    assert (status, answer) == (400, {"detail": AI_OFF})
-    assert AI_OFF == "AI agents are not configured on this server."
-    assert not host.busy and arsune.reads == []
+async def test_every_ui_race_gets_one_ai_hunter_until_the_daily_cap(monkeypatch):
+    configs = held_run(monkeypatch)
+    day = [date(2026, 11, 14)]
+    host = make_host(open_arsune(), model=AI_MODEL, ai_races_per_day=2, today=lambda: day[0])
+    for _ in range(3):
+        status, _ = await post(host, "/races", {"bounty_id": BOUNTY})
+        assert status == 202
+        await asyncio.sleep(0)  # the race task records its config
+        host.stop()
+        await asyncio.gather(host.task, return_exceptions=True)
+    assert [(c.ai_hunters, c.ai_scouts) for c in configs] == [(1, 0), (1, 0), (0, 0)]
+    assert all(c.ai_budget == 0.1 for c in configs)
+    _, view = await get(host, "/host")
+    assert view["ai_available"] and not view["ai_active"] and view["ai_note"] == AI_RESTING
+
+    day[0] = date(2026, 11, 15)  # a new UTC day
+    _, view = await get(host, "/host")
+    assert view["ai_active"] and view["ai_note"] is None
+    await post(host, "/races", {"bounty_id": BOUNTY})
+    await asyncio.sleep(0)
+    assert (configs[-1].ai_hunters, configs[-1].ai_scouts) == (1, 0)
+    host.stop()
+    await host.close()
+
+
+async def test_without_a_model_no_race_has_ai_and_no_note(monkeypatch):
+    configs = held_run(monkeypatch)
+    host = make_host(open_arsune())
+    await post(host, "/races", {"bounty_id": BOUNTY})
+    await asyncio.sleep(0)
+    assert (configs[0].ai_hunters, configs[0].ai_scouts) == (0, 0)
+    assert (await get(host, "/host"))[1]["ai_note"] is None
+    host.stop()
     await host.close()
 
 
@@ -433,10 +473,12 @@ def test_serve_takes_the_compose_flags_and_simulate_parses_as_before():
             "--scouts=10",
             "--budget=80000000",
             "--state-host=0.0.0.0",
+            "--ai-races-per-day=50",
         ]
     )
     assert args.demo_on_start and (args.hunters, args.scouts, args.budget) == (100, 10, 80_000_000)
-    assert (args.state_host, args.state_port, args.ai_budget) == ("0.0.0.0", 8590, 0.5)
+    assert (args.state_host, args.state_port, args.ai_budget) == ("0.0.0.0", 8590, 0.1)
+    assert args.ai_races_per_day == 50
     assert not hasattr(args, "approve_mainnet")
     config, _ = parse(["simulate", "--setup", "--hunters=5"])
     assert config.setup and config.hunters == 5 and not config.live

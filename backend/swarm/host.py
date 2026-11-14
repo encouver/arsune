@@ -9,7 +9,9 @@ through Arsune's public HTTP API. See docs/SWARM.md, "Race host".
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from dataclasses import replace
+from datetime import UTC, date, datetime
 from functools import partial
 from uuid import UUID, uuid4
 
@@ -26,13 +28,14 @@ logger = logging.getLogger(__name__)
 # The race that a UI request starts. The strategy mixes are the defaults, so careless and
 # copycat hunters take part: false claims lose their bond, and copies are duplicates.
 UI_RACE = {"hunters": 12, "scouts": 3, "pace": 0.5, "duration": 240, "pages": 30}
-AI_AGENTS = {"ai_hunters": 3, "ai_scouts": 1}  # what `ai_agents: true` adds
-UI_AI_BUDGET_USD = 0.50  # an AI race spends at most this, or less when the host's cap is lower
+AI_AGENTS = {"ai_hunters": 1, "ai_scouts": 0}  # every UI race adds this when a model is set
+UI_AI_BUDGET_USD = 0.10  # an AI race spends at most this (one AI hunter run costs about 0.011)
+AI_RACES_PER_DAY = 50
 
-AI_OFF = "AI agents are not configured on this server."
+AI_RESTING = "AI agents are resting until tomorrow."
 BUSY = "A race is already running."
 IDLE = "No race is running."
-RACE_FIELDS = {"bounty_id", "ai_agents"}
+RACE_FIELDS = {"bounty_id"}
 PATHS = {"/state", "/host", "/races", "/races/stop"}
 
 
@@ -59,8 +62,8 @@ def available_model() -> ModelSettings | None:
     return settings
 
 
-def parse_race(headers: dict, body: bytes) -> tuple[str, bool]:
-    """(bounty_id, ai_agents) from a POST /races request, or a 400 Refusal."""
+def parse_race(headers: dict, body: bytes) -> str:
+    """The bounty_id from a POST /races request, or a 400 Refusal."""
     # A JSON content type makes a browser ask first (CORS preflight), which this server does
     # not allow, so another site's page cannot start a race.
     if "application/json" not in headers.get("content-type", "").lower():
@@ -73,15 +76,11 @@ def parse_race(headers: dict, body: bytes) -> tuple[str, bool]:
         raise Refusal(400, 'The body must be a JSON object: {"bounty_id": "<uuid>"}.')
     unknown = sorted(set(request) - RACE_FIELDS)
     if unknown:
-        raise Refusal(400, f"A race takes only bounty_id and ai_agents, not {', '.join(unknown)}.")
-    ai_agents = request.get("ai_agents", False)
-    if not isinstance(ai_agents, bool):
-        raise Refusal(400, "ai_agents must be true or false.")
+        raise Refusal(400, f"A race takes only bounty_id, not {', '.join(unknown)}.")
     try:
-        bounty_id = str(UUID(request.get("bounty_id")))
+        return str(UUID(request.get("bounty_id")))
     except (TypeError, ValueError, AttributeError):
         raise Refusal(400, "bounty_id must be the UUID of an Arsune bounty.") from None
-    return bounty_id, ai_agents
 
 
 def idle_state() -> SwarmState:
@@ -110,6 +109,8 @@ class RaceHost:
         *,
         model: ModelSettings | None = None,
         ai_cap_usd: float = UI_AI_BUDGET_USD,
+        ai_races_per_day: int = AI_RACES_PER_DAY,
+        today: Callable[[], date] = lambda: datetime.now(UTC).date(),
         race: dict | None = None,
         browser_pages: int = 6,
         quiet: bool = False,
@@ -119,6 +120,8 @@ class RaceHost:
     ):
         self.api_url, self.model, self.quiet = api_url, model, quiet
         self.ai_max_usd = min(ai_cap_usd, UI_AI_BUDGET_USD)
+        self.ai_races_per_day, self.today = ai_races_per_day, today
+        self.ai_day, self.ai_used = today(), 0
         self.race = dict(UI_RACE if race is None else race)
         self.browser_pages = browser_pages
         self.transports = (api_transport, site_transport, model_transport)
@@ -132,18 +135,28 @@ class RaceHost:
     def busy(self) -> bool:
         return self.task is not None and not self.task.done()
 
+    def ai_races_left(self) -> int:
+        """AI races left today (UTC). 0 without a model."""
+        if self.model is None:
+            return 0
+        if self.today() != self.ai_day:
+            self.ai_day, self.ai_used = self.today(), 0
+        return max(self.ai_races_per_day - self.ai_used, 0)
+
     def view(self) -> dict:
         return {
             "busy": self.busy,
             "bounty_id": self.state.bounty_id,
             "run_id": self.state.run_id,
             "ai_available": self.model is not None,
+            "ai_active": self.ai_races_left() > 0,
+            "ai_note": AI_RESTING if self.model and not self.ai_races_left() else None,
             "ai_model": self.model.name if self.model else None,
             "ai_max_usd": self.ai_max_usd,
             "agents": {"hunters": self.race["hunters"], "scouts": self.race["scouts"], **AI_AGENTS},
         }
 
-    def race_config(self, bounty_id: str, ai_agents: bool) -> Config:
+    def race_config(self, bounty_id: str, ai: bool) -> Config:
         return Config(
             api_url=self.api_url,
             bounty_id=bounty_id,
@@ -151,7 +164,7 @@ class RaceHost:
             ai_model=self.model,
             ai_budget=self.ai_max_usd,
             **self.race,
-            **(AI_AGENTS if ai_agents else {}),
+            **(AI_AGENTS if ai else {}),
         )
 
     async def respond(self, method: str, path: str, headers: dict, body: bytes):
@@ -171,14 +184,15 @@ class RaceHost:
         return 404, NOT_FOUND
 
     async def start(self, headers: dict, body: bytes) -> tuple[int, dict]:
-        bounty_id, ai_agents = parse_race(headers, body)
-        if ai_agents and self.model is None:
-            raise Refusal(400, AI_OFF)
+        bounty_id = parse_race(headers, body)
         async with self.starting:  # a second request waits here, then sees the race
             if self.busy:
                 raise Refusal(409, BUSY)
             await self.require_open(bounty_id)
-            return 202, self.launch(self.race_config(bounty_id, ai_agents))
+            ai = self.ai_races_left() > 0
+            answer = self.launch(self.race_config(bounty_id, ai))
+            self.ai_used += ai
+            return 202, answer
 
     async def require_open(self, bounty_id: str):
         """Refuse a bounty that Arsune shows as not open, or without the funds for a reward."""

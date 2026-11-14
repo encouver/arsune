@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from swarm.agents import SCOUT_FINDERS, STRATEGIES
-from swarm.host import UI_AI_BUDGET_USD, RaceHost, available_model, serve
+from swarm.host import AI_RACES_PER_DAY, UI_AI_BUDGET_USD, RaceHost, available_model, serve
 from swarm.runner import DEFAULT_MIX, DEFAULT_SCOUT_MIX, Config, SwarmError, run
 
 # Live runs default to small amounts inside the approved 1 USDC budget.
@@ -146,6 +146,12 @@ def parse_serve(argv: list[str]) -> argparse.Namespace:
         default=UI_AI_BUDGET_USD,
         help=f"USD for the model calls of one AI race (at most {UI_AI_BUDGET_USD})",
     )
+    parser.add_argument(
+        "--ai-races-per-day",
+        type=int,
+        default=AI_RACES_PER_DAY,
+        help="UI races per UTC day that get an AI hunter",
+    )
     parser.add_argument("--quiet", action="store_true", help="do not print events")
     return parser.parse_args(argv)
 
@@ -169,6 +175,7 @@ def main_serve(argv: list[str]) -> int:
             args.api,
             model=available_model(),
             ai_cap_usd=args.ai_budget,
+            ai_races_per_day=args.ai_races_per_day,
             browser_pages=args.browser_pages,
             quiet=args.quiet,
         )

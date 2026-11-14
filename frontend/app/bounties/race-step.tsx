@@ -10,6 +10,7 @@ import {
 } from "../claim-text";
 import {
   agentCount,
+  agentMix,
   getHost,
   getSwarm,
   HOST_DOWN,
@@ -19,7 +20,6 @@ import {
 } from "../race-host";
 import RaceLine from "../swarm/race-line";
 import type { SwarmState } from "../swarm/types";
-import AgentChoice from "./agent-choice";
 import { errorText, OwnerBounty, siteName } from "./api";
 import { Message } from "./ui";
 
@@ -93,27 +93,22 @@ export function RaceStep({
   race,
   phase,
   lockedText,
-  ai,
-  onAi,
 }: {
   bounty: OwnerBounty;
   race: Race;
   phase: RacePhase;
   lockedText: string;
-  ai: boolean;
-  onAi: (ai: boolean) => void;
 }) {
   const { host, swarm, refresh } = race;
   const [busy, setBusy] = useState<"start" | "stop" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const aiOn = ai && !!host?.ai_available;
   const canStart = phase === "ready" || phase === "finished";
 
   async function act(kind: "start" | "stop") {
     setBusy(kind);
     setError(null);
     try {
-      if (kind === "start") await startRace(bounty.id, aiOn);
+      if (kind === "start") await startRace(bounty.id);
       else await stopRace();
       await refresh();
     } catch (e) {
@@ -176,12 +171,6 @@ export function RaceStep({
         </p>
       )}
       {phase === "finished" && swarm && <Finished swarm={swarm} />}
-      <AgentChoice
-        host={host}
-        ai={aiOn}
-        onChange={onAi}
-        disabled={!canStart || !!busy}
-      />
       <div className="bo-actions">
         <button
           type="button"
@@ -197,8 +186,9 @@ export function RaceStep({
         </button>
         {host && canStart && (
           <span className="bo-muted" data-testid="race-hint">
-            {agentCount(host, aiOn)} agents will search {siteName(bounty.url)}.
-            You pay only for proven bugs.
+            {agentCount(host)} agents ({agentMix(host)}) will search{" "}
+            {siteName(bounty.url)}. You pay only for proven bugs.
+            {host.ai_note ? ` ${host.ai_note}` : ""}
           </span>
         )}
       </div>

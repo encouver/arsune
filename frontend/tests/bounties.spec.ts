@@ -93,9 +93,11 @@ function host(over: Record<string, unknown> = {}) {
     bounty_id: null as string | null,
     run_id: null as string | null,
     ai_available: true,
+    ai_active: true,
+    ai_note: null as string | null,
     ai_model: "openai/gpt-5.6-luna",
-    ai_max_usd: 0.5,
-    agents: { hunters: 12, scouts: 3, ai_hunters: 3, ai_scouts: 1 },
+    ai_max_usd: 0.1,
+    agents: { hunters: 12, scouts: 3, ai_hunters: 1, ai_scouts: 0 },
     ...over,
   };
 }
@@ -327,11 +329,11 @@ async function mockApi(
         .join(",");
       if (
         req.headers()["content-type"] !== "application/json" ||
-        keys !== "ai_agents,bounty_id"
+        keys !== "bounty_id"
       )
         return route.fulfill({
           status: 400,
-          json: { detail: "Send JSON with bounty_id and ai_agents only." },
+          json: { detail: "Send JSON with bounty_id only." },
         });
       if (state.raceRefusal)
         return route.fulfill({
@@ -502,9 +504,6 @@ test("start page: validates, creates the race and opens its page", async ({
   });
   // The demo shop's page sets the proof on load.
   await expect(page.getByTestId("step-1-status")).toHaveText("Done");
-  await expect(
-    page.getByTestId("step-4").getByLabel("Standard agents (free)"),
-  ).toBeChecked();
   await expect(page.getByTestId("step-4-status")).toHaveText("After funding");
 });
 
@@ -1297,23 +1296,14 @@ test("step 4 starts the race, shows this race live, and stops it", async ({
   await page.goto(`/bounties/${ID}`);
   const step = page.getByTestId("step-4");
   await expect(page.getByTestId("step-4-status")).toHaveText("Ready to start");
-  // The race host has AI agents, so the owner gets a real choice.
-  await expect(step.getByRole("radio")).toHaveCount(2);
-  await expect(step.getByLabel("Standard agents (free)")).toBeChecked();
-  await expect(step.locator(".mode-options label")).toHaveText([
-    "Standard agents (free)12 hunters and 3 scouts with fixed rules.",
-    "Standard + AI agentsAI agents also search. They use model credits.",
-  ]);
+  // The race host has AI agents: every hunt gets one, with no choice for the owner.
+  await expect(step.getByRole("radio")).toHaveCount(0);
   await expect(page.getByTestId("race-hint")).toHaveText(
-    "15 agents will search shop.example.com/. You pay only for proven bugs.",
-  );
-  await step.getByLabel("Standard + AI agents").check();
-  await expect(page.getByTestId("race-hint")).toHaveText(
-    "19 agents will search shop.example.com/. You pay only for proven bugs.",
+    "16 agents (1 AI security agent + 12 hunters + 3 scouts) will search shop.example.com/. You pay only for proven bugs.",
   );
   await page.getByRole("button", { name: "Start the hunt" }).click();
   const start = api.calls.find((c) => c.path === "/swarm-api/races");
-  expect(start?.body).toEqual({ bounty_id: ID, ai_agents: true });
+  expect(start?.body).toEqual({ bounty_id: ID });
 
   await expect(page.getByTestId("step-4-status")).toHaveText("Running");
   const live = page.getByTestId("live-race");
@@ -1395,7 +1385,7 @@ test("a race host that refuses the start shows its reason", async ({
   );
   await expect(page.getByTestId("step-4-status")).toHaveText("Ready to start");
   for (const [status, detail] of [
-    [400, "AI agents are not configured on this race host."],
+    [400, "Send JSON with bounty_id only."],
     [404, `Arsune has no bounty ${ID}.`],
     [502, "Arsune's API did not answer."],
   ] as const) {
@@ -1403,31 +1393,29 @@ test("a race host that refuses the start shows its reason", async ({
     await page.getByRole("button", { name: "Start the hunt" }).click();
     await expect(page.getByTestId("race-error")).toHaveText(detail);
   }
-  // Every start sent JSON with exactly the two contract fields.
+  // Every start sent JSON with exactly the bounty_id field.
   const starts = api.calls.filter((c) => c.path === "/swarm-api/races");
   expect(starts).toHaveLength(4);
-  for (const s of starts)
-    expect(s.body).toEqual({ bounty_id: ID, ai_agents: false });
+  for (const s of starts) expect(s.body).toEqual({ bounty_id: ID });
 });
 
-test("without AI agents on the race host, step 4 shows no choice and no reason", async ({
+test("without AI agents on the race host, step 4 shows no AI agent", async ({
   page,
 }) => {
   const api = await mockApi(page, "dry");
   makeReady(api);
-  api.host = host({ ai_available: false, ai_model: null });
+  api.host = host({ ai_available: false, ai_active: false, ai_model: null });
   await page.goto(`/bounties/${ID}`);
   const step = page.getByTestId("step-4");
   await expect(page.getByTestId("step-4-status")).toHaveText("Ready to start");
   await expect(page.getByTestId("race-hint")).toHaveText(
-    "15 agents will search 127.0.0.1:8541/shop/. You pay only for proven bugs.",
+    "15 agents (12 hunters + 3 scouts) will search 127.0.0.1:8541/shop/. You pay only for proven bugs.",
   );
-  await expect(step.getByRole("radio")).toHaveCount(0);
   await expect(step).not.toContainText("AI");
   await expect(step).not.toContainText("model");
   await page.getByRole("button", { name: "Start the hunt" }).click();
   const start = api.calls.find((c) => c.path === "/swarm-api/races");
-  expect(start?.body).toEqual({ bounty_id: ID, ai_agents: false });
+  expect(start?.body).toEqual({ bounty_id: ID });
 });
 
 test("with the race host down, step 4 says so and cannot start", async ({

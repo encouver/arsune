@@ -1,7 +1,8 @@
 # Production override for https://arsune.augevi.com on the shared server:
 #   docker compose -p arsune -f compose.yaml -f compose.prod.yaml up -d --build
 # No host port is published. Only `ui` joins the Traefik network. Settlement stays dry, AI agents
-# are off (no model settings), and the race host starts no race by itself.
+# are off unless the server .env has the ARSUNE_MODEL_* values (only `swarm` gets them), and the
+# race host starts no race by itself.
 x-restart: &restart
   restart: unless-stopped
 
@@ -40,6 +41,14 @@ services:
     <<: *restart
     # No --demo-on-start and no --hunters/--scouts: a race starts only from the UI, and the host
     # gives every UI race its fixed size (12 hunters + 3 scouts, backend/swarm/host.py UI_RACE).
+    # With a model, each UI race also gets 1 AI hunter, up to --ai-races-per-day per UTC day.
+    # Empty values are ignored: without them AI stays off.
+    environment:
+      ARSUNE_MODEL_BASE_URL: ${ARSUNE_MODEL_BASE_URL:-}
+      ARSUNE_MODEL_API_KEY: ${ARSUNE_MODEL_API_KEY:-}
+      ARSUNE_MODEL_NAME: ${ARSUNE_MODEL_NAME:-}
+      ARSUNE_MODEL_INPUT_USD_PER_MILLION: ${ARSUNE_MODEL_INPUT_USD_PER_MILLION:-}
+      ARSUNE_MODEL_OUTPUT_USD_PER_MILLION: ${ARSUNE_MODEL_OUTPUT_USD_PER_MILLION:-}
     command:
       - python
       - -m
@@ -49,6 +58,7 @@ services:
       - --site=http://demo:8541/shop/
       - --browser-pages=3
       - --state-host=0.0.0.0
+      - --ai-races-per-day=50
     shm_size: 256m
     ports: !reset []
     mem_limit: 384m

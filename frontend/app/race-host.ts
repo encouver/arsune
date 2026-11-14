@@ -8,6 +8,8 @@ export type Host = {
   bounty_id: string | null;
   run_id: string | null;
   ai_available: boolean;
+  ai_active: boolean;
+  ai_note: string | null;
   ai_model: string | null;
   ai_max_usd: number;
   agents: {
@@ -70,10 +72,9 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
-export function startRace(bountyId: string, aiAgents: boolean) {
+export function startRace(bountyId: string) {
   return post<{ run_id: string; bounty_id: string }>("/swarm-api/races", {
     bounty_id: bountyId,
-    ai_agents: aiAgents,
   });
 }
 
@@ -93,7 +94,17 @@ export function count(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-export function agentCount(host: Host, ai: boolean): number {
+export function agentCount(host: Host): number {
   const a = host.agents;
-  return a.hunters + a.scouts + (ai ? a.ai_hunters + a.ai_scouts : 0);
+  return (
+    a.hunters + a.scouts + (host.ai_active ? a.ai_hunters + a.ai_scouts : 0)
+  );
+}
+
+/** "1 AI security agent + 12 hunters + 3 scouts" */
+export function agentMix(host: Host): string {
+  const a = host.agents;
+  const parts = [count(a.hunters, "hunter"), count(a.scouts, "scout")];
+  if (host.ai_active) parts.unshift(count(a.ai_hunters, "AI security agent"));
+  return parts.join(" + ");
 }

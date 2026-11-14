@@ -38,15 +38,16 @@ test("a real race on the demo shop, from the start page to the results", async (
     timeout: 180_000,
   });
   const host = await (await page.request.get("/swarm-api/host")).json();
-  // A choice only when the race host has AI agents; the race uses standard agents.
-  if (host.ai_available)
-    await expect(step.getByLabel("Standard agents (free)")).toBeChecked();
-  else await expect(step.getByRole("radio")).toHaveCount(0);
+  await expect(step.getByRole("radio")).toHaveCount(0);
   await page.getByRole("button", { name: "Start the race" }).click();
   await expect(page.getByTestId("step-4-status")).toHaveText("Running");
   await expect(page.getByTestId("live-race")).toBeVisible();
   await expect(page.getByTestId("line-agents")).toHaveText(
-    String(host.agents.hunters + host.agents.scouts),
+    String(
+      host.agents.hunters +
+        host.agents.scouts +
+        (host.ai_active ? host.agents.ai_hunters + host.agents.ai_scouts : 0),
+    ),
     { timeout: 60_000 },
   );
   await expect
