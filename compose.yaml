@@ -104,6 +104,7 @@ services:
     init: true
     environment:
       PYTHONUNBUFFERED: "1"
+      ARSUNE_DEMO_URL: http://demo:8541
     command:
       - python
       - -m
