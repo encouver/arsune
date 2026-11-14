@@ -63,6 +63,33 @@ const KINDS: Record<string, string> = {
   broken_image: "Image does not load",
   price_mismatch: "Price differs between pages",
   access_leak: "Access you should not have",
+  data_exposure: "Personal data open to anyone",
+  secret_key: "Secret key in public code",
+  private_file: "Private file open to anyone",
+};
+
+/** Claim types that count as security bugs. */
+export const SECURITY_TYPES = [
+  "access_leak",
+  "data_exposure",
+  "secret_key",
+  "private_file",
+];
+
+const SECRET_KINDS: Record<string, string> = {
+  supabase_service_role: "Supabase service key",
+  stripe_secret: "Stripe secret key",
+  aws_secret: "AWS secret key",
+  private_key: "Private key",
+  openai_key: "OpenAI API key",
+  anthropic_key: "Anthropic API key",
+};
+
+const FILE_KINDS: Record<string, string> = {
+  env: "Environment (.env)",
+  git: "Git repository",
+  backup: "Backup",
+  source_map: "Source map",
 };
 
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
@@ -161,8 +188,37 @@ export function claimTitle(c: ClaimText): string {
         ? `${step.method} ${cut(step.path, 80)} shows data that account A must not see`
         : KINDS.access_leak;
     }
+    case "data_exposure": {
+      const at = hostPath(c.urls?.[0]);
+      const people = /personal data of (\d+) people/.exec(
+        c.checker_reason ?? "",
+      )?.[1];
+      if (!at) return KINDS.data_exposure;
+      return people
+        ? `${people} people's personal data at ${at}`
+        : `Personal data open to anyone at ${at}`;
+    }
+    case "secret_key": {
+      const path = urlPath(text(d.url)).split("?")[0];
+      const label = SECRET_KINDS[text(d.kind)] ?? "Secret key";
+      return path ? `${label} in ${cut(path, 80)}` : KINDS.secret_key;
+    }
+    case "private_file": {
+      const path = urlPath(text(d.url));
+      const label = FILE_KINDS[text(d.kind)] ?? "Private";
+      return path ? `${label} file at ${cut(path, 80)}` : KINDS.private_file;
+    }
     default:
       return claimKind(c.claim_type);
+  }
+}
+
+function hostPath(url: unknown): string {
+  try {
+    const u = new URL(text(url));
+    return u.host + u.pathname;
+  } catch {
+    return "";
   }
 }
 
@@ -182,6 +238,11 @@ export function claimPage(c: ClaimText): string {
       return urls.map((u) => where(u)).join(" and ");
     case "access_leak":
       return lastStep(d)?.path || where(urls[0]) || "/";
+    case "data_exposure":
+      return lastStep(d)?.path || where(urls[0]) || "/";
+    case "secret_key":
+    case "private_file":
+      return where(d.url || urls[0]) || "/";
     default:
       return where(urls[0]) || "/";
   }

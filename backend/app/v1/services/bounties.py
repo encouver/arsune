@@ -414,8 +414,6 @@ async def verify_bounty(bounty_id):
                 409, "Only a bounty that waits for proof, or a paused bounty, can be verified."
             )
         url, token, needs_proof = bounty.url, bounty.proof_token, bounty.status == "pending_proof"
-        if not access.ready(bounty.access_test):
-            raise HTTPException(409, access.SETUP_FIRST)
     if needs_proof:
         try:
             await proof_matches(url, token)

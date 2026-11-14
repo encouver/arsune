@@ -62,11 +62,11 @@ def test_only_the_owner_reads_and_sets_the_security_test(client, site):
     assert view["markers"][0]["label"] == "other user's data"
 
     # A site that is not the demo shop: new random markers, and no login until the owner sets it.
+    # The security test is optional now: verify does not ask for it.
     with Session.begin() as session:
         session.get(Bounty, bounty["id"]).access_test = None
     response = client.post(f"/api/bounties/{bounty['id']}/verify")
-    assert response.status_code == 409
-    assert response.json()["detail"] == "Set up the security test first (step 2)."
+    assert response.json().get("detail") != "Set up the security test first (step 2)."
     for bad in (
         {"login_url": "/login", "email": "a", "password": "b"},
         {"login_url": "https://other.example/login", "email": "a", "password": "b"},

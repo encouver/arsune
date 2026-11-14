@@ -151,7 +151,9 @@ async def browser_check(job_id, item, site_url, output_dir, access_test=None):
                 async def observe(target, viewport):
                     return await observe_page(context, target, viewport, output_dir, site_url)
 
-                result = await check_candidate(item, observe, context, access_test)
+                result = await check_candidate(
+                    item, observe, context, access_test, site_url=site_url
+                )
         result["coverage"] = {
             "blocked_requests": blocked,
             "redirects": state.get("redirects", []),
@@ -173,8 +175,12 @@ async def browser_check(job_id, item, site_url, output_dir, access_test=None):
 
 def evidence_summary(result):
     keys = ("url", "final_url", "viewport", "status", "captured_at", "screenshot", "marker")
+    # Only masked or counted values; a security record carries them, other records do not.
+    security = ("kind", "people", "samples", "masked", "value_sha256", "names")
     return [
-        {key: o.get(key) for key in keys} | {"layout_complete": o.get("layout_complete", True)}
+        {key: o.get(key) for key in keys}
+        | {key: o[key] for key in security if key in o}
+        | {"layout_complete": o.get("layout_complete", True)}
         for o in result.get("evidence", [])
     ]
 

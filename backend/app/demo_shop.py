@@ -4,6 +4,7 @@ Pages are generated from the tables below. GROUND_TRUTH lists the seeded faults
 and the look-alike decoys for tests; no HTTP route exposes it.
 """
 
+import base64
 import hashlib
 import hmac
 import json
@@ -862,10 +863,93 @@ def _system_prompt():
     )
 
 
+# ------------------------------------------------------------- zero-setup security
+# Three plants that need no login: an open "Supabase-like" customers table behind the anon
+# key that app.js ships, a service_role key in a lazy admin chunk, and an env backup file.
+
+
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+
+def _jwt(role: str) -> str:
+    """A Supabase-shaped JWT for the fake project; only the payload matters to a check."""
+    seed = os.getenv("ARSUNE_DEMO_MARKER_SEED", "northwind-demo-markers").encode()
+    secret = hmac.new(seed, b"jwt-secret", "sha256").digest()
+    header = _b64(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    claims = {"iss": "supabase", "ref": "northwinddemo", "role": role, "iat": 1763078400}
+    body = _b64(json.dumps(claims, separators=(",", ":")).encode())
+    signature = _b64(hmac.new(secret, f"{header}.{body}".encode(), "sha256").digest())
+    return f"{header}.{body}.{signature}"
+
+
+SUPABASE_ANON_KEY = _jwt("anon")
+SERVICE_ROLE_KEY = _jwt("service_role")
+CUSTOMERS_PATH = f"{SHOP}/rest/v1/customers"
+ADMIN_CHUNK_PATH = f"{SHOP}/static/chunk-admin.js"
+ENV_BACKUP_PATH = f"{SHOP}/.env.backup"
+_FIRST = ["Maria", "Jon", "Aiko", "Lucas", "Fatima", "Pedro", "Grace", "Omar", "Elena", "Sven"]
+_LAST = ["Lopez", "Berg", "Tanaka", "Moreau", "Haddad", "Silva", "Okafor", "Novak", "Rossi"]
+_DOMAINS = ["fastmail.example", "mailbox.example", "postbox.example"]
+_STREETS = ["Calle Mayor", "Elm Street", "Rue Victor Hugo", "Via Roma", "Main Road"]
+
+
+def demo_customers():
+    """25 clearly fake customers with emails, phones and addresses."""
+    rows = []
+    for n in range(25):
+        first, last = _FIRST[n % len(_FIRST)], _LAST[n % len(_LAST)]
+        rows.append(
+            {
+                "id": n + 1,
+                "first_name": first,
+                "last_name": last,
+                "email": f"{first.lower()}.{last.lower()}{n + 1}@{_DOMAINS[n % 3]}",
+                "phone": f"+34 6{n:02d} 55{n % 10} {100 + n * 7}",
+                "address": f"{_STREETS[n % 5]} {n + 3}, {28000 + n * 11} Madrid",
+            }
+        )
+    return rows
+
+
+ADMIN_CHUNK_JS = f"""// Northwind admin tools (loaded only when the admin panel flag is on)
+const NW_SUPABASE_URL = "{CUSTOMERS_PATH.rsplit("/", 1)[0]}";
+const NW_SERVICE_KEY = "{SERVICE_ROLE_KEY}";
+export async function nwExportCustomers() {{
+  const response = await fetch(NW_SUPABASE_URL + "/customers?select=*", {{
+    headers: {{ apikey: NW_SERVICE_KEY, Authorization: "Bearer " + NW_SERVICE_KEY }},
+  }});
+  return response.json();
+}}
+"""
+
+ENV_BACKUP = """# Northwind Supply production settings (backup 2026-10-02)
+DATABASE_URL=postgres://northwind:demo-not-a-real-password@db.northwind.internal:5432/shop
+SUPABASE_URL=https://northwinddemo.supabase.example
+SUPABASE_SERVICE_ROLE_KEY=demo-service-role-placeholder
+SMTP_PASSWORD=demo-smtp-placeholder
+SESSION_SECRET=demo-session-placeholder
+"""
+
 APP_JS = f"""// Northwind Supply page script
 const NW_API = "{SHOP}/api";
 const NW_ANON_KEY = "{ANON_KEY}";
 const NW_FLAGS = {{ adminPanel: false }};
+const NW_REST = "{CUSTOMERS_PATH.rsplit("/", 1)[0]}";
+const NW_SUPABASE_ANON_KEY = "{SUPABASE_ANON_KEY}";
+
+async function nwGreeting() {{
+  const visitor = Number(localStorage.getItem("nw_visitor") || 1);
+  const response = await fetch(NW_REST + "/customers?select=first_name&id=eq." + visitor, {{
+    headers: {{ apikey: NW_SUPABASE_ANON_KEY }},
+  }});
+  const rows = response.ok ? await response.json() : [];
+  return rows.length ? "Welcome back, " + rows[0].first_name : "Welcome";
+}}
+
+if (NW_FLAGS.adminPanel) {{
+  import("{ADMIN_CHUNK_PATH}").then((admin) => admin.nwExportCustomers());
+}}
 
 async function nwLoadProfile() {{
   const response = await fetch(
@@ -895,6 +979,8 @@ async function nwAskSupport(message) {{
 }}
 
 document.addEventListener("DOMContentLoaded", () => {{
+  const greeting = document.querySelector("#nw-greeting");
+  if (greeting) nwGreeting().then((text) => (greeting.textContent = text)).catch(() => {{}});
   const box = document.querySelector("#nw-support-form");
   if (!box) return;
   box.addEventListener("submit", async (event) => {{
@@ -928,7 +1014,35 @@ def app_js():
     return Response(APP_JS, media_type="text/javascript")
 
 
+@shop_api.get("/static/chunk-admin.js")
+def admin_chunk_js():
+    return Response(ADMIN_CHUNK_JS, media_type="text/javascript")
+
+
+@shop_api.get("/.env.backup")
+def env_backup():
+    return PlainTextResponse(ENV_BACKUP)
+
+
+@shop_api.get("/rest/v1/customers")
+def customers(request: Request):
+    # Planted open table: the anon key reads every row; only the app's own query is narrow.
+    key = request.headers.get("apikey") or request.headers.get("authorization", "")
+    if key.removeprefix("Bearer ") not in (SUPABASE_ANON_KEY, SERVICE_ROLE_KEY):
+        return JSONResponse({"message": "No API key found in request"}, status_code=401)
+    rows = demo_customers()
+    wanted = request.query_params.get("id", "")
+    if wanted.startswith("eq."):
+        rows = [r for r in rows if str(r["id"]) == wanted[3:]]
+    select = request.query_params.get("select", "*")
+    if select != "*":
+        columns = [c.strip() for c in select.split(",")]
+        rows = [{c: r[c] for c in columns if c in r} for r in rows]
+    return rows
+
+
 LOGIN_FORM = f"""
+<p id="nw-greeting">Welcome</p>
 <form id="nw-login" method="post" action="{LOGIN_PATH}">
   <p><label>Email <input type="email" name="email" autocomplete="username" required></label></p>
   <p><label>Password <input type="password" name="password" autocomplete="current-password"

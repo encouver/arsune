@@ -692,7 +692,7 @@ test("a top-up reopens a bounty whose budget ran out", async ({ page }) => {
   await expect(page.getByTestId("bounty-status")).toHaveText("Budget spent");
   await expect(page.getByTestId("step-3-status")).toHaveText("Budget spent");
   await expect(page.getByTestId("race-locked")).toHaveText(
-    "The budget is spent. Add money in step 4 to open the hunt again.",
+    "The budget is spent. Add money in step 3 to open the hunt again.",
   );
   await expect(page.getByTestId("reopen-hint")).toHaveText(
     "The budget ran out, so the hunt is closed. Add at least 0.70 USDC to open it again.",

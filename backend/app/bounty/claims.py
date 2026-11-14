@@ -5,6 +5,7 @@ import json
 import re
 from urllib.parse import urljoin, urlsplit
 
+from app.bounty import security_checks
 from app.browser.checker import failing_images, matching_errors, normalize_message
 from app.browser.policy import TargetPolicyError, origin, validate_target
 from app.browser.session import in_scope, scope_base, step_url
@@ -17,7 +18,14 @@ CLAIM_TYPES = {
     "broken_image": ("page", "image"),
     "page_error": ("page", "message"),
     "access_leak": ("steps",),
+    "data_exposure": ("steps",),
+    "secret_key": ("url", "kind"),
+    "private_file": ("url", "kind"),
 }
+SECURITY_TYPES = ("data_exposure", "secret_key", "private_file")
+MAX_EXPOSURE_STEPS = 4
+EXPOSURE_HEADERS = {"apikey", "authorization", "accept", "content-type", "prefer", "range"}
+MAX_HEADER_VALUE = 4096
 # Claim types whose only page is details["page"]; the other key names what fails on it.
 PAGE_FAULTS = ("broken_image", "page_error")
 # NEAR account ID rules, which also accept 64-character implicit accounts.
@@ -38,8 +46,23 @@ def fee_for(reward_amount: int, fee_bps: int) -> int:
 
 def fingerprint(claim_type: str, urls: list[str], details: dict) -> str:
     """Identify the fault, not the hunter, so equal claims from different hunters match."""
+    if claim_type == "data_exposure" and urls:
+        parts = urlsplit(urls[0])
+        return _digest(["data_exposure", (parts.hostname or "").lower(), step_page(parts.path)])
+    if claim_type == "private_file":
+        path = step_page(urlsplit(details["url"]).path)
+        return _digest(["private_file", details["kind"], path])
     value = json.dumps([claim_type, sorted(urls), details], sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(value.encode()).hexdigest()
+
+
+def _digest(parts: list) -> str:
+    return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
+
+
+def secret_fingerprint(kind: str, value_sha256: str) -> str:
+    """One secret is one value of one kind, wherever it was found."""
+    return _digest(["secret_key", kind, value_sha256[:16]])
 
 
 def step_page(path: str) -> str:
@@ -132,6 +155,13 @@ def final_fingerprint(claim_type: str, urls: list[str], details: dict, evidence:
         if shown:
             return access_fingerprint(shown["marker"], shown["method"], shown["url"])
         return fingerprint(claim_type, urls, details)
+    if claim_type == "secret_key":
+        shown = next((o for o in evidence if o.get("value_sha256")), None)
+        if shown:
+            return secret_fingerprint(shown["kind"], shown["value_sha256"])
+        return fingerprint(claim_type, urls, details)
+    if claim_type in ("data_exposure", "private_file"):
+        return fingerprint(claim_type, urls, details)
     if claim_type == "price_mismatch":
         return fingerprint(claim_type, [land(u) for u in urls], details)
     if claim_type in PAGE_FAULTS:
@@ -165,6 +195,8 @@ async def scoped_claim(site_origin: str, claim_type: str, urls: list, details: d
             raise ClaimError("Every claim URL must be on the bounty site.")
         return value
 
+    if claim_type in SECURITY_TYPES:
+        return await security_claim(site_origin, claim_type, urls, details)
     if claim_type == "access_leak":
         steps = await scoped_steps(details["steps"], site_origin)
         page = spell_url(urlsplit(steps[-1]["url"]))
@@ -202,3 +234,86 @@ async def scoped_claim(site_origin: str, claim_type: str, urls: list, details: d
     if sorted(urls) != sorted(details.values()):
         raise ClaimError("Claim URLs must be exactly the pages named in the details.")
     return urls, details
+
+
+async def _security_url(url, site_origin: str, baas: bool = False) -> str:
+    """An absolute URL on the bounty's registrable domain, or a known BaaS host if allowed."""
+    if not isinstance(url, str) or not 8 <= len(url) <= 2048 or "#" in url:
+        raise ClaimError("A URL must be text of at most 2048 characters, no fragment.")
+    base = scope_base(urlsplit(site_origin).hostname or "")
+    if not (
+        in_scope(url, base)
+        or origin(url) == site_origin
+        or (baas and security_checks.baas_host(url))
+    ):
+        raise ClaimError("Every URL must be on the bounty site or its subdomains.")
+    try:
+        return await validate_target(url)
+    except TargetPolicyError as exc:
+        raise ClaimError(str(exc)) from None
+
+
+def _same_page(given: list, url: str) -> list[str]:
+    """The claim URL is the given URL without its query string."""
+    page = spell_url(urlsplit(url))
+    plain = [u.split("?", 1)[0] if isinstance(u, str) else u for u in given or []]
+    claimed = urlsplit(plain[0]) if len(plain) == 1 and isinstance(plain[0], str) else None
+    if not claimed or not claimed.hostname or claimed.scheme not in ("http", "https"):
+        raise ClaimError("The claim URL must be the URL in the details, without a query.")
+    left, right = urlsplit(spell_url(claimed)), urlsplit(page)
+    if left.netloc != right.netloc or step_page(left.path) != step_page(right.path):
+        raise ClaimError("The claim URL must be the URL in the details, without a query.")
+    return [page]
+
+
+async def exposure_steps(steps, site_origin: str) -> list[dict]:
+    if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_EXPOSURE_STEPS:
+        raise ClaimError(f"A data exposure claim needs 1 to {MAX_EXPOSURE_STEPS} steps.")
+    clean = []
+    for step in steps:
+        keys = set(step) if isinstance(step, dict) else set()
+        if not {"method", "url"} <= keys <= {"method", "url", "headers", "body"}:
+            raise ClaimError("Each step must contain: method, url, headers, body.")
+        method, body, headers = step["method"], step.get("body"), step.get("headers")
+        if method not in ("GET", "POST"):
+            raise ClaimError("A step method must be GET or POST.")
+        url = await _security_url(step["url"], site_origin, baas=True)
+        if method == "GET" and body is not None:
+            raise ClaimError("A GET step has no body.")
+        if method == "POST" and not isinstance(body, (dict, list)):
+            raise ClaimError("A POST step body must be JSON.")
+        if body is not None and len(json.dumps(body)) > MAX_STEP_BODY:
+            raise ClaimError(f"A step body must be at most {MAX_STEP_BODY} bytes of JSON.")
+        if headers is not None:
+            if not isinstance(headers, dict) or not all(
+                isinstance(k, str)
+                and k.lower() in EXPOSURE_HEADERS
+                and isinstance(v, str)
+                and len(v) <= MAX_HEADER_VALUE
+                and "\n" not in v
+                and "\r" not in v
+                for k, v in headers.items()
+            ):
+                raise ClaimError(
+                    "Step headers may only be apikey, Authorization, Accept, Content-Type, "
+                    "Prefer and Range, with text values."
+                )
+            headers = dict(headers) or None
+        clean.append({"method": method, "url": url, "headers": headers, "body": body})
+    return clean
+
+
+async def security_claim(site_origin: str, claim_type: str, urls: list, details: dict):
+    keys = CLAIM_TYPES[claim_type]
+    if not isinstance(details, dict) or set(details) != set(keys):
+        raise ClaimError(f"Details for {claim_type} must contain exactly: {', '.join(keys)}.")
+    if claim_type == "data_exposure":
+        steps = await exposure_steps(details["steps"], site_origin)
+        return _same_page(urls, steps[-1]["url"]), {"steps": steps}
+    kinds = (
+        security_checks.SECRET_KINDS if claim_type == "secret_key" else security_checks.FILE_KINDS
+    )
+    if details["kind"] not in kinds:
+        raise ClaimError(f"The kind must be one of: {', '.join(kinds)}.")
+    url = await _security_url(details["url"], site_origin)
+    return _same_page(urls, url), {"url": url, "kind": details["kind"]}

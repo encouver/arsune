@@ -1,11 +1,21 @@
 import asyncio
+import hashlib
 import json
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
 
 from playwright.async_api import Error as BrowserError
 
-from app.browser.policy import origin
-from app.browser.session import LOGIN_SECONDS, LoginFailed, login_session, replay_steps, scope_base
+from app.bounty import security_checks
+from app.browser.policy import TargetPolicyError, origin, validate_target
+from app.browser.session import (
+    LOGIN_SECONDS,
+    MAX_STEP_REDIRECTS,
+    LoginFailed,
+    in_scope,
+    login_session,
+    replay_steps,
+    scope_base,
+)
 from app.core.scan import VIEWPORTS
 
 
@@ -225,7 +235,10 @@ async def check_access_leak(item, context, access_test):
     return "rejected", NO_LEAK, evidence
 
 
-async def check_candidate(item, observe, context=None, access_test=None):
+async def check_candidate(item, observe, context=None, access_test=None, site_url=None):
+    if item["claim_type"] in SECURITY_CHECKS:
+        status, reason, evidence = await check_security(item, context, site_url)
+        return security_result(item, status, reason, evidence)
     if item["claim_type"] == "access_leak":
         status, reason, evidence = await check_access_leak(item, context, access_test)
         return access_result(item, status, reason, evidence)
@@ -353,6 +366,241 @@ def access_result(item, status, reason, evidence):
         "that only the site's staff should see.",
         "suggested_correction": "Check on the server that the logged-in user may read each "
         "record, table row, admin answer, and bot instruction before you return it.",
+    }
+    if status == "rejected":
+        result["visitor_impact"] = "The fresh check did not reproduce this claimed fault."
+        result["suggested_correction"] = "No repair is needed for this tested claim."
+    elif status == "unverified":
+        result["visitor_impact"] = "The effect on visitors is not known."
+        result["suggested_correction"] = "Collect more evidence before deciding on a repair."
+    return result
+
+
+# ------------------------------------------------------------- zero-setup security claims
+# A fresh, anonymous browser context replays what the claim names. Personal data and secrets
+# reach the evidence only masked; files only by the names on their matching lines.
+
+SECURITY_SECONDS = 10
+EXPOSURE_BYTES = 512 * 1024
+SECRET_BYTES = 2_000_000
+FILE_BYTES = 1_000_000
+PUBLIC_PAGE_BYTES = 512 * 1024
+MIN_PEOPLE = 3
+SECRET_LABELS = {
+    "supabase_service_role": "a Supabase service_role key",
+    "stripe_secret": "a live Stripe secret key",
+    "aws_secret": "an AWS access key with its secret",
+    "private_key": "a private key",
+    "openai_key": "an OpenAI API key",
+    "anthropic_key": "an Anthropic API key",
+}
+FILE_LABELS = {
+    "env": "an environment (.env) file",
+    "git": "a Git repository file",
+    "backup": "a backup or database dump",
+    "source_map": "a source map with the original source code",
+}
+
+
+class OutOfScope(ValueError):
+    pass
+
+
+async def _security_allowed(url, base, site_origin, baas):
+    in_site = in_scope(url, base) or origin(url) == origin(site_origin)
+    if not (in_site or (baas and security_checks.baas_host(url))):
+        return False
+    try:
+        await validate_target(url)
+    except TargetPolicyError:
+        return False
+    return True
+
+
+async def anonymous_fetch(context, step, base, site_origin, max_bytes, baas=False):
+    """One request without login; redirects are followed only inside the scope."""
+    url, method, body = step["url"], step["method"], step.get("body")
+    headers = step.get("headers") or {}
+    for _ in range(MAX_STEP_REDIRECTS + 1):
+        if not await _security_allowed(url, base, site_origin, baas):
+            raise OutOfScope("A request or its redirect left the bounty site.")
+        options = {"method": method, "max_redirects": 0, "timeout": SECURITY_SECONDS * 1000}
+        if headers:
+            options["headers"] = headers
+        if method == "POST" and body is not None:
+            options["data"] = body
+        response = await context.request.fetch(url, **options)
+        try:
+            location = response.headers.get("location")
+            if response.status in (301, 302, 303, 307, 308) and location:
+                url = urljoin(url, location)
+                if response.status in (301, 302, 303):
+                    method, body = "GET", None
+                continue
+            length = int(response.headers.get("content-length") or 0)
+            raw = b"" if length > max_bytes else (await response.body())[:max_bytes]
+            return url, response.status, raw
+        finally:
+            await response.dispose()
+    raise OutOfScope("A request redirected too many times.")
+
+
+async def _run(context, step, base, site_origin, max_bytes, baas=False):
+    """{url, method, status, body} or {url, method, status: None, error}."""
+    record = {"url": step["url"], "method": step["method"], "status": None}
+    try:
+        async with asyncio.timeout(SECURITY_SECONDS + 1):
+            record["url"], record["status"], body = await anonymous_fetch(
+                context, step, base, site_origin, max_bytes, baas
+            )
+        return record, body
+    except OutOfScope as exc:
+        record["error"] = str(exc)
+    except (BrowserError, TimeoutError, ValueError):
+        record["error"] = "The request did not finish."
+    return record, b""
+
+
+async def _public_text(context, urls, base, site_origin):
+    """Text of the site's public home pages; data shown there is not a leak."""
+    texts = []
+    for url in dict.fromkeys(urls):
+        step = {"url": url, "method": "GET"}
+        record, body = await _run(context, step, base, site_origin, PUBLIC_PAGE_BYTES, True)
+        if record["status"] and 200 <= record["status"] < 400:
+            texts.append(body.decode("utf-8", "replace"))
+    return "\n".join(texts)
+
+
+def _home(url):
+    parts = urlsplit(url)
+    return f"{parts.scheme}://{parts.netloc}/"
+
+
+async def check_data_exposure(item, context, base, site_origin, site_url):
+    steps = item["details"]["steps"]
+    evidence, bodies = [], []
+    for step in steps:
+        record, body = await _run(context, step, base, site_origin, EXPOSURE_BYTES, baas=True)
+        evidence.append(record)
+        bodies.append(body.decode("utf-8", "replace"))
+    if all(r["status"] is None for r in evidence):
+        return "unverified", "No step finished, so the exposure cannot be ruled out.", evidence
+    pages = [_home(site_url), site_url, _home(steps[-1]["url"])]
+    public = await _public_text(context, pages, base, site_origin)
+    found = security_checks.find_people(bodies, public, base)
+    evidence.append({"url": steps[-1]["url"], "kind": "data_exposure", **found})
+    shown = ", ".join(found["samples"])
+    counts = f"{found['emails']} emails and {found['phones']} phone numbers"
+    if found["people"] >= MIN_PEOPLE:
+        reason = (
+            f"Without login, the steps returned personal data of {found['people']} people "
+            f"({counts}) that the site's public pages do not show. Masked samples: {shown}."
+        )
+        return "confirmed", reason, evidence
+    if any(r.get("status") is None for r in evidence[:-1]):
+        return "unverified", "A step did not finish, so the exposure cannot be ruled out.", evidence
+    reason = (
+        f"Without login, the steps returned personal data of {found['people']} people "
+        f"({counts}); at least {MIN_PEOPLE} are needed."
+    )
+    return "rejected", reason, evidence
+
+
+async def check_secret_key(item, context, base, site_origin, site_url):
+    url, kind = item["details"]["url"], item["details"]["kind"]
+    record, body = await _run(
+        context, {"url": url, "method": "GET"}, base, site_origin, SECRET_BYTES
+    )
+    record["kind"] = kind
+    if record["status"] is None:
+        return "unverified", record.get("error", "The file did not load."), [record]
+    value = security_checks.find_secret(body.decode("utf-8", "replace"), kind)
+    if not value or not 200 <= record["status"] < 300:
+        reason = f"The file at {url} (HTTP {record['status']}) holds no {SECRET_LABELS[kind]}."
+        return "rejected", reason, [record]
+    record["masked"] = security_checks.mask(value)
+    record["value_sha256"] = hashlib.sha256(value.encode()).hexdigest()[:16]
+    reason = (
+        f"Anyone can load {url} (HTTP {record['status']}). It holds "
+        f"{SECRET_LABELS[kind]}: {record['masked']}."
+    )
+    return "confirmed", reason, [record]
+
+
+async def check_private_file(item, context, base, site_origin, site_url):
+    url, kind = item["details"]["url"], item["details"]["kind"]
+    record, body = await _run(context, {"url": url, "method": "GET"}, base, site_origin, FILE_BYTES)
+    record["kind"] = kind
+    if record["status"] is None:
+        return "unverified", record.get("error", "The file did not load."), [record]
+    if not 200 <= record["status"] < 300 or not security_checks.file_matches(body, kind, url):
+        reason = f"{url} (HTTP {record['status']}) is not {FILE_LABELS[kind]}."
+        return "rejected", reason, [record]
+    record["size"] = len(body)
+    record["names"] = security_checks.file_names(body, kind)
+    names = ", ".join(record["names"])
+    reason = (
+        f"Anyone can load {url} (HTTP {record['status']}, {len(body)} bytes). It is "
+        f"{FILE_LABELS[kind]}" + (f"; it names: {names}." if names else ".")
+    )
+    return "confirmed", reason, [record]
+
+
+SECURITY_CHECKS = {
+    "data_exposure": check_data_exposure,
+    "secret_key": check_secret_key,
+    "private_file": check_private_file,
+}
+
+
+async def check_security(item, context, site_url=None):
+    if context is None:
+        return "unverified", "No browser was available for the check.", []
+    site_url = site_url or item["urls"][0]
+    site_origin = _home(site_url).rstrip("/")
+    base = scope_base(urlsplit(site_origin).hostname or "")
+    fresh = await context.browser.new_context(service_workers="block", accept_downloads=False)
+    try:
+        return await SECURITY_CHECKS[item["claim_type"]](item, fresh, base, site_origin, site_url)
+    finally:
+        await fresh.close()
+
+
+SECURITY_IMPACT = {
+    "data_exposure": (
+        "Anyone, without an account, can download personal data of the site's users.",
+        (
+            "Turn on row level security or a server-side check so that each request returns only "
+            "the data of the logged-in user, and remove columns that visitors must not see."
+        ),
+    ),
+    "secret_key": (
+        (
+            "Anyone who reads the site's public code gets a key with full access to a paid or "
+            "private service."
+        ),
+        "Revoke and replace the key now, then keep secret keys on the server only.",
+    ),
+    "private_file": (
+        "Anyone can download a file that holds the site's settings, source code or data.",
+        (
+            "Remove the file from the public web folder or block it in the server configuration, "
+            "and replace any secret it contained."
+        ),
+    ),
+}
+
+
+def security_result(item, status, reason, evidence):
+    impact, correction = SECURITY_IMPACT[item["claim_type"]]
+    result = {
+        **item,
+        "status": status,
+        "checker_reason": reason,
+        "evidence": evidence,
+        "visitor_impact": impact,
+        "suggested_correction": correction,
     }
     if status == "rejected":
         result["visitor_impact"] = "The fresh check did not reproduce this claimed fault."

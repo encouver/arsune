@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { claimGroup, claimPage, titler, type ClaimText } from "./claim-text";
+import {
+  SECURITY_TYPES,
+  claimGroup,
+  claimPage,
+  titler,
+  type ClaimText,
+} from "./claim-text";
 
 type BugClaim = ClaimText & {
   id: string;
@@ -30,7 +36,10 @@ function leakTitle(c: BugClaim, fallback: string) {
   if (!path) return { title: fallback };
   const method = typeof step?.method === "string" ? step.method : "";
   const bare = path.split("?")[0];
-  return { title: `Leak: ${method} ${bare}`.replace("  ", " "), fullPath: path };
+  return {
+    title: `Leak: ${method} ${bare}`.replace("  ", " "),
+    fullPath: path,
+  };
 }
 
 function listText(site: string, security: Row[], other: Row[]) {
@@ -62,11 +71,11 @@ export function BugsFound({
     .filter((c) => claimGroup(c) === "proven")
     .sort((a, b) => (b.created_at ?? "").localeCompare(a.created_at ?? ""));
   const rows: Row[] = proven.map((c) => {
-    const security = c.claim_type === "access_leak";
+    const security = SECURITY_TYPES.includes(c.claim_type);
     return {
       id: c.id,
       security,
-      ...(security
+      ...(c.claim_type === "access_leak"
         ? leakTitle(c, titleOf(c))
         : { title: titleOf(c) }),
       page: claimPage(c),

@@ -35,6 +35,16 @@ OBSERVATION_KEYS = (
     "path",
     "marker",
     "quote",
+    # A zero-setup security check: counts, masked samples, and names only, never full values.
+    "kind",
+    "people",
+    "emails",
+    "phones",
+    "samples",
+    "masked",
+    "value_sha256",
+    "size",
+    "names",
 )
 
 
