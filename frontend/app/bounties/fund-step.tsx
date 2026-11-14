@@ -31,6 +31,7 @@ import {
   signTransfer,
   WalletAccount,
   walletBalance,
+  withdrawFromIntents,
 } from "./wallet";
 
 type Refresh = () => Promise<void>;
@@ -657,6 +658,11 @@ function WalletFund({
     need: bigint;
     timedOut: boolean;
   } | null>(null);
+  // A withdrawal was sent; `from` is the intents balance before it.
+  const [withdrawn, setWithdrawn] = useState<{
+    tx: string | null;
+    timedOut: boolean;
+  } | null>(null);
   // Single flight: no second wallet action while one runs, and no second move per amount.
   const working = useRef(false);
   const movedFor = useRef<string | null>(null);
@@ -789,6 +795,33 @@ function WalletFund({
     });
   };
 
+  const withdraw = () =>
+    run("withdraw", async () => {
+      if (!account || !intents || !token || !inIntents) return;
+      const from = inIntents;
+      if (
+        !window.confirm(
+          `Move ${usdc(Number(from))} USDC from NEAR Intents back to your wallet?`,
+        )
+      )
+        return;
+      setWithdrawn(null);
+      const tx = await withdrawFromIntents(account, intents, token, from);
+      setWithdrawn({ tx, timedOut: false });
+      let dropped = false;
+      for (let i = 0; i < 30 && !dropped; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        try {
+          dropped =
+            (await intentsBalance(intents, account.accountId, token)) < from;
+        } catch {
+          // Try again on the next round.
+        }
+      }
+      if (!dropped) setWithdrawn({ tx, timedOut: true });
+      await loadBalances();
+    });
+
   const signAndFund = () =>
     run("fund", async () => {
       if (!account || !amount) return;
@@ -888,7 +921,45 @@ function WalletFund({
       <p className="bo-muted" data-testid="intents-balance">
         Your USDC in NEAR Intents:{" "}
         {inIntents === null ? "checking…" : usdc(Number(inIntents))}
+        {inIntents !== null && inIntents > BigInt(0) && step === null && (
+          <>
+            {" "}
+            <button
+              type="button"
+              className="bo-link"
+              onClick={withdraw}
+              data-testid="wallet-withdraw"
+            >
+              Withdraw to my wallet
+            </button>
+          </>
+        )}
       </p>
+      {withdrawn && (
+        <p className="bo-muted" data-testid="wallet-withdrawn">
+          Withdrawal sent
+          {withdrawn.tx && (
+            <>
+              {" "}
+              (tx{" "}
+              <a
+                href={`https://nearblocks.io/txns/${withdrawn.tx}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {withdrawn.tx.slice(0, 8)}…
+              </a>
+              )
+            </>
+          )}
+          .{" "}
+          {withdrawn.timedOut
+            ? "NEAR Intents does not show it yet. Wait a moment and reload."
+            : step === "withdraw"
+              ? "Waiting for NEAR Intents to show it…"
+              : "Done."}
+        </p>
+      )}
       {!amount || keyKnown !== false ? null : (
         <>
           <button

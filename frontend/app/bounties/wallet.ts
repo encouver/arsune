@@ -194,6 +194,37 @@ export async function depositToIntents(
   return txHash(outcome);
 }
 
+/** Move `units` of the token from the signer's NEAR Intents balance back to their wallet.
+ *  Matches defuse ft_withdraw(token, receiver_id, amount, memo?, msg?); 1 yoctoNEAR. */
+export async function withdrawFromIntents(
+  account: WalletAccount,
+  intents: string,
+  tokenId: string,
+  units: bigint,
+): Promise<string | null> {
+  const outcome = await account.wallet.signAndSendTransaction({
+    network: "mainnet",
+    signerId: account.accountId,
+    receiverId: intents,
+    actions: [
+      {
+        type: "FunctionCall",
+        params: {
+          methodName: "ft_withdraw",
+          args: {
+            token: ftContract(tokenId),
+            receiver_id: account.accountId,
+            amount: units.toString(),
+          },
+          gas: (BigInt(100) * TGAS).toString(),
+          deposit: "1",
+        },
+      },
+    ],
+  });
+  return txHash(outcome);
+}
+
 export type PreparedTransfer = {
   message: string;
   nonce: string; // base64 of 32 bytes
