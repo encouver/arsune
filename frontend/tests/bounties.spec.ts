@@ -501,6 +501,7 @@ test("start page: validates, creates the race and opens its page", async ({
     reward_amount: 1_000_000,
     bond_amount: 250_000,
     budget: 12_500_000,
+    reuse_proof: [],
   });
   // The demo shop's page sets the proof on load.
   await expect(page.getByTestId("step-1-status")).toHaveText("Done");
@@ -520,6 +521,32 @@ test("the demo shop starts with a 50 USDC budget", async ({ page }) => {
     (c) => c.path === "/api/bounties" && c.method === "POST",
   );
   expect(create?.body).toMatchObject({ budget: 50_000_000 });
+});
+
+test("real money: small default amounts and no simulation label", async ({
+  page,
+}) => {
+  const api = await mockApi(page, "near_intents");
+  await page.goto("/");
+  await expect(
+    page.getByText("Real settlement via NEAR Intents"),
+  ).toBeVisible();
+  await expect(page.getByTestId("sim-label")).toHaveCount(0);
+  await expect(page.getByTestId("start-terms")).toHaveText(
+    "0.10 USDC per proven bug · at most 1.00 USDC in total",
+  );
+  // The demo shop keeps the real-money budget.
+  await page.getByRole("button", { name: "Try the demo shop" }).click();
+  await page.getByRole("button", { name: "Test my site" }).click();
+  await expect(page).toHaveURL(new RegExp(`/bounties/${ID}$`));
+  const create = api.calls.find(
+    (c) => c.path === "/api/bounties" && c.method === "POST",
+  );
+  expect(create?.body).toMatchObject({
+    reward_amount: 100_000,
+    bond_amount: 10_000,
+    budget: 1_000_000,
+  });
 });
 
 test("an invalid advanced field opens the advanced section", async ({

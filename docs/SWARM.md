@@ -455,9 +455,22 @@ race at a time, keeps the state of the last race, and serves the board and a sma
 on one port (`--state-host`, `--state-port`, default `127.0.0.1:8590`). Code:
 `backend/swarm/host.py`.
 
-The host only runs simulations. It never starts `live` mode: a request cannot name a mode, the
-host sets dry simulation on every race it starts, and a race refuses to start unless Arsune
-reports `"mode": "dry"`. Like the agents, the host reaches Arsune only through its HTTP API.
+A request cannot name a mode. Without `--accounts`, the host only runs simulations: it sets dry
+simulation on every race, and a race refuses to start unless Arsune reports `"mode": "dry"`.
+
+With `--accounts <swarm accounts file>` (written by `scripts/near_swarm_accounts.py`), the host
+asks `GET /api/settlement` before each race. When Arsune reports `near_intents` or `escrow`, the
+race runs `live` with real USDC:
+
+- One scripted agent per `hunter-N` and `scout-N` account. When the AI hunter takes part, it
+  uses the last hunter account (for example `hunter-4`), so 4 hunter accounts give 3 scripted
+  hunters and 1 AI hunter. `/host` shows these numbers.
+- Only honest strategies: no `careless` or `copycat` hunters and no `hasty` scouts.
+- The host refuses a bounty whose reward plus bond is above 1 USDC (409).
+- The swarm never holds Arsune's relayer key. Each agent signs its own bonds; Arsune relays them.
+
+When Arsune reports `dry`, races are simulated as before. A `--demo-on-start` race is always a
+simulation. Like the agents, the host reaches Arsune only through its HTTP API.
 
 ```sh
 uv run python -m swarm serve --api http://127.0.0.1:8540
@@ -471,6 +484,7 @@ uv run python -m swarm serve --demo-on-start --budget 80000000   # a demo race a
 | `--site`, `--hunters`, `--scouts`, `--budget` | The demo race: bounty site, scripted hunters (100), scripted scouts (10), funding in token units (20 USDC). |
 | `--browser-pages` | Shared Chromium page pool of each race (default 6). |
 | `--ai-budget` | USD for the model calls of one AI race. A UI race uses at most 0.50 USD. |
+| `--accounts` | Swarm accounts file. With it, races run live when Arsune moves real money (see above). |
 | `--quiet` | Does not print events. |
 
 ### The race that the UI starts

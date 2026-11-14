@@ -484,3 +484,94 @@ def test_serve_takes_the_compose_flags_and_simulate_parses_as_before():
     assert config.setup and config.hunters == 5 and not config.live
     with pytest.raises(SystemExit):
         parse(["serve"])  # serve is its own command, not a mode of simulate/live
+
+
+# ---------------------------------------------------------------- live mode: real money
+
+
+def accounts_file(tmp_path, hunters=4, scouts=1):
+    from app.settlement.swarm_accounts import (
+        plan_swarm_accounts,
+        save_swarm_accounts,
+        swarm_roles,
+    )
+
+    path = tmp_path / "swarm-accounts.json"
+    save_swarm_accounts(
+        plan_swarm_accounts("arsune-swarm.near", swarm_roles(hunters, scouts)), path
+    )
+    return path
+
+
+LIVE_SETTLEMENT = {**SETTLEMENT, "mode": "near_intents"}
+
+
+async def test_with_accounts_and_near_intents_a_ui_race_runs_live_with_the_named_accounts(
+    monkeypatch, tmp_path
+):
+    configs = held_run(monkeypatch)
+    path = accounts_file(tmp_path)
+    arsune = open_arsune(reward_amount=100_000, bond_amount=10_000)
+    host = make_host(arsune, LIVE_SETTLEMENT, model=AI_MODEL, accounts=path, race=None)
+    assert (await post(host, "/races", {"bounty_id": BOUNTY}))[0] == 202
+    await asyncio.sleep(0)
+    config = configs[0]
+    assert config.live and config.approve_mainnet and config.accounts == path
+    # 4 hunter accounts: 3 scripted hunters and the AI hunter (the last account), 1 scout.
+    assert (config.hunters, config.ai_hunters, config.scouts, config.ai_scouts) == (3, 1, 1, 0)
+    assert "careless" not in config.mix and "copycat" not in config.mix
+    assert "hasty" not in config.scout_mix
+    assert host.state.mode == "live"
+    _, view = await get(host, "/host")
+    assert view["agents"] == {"hunters": 3, "scouts": 1, "ai_hunters": 1, "ai_scouts": 0}
+    host.stop()
+    await host.close()
+
+
+async def test_live_without_a_model_gives_every_hunter_account_a_scripted_hunter(
+    monkeypatch, tmp_path
+):
+    configs = held_run(monkeypatch)
+    arsune = open_arsune(reward_amount=100_000, bond_amount=10_000)
+    host = make_host(arsune, LIVE_SETTLEMENT, accounts=accounts_file(tmp_path), race=None)
+    assert (await post(host, "/races", {"bounty_id": BOUNTY}))[0] == 202
+    await asyncio.sleep(0)
+    assert (configs[0].hunters, configs[0].ai_hunters, configs[0].scouts) == (4, 0, 1)
+    host.stop()
+    await host.close()
+
+
+async def test_a_live_race_refuses_a_reward_plus_bond_above_1_usdc(monkeypatch, tmp_path):
+    configs = held_run(monkeypatch)
+    arsune = open_arsune(reward_amount=1_000_000, bond_amount=100_000)
+    host = make_host(arsune, LIVE_SETTLEMENT, accounts=accounts_file(tmp_path))
+    status, body = await post(host, "/races", {"bounty_id": BOUNTY})
+    assert status == 409 and "at most 1 USDC" in body["detail"]
+    assert configs == [] and not host.busy
+    await host.close()
+
+
+async def test_with_accounts_and_dry_settlement_the_race_is_simulated_as_before(
+    monkeypatch, tmp_path
+):
+    configs = held_run(monkeypatch)
+    host = make_host(open_arsune(), accounts=accounts_file(tmp_path), race=None)
+    assert (await post(host, "/races", {"bounty_id": BOUNTY}))[0] == 202
+    await asyncio.sleep(0)
+    config = configs[0]
+    assert not config.live and not config.approve_mainnet and config.accounts is None
+    assert (config.hunters, config.scouts) == (12, 3) and config.mix == DEFAULT_MIX
+    assert host.state.mode == "simulation"
+    host.stop()
+    await host.close()
+
+
+def test_an_unreadable_or_empty_accounts_file_stops_the_host(tmp_path):
+    from swarm.runner import SwarmError
+
+    with pytest.raises(SwarmError, match="Cannot read the swarm accounts file"):
+        RaceHost("http://arsune.test", accounts=tmp_path / "missing.json")
+    with pytest.raises(SwarmError, match="no hunter or scout account"):
+        RaceHost("http://arsune.test", accounts=accounts_file(tmp_path, hunters=0, scouts=0))
+    assert parse_serve(["--accounts=/run/swarm.json"]).accounts.name == "swarm.json"
+    assert parse_serve([]).accounts is None

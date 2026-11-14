@@ -1,9 +1,11 @@
 """`python -m swarm serve`: a race host, so the web UI can start a race.
 
 The host runs one race at a time and keeps the last race's state. It serves the board
-(`GET /state`) and a small control API on the same port. It only ever runs simulated races
-(dry settlement): no request can start live mode. Like every agent, it reaches Arsune only
-through Arsune's public HTTP API. See docs/SWARM.md, "Race host".
+(`GET /state`) and a small control API on the same port. No request can choose the mode. A
+race is simulated (dry settlement) unless the operator gave the host a swarm accounts file
+(`--accounts`) and Arsune reports a real settlement mode: then the race runs live with those
+named accounts. Like every agent, it reaches Arsune only through Arsune's public HTTP API.
+See docs/SWARM.md, "Race host".
 """
 
 import asyncio
@@ -13,14 +15,25 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from functools import partial
+from pathlib import Path
 from uuid import UUID, uuid4
 
 import httpx
+from app.settlement.base import SettlementError
 from pydantic import ValidationError
 
 from swarm.arsune import ApiError, ArsuneApi
+from swarm.identity import load_accounts
 from swarm.llm import ModelSettings, model_settings
-from swarm.runner import Config, SiteUncheckable, SwarmError, run
+from swarm.runner import (
+    DEFAULT_MIX,
+    DEFAULT_SCOUT_MIX,
+    LIVE_CAP,
+    Config,
+    SiteUncheckable,
+    SwarmError,
+    run,
+)
 from swarm.state import NOT_FOUND, SwarmState, serve_http
 
 logger = logging.getLogger(__name__)
@@ -31,6 +44,10 @@ UI_RACE = {"hunters": 12, "scouts": 3, "pace": 0.5, "duration": 240, "pages": 30
 AI_AGENTS = {"ai_hunters": 1, "ai_scouts": 0}  # every UI race adds this when a model is set
 UI_AI_BUDGET_USD = 0.10  # an AI race spends at most this (one AI hunter run costs about 0.011)
 AI_RACES_PER_DAY = 50
+LIVE_MODES = {"near_intents", "escrow"}  # Arsune moves real USDC in these settlement modes
+# Real money: only honest agents, so no bond is lost on purpose.
+LIVE_MIX = {k: v for k, v in DEFAULT_MIX.items() if k not in ("careless", "copycat")}
+LIVE_SCOUT_MIX = {k: v for k, v in DEFAULT_SCOUT_MIX.items() if k != "hasty"}
 
 AI_RESTING = "AI agents are resting until tomorrow."
 BUSY = "A race is already running."
@@ -83,6 +100,18 @@ def parse_race(headers: dict, body: bytes) -> str:
         raise Refusal(400, "bounty_id must be the UUID of an Arsune bounty.") from None
 
 
+def live_accounts(path: Path) -> tuple[int, int]:
+    """The hunter and scout accounts in the swarm accounts file. Raises SwarmError."""
+    try:
+        roles = [a.role for a in load_accounts(path)]
+    except (SettlementError, KeyError, TypeError) as exc:  # names the file, never a key
+        raise SwarmError(f"Cannot read the swarm accounts file: {exc}") from None
+    hunters, scouts = roles.count("hunter"), roles.count("scout")
+    if not hunters + scouts:
+        raise SwarmError(f"{path} has no hunter or scout account.")
+    return hunters, scouts
+
+
 def idle_state() -> SwarmState:
     state = SwarmState(None, "simulation")
     state.finished = True
@@ -114,11 +143,16 @@ class RaceHost:
         race: dict | None = None,
         browser_pages: int = 6,
         quiet: bool = False,
+        accounts: Path | None = None,
         api_transport: httpx.AsyncBaseTransport | None = None,
         site_transport: httpx.AsyncBaseTransport | None = None,
         model_transport: httpx.AsyncBaseTransport | None = None,
     ):
         self.api_url, self.model, self.quiet = api_url, model, quiet
+        # With an accounts file, a race on an Arsune that moves real money runs live.
+        self.accounts = accounts
+        self.live_size = live_accounts(accounts) if accounts else None
+        self.live = False  # Arsune's last known mode is real money (and accounts are set)
         self.ai_max_usd = min(ai_cap_usd, UI_AI_BUDGET_USD)
         self.ai_races_per_day, self.today = ai_races_per_day, today
         self.ai_day, self.ai_used = today(), 0
@@ -143,27 +177,58 @@ class RaceHost:
             self.ai_day, self.ai_used = self.today(), 0
         return max(self.ai_races_per_day - self.ai_used, 0)
 
+    async def refresh_mode(self) -> bool:
+        """Ask Arsune for its settlement mode; True when a race now runs live."""
+        if self.live_size is None:
+            return False
+        settlement = await self.api.settlement()
+        self.live = settlement.get("mode") in LIVE_MODES
+        return self.live
+
+    def agents(self, ai: bool) -> dict:
+        """The scripted agents of a race. Live: one per account; the AI hunter takes the last
+        hunter account."""
+        if not self.live:
+            return {"hunters": self.race["hunters"], "scouts": self.race["scouts"]}
+        hunters, scouts = self.live_size
+        return {"hunters": hunters - ai, "scouts": scouts}
+
+    def ai_for_race(self) -> bool:
+        if self.live and not self.live_size[0]:
+            return False  # no hunter account for the AI hunter
+        return self.ai_races_left() > 0
+
     def view(self) -> dict:
+        ai = self.ai_for_race()
         return {
             "busy": self.busy,
             "bounty_id": self.state.bounty_id,
             "run_id": self.state.run_id,
             "ai_available": self.model is not None,
-            "ai_active": self.ai_races_left() > 0,
+            "ai_active": ai,
             "ai_note": AI_RESTING if self.model and not self.ai_races_left() else None,
             "ai_model": self.model.name if self.model else None,
             "ai_max_usd": self.ai_max_usd,
-            "agents": {"hunters": self.race["hunters"], "scouts": self.race["scouts"], **AI_AGENTS},
+            "agents": {**self.agents(ai), **AI_AGENTS},
         }
 
     def race_config(self, bounty_id: str, ai: bool) -> Config:
+        live = {}
+        if self.live:
+            live = {
+                "live": True,
+                "approve_mainnet": True,
+                "accounts": self.accounts,
+                "mix": dict(LIVE_MIX),
+                "scout_mix": dict(LIVE_SCOUT_MIX),
+            }
         return Config(
             api_url=self.api_url,
             bounty_id=bounty_id,
             browser_pages=self.browser_pages,
             ai_model=self.model,
             ai_budget=self.ai_max_usd,
-            **self.race,
+            **{**self.race, **self.agents(ai), **live},
             **(AI_AGENTS if ai else {}),
         )
 
@@ -188,13 +253,27 @@ class RaceHost:
         async with self.starting:  # a second request waits here, then sees the race
             if self.busy:
                 raise Refusal(409, BUSY)
-            await self.require_open(bounty_id)
-            ai = self.ai_races_left() > 0
-            answer = self.launch(self.race_config(bounty_id, ai))
+            bounty = await self.require_open(bounty_id)
+            if await self.mode_for_race():
+                limit = bounty.get("reward_amount", 0) + bounty.get("bond_amount", 0)
+                if limit > LIVE_CAP:
+                    raise Refusal(
+                        409, "A real-money race needs a reward plus bond of at most 1 USDC."
+                    )
+            ai = self.ai_for_race()
+            answer = self.launch(self.race_config(bounty_id, ai), live=self.live)
             self.ai_used += ai
             return 202, answer
 
-    async def require_open(self, bounty_id: str):
+    async def mode_for_race(self) -> bool:
+        try:
+            return await self.refresh_mode()
+        except ApiError as exc:
+            raise Refusal(502, f"Arsune answered HTTP {exc.status}: {exc.detail}") from None
+        except httpx.HTTPError:
+            raise Refusal(502, "Arsune's API did not answer.") from None
+
+    async def require_open(self, bounty_id: str) -> dict:
         """Refuse a bounty that Arsune shows as not open, or without the funds for a reward."""
         try:
             bounty = await self.api.bounty(bounty_id)
@@ -213,13 +292,23 @@ class RaceHost:
             raise Refusal(
                 409, "The bounty has no funds left: its budget cannot pay one more reward."
             )
+        return bounty
 
-    def launch(self, config: Config) -> dict:
-        """Start a race now. Whatever the config says, it is a simulation (dry settlement)."""
+    def launch(self, config: Config, live: bool = False) -> dict:
+        """Start a race now. It is a simulation (dry settlement) unless `live`, which only
+        start() passes, after Arsune reported a real settlement mode and accounts are set."""
+        live = live and self.live_size is not None
         config = replace(
-            config, live=False, approve_mainnet=False, hold=False, state_port=None, quiet=self.quiet
+            config,
+            live=live,
+            approve_mainnet=live,
+            accounts=self.accounts if live else None,
+            hold=False,
+            state_port=None,
+            quiet=self.quiet,
         )
-        self.state = SwarmState(uuid4().hex[:12], "simulation", None if self.quiet else print)
+        mode = "live" if live else "simulation"
+        self.state = SwarmState(uuid4().hex[:12], mode, None if self.quiet else print)
         self.state.bounty_id = config.bounty_id  # known at once for a UI race
         self.stop_event = asyncio.Event()
         self.task = asyncio.create_task(self._race(config, self.state, self.stop_event))
@@ -260,6 +349,11 @@ async def serve(host: RaceHost, bind: str, port: int, demo: Config | None = None
     """Serve until the process ends. `demo`: a race to start at once (simulate --setup)."""
     server = await serve_http(host.respond, bind, port)
     port = server.sockets[0].getsockname()[1]
+    try:
+        if await host.refresh_mode():
+            print("swarm serve: Arsune moves real money: races run live.", flush=True)
+    except (ApiError, httpx.HTTPError):
+        pass  # every race asks again before it starts
     print(f"Race host at http://{bind}:{port}: GET /state, GET /host, POST /races.", flush=True)
     if demo:
         host.launch(demo)

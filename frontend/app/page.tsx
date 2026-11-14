@@ -35,6 +35,14 @@ const START: Form = {
   budget: "10",
 };
 
+// Real money: small amounts. The race host refuses a reward plus bond above 1 USDC, and one
+// signed funding transfer can be at most 1 USDC (ARSUNE_MAX_PAYMENT_AMOUNT).
+const REAL_START: Pick<Form, "reward" | "bond" | "budget"> = {
+  reward: "0.1",
+  bond: "0.01",
+  budget: "1",
+};
+
 // 50 USDC pays for 45 bugs at 1.10 each, so a demo race funds every bug it finds.
 const DEMO_BUDGET = "50";
 
@@ -72,7 +80,16 @@ export default function StartRacePage() {
 
   useEffect(() => {
     api<Options>("/api/funding/options")
-      .then(setOptions)
+      .then((o) => {
+        setOptions(o);
+        // Keep amounts that the user already changed.
+        if (o.settlement_mode !== "dry")
+          setForm((f) =>
+            ADVANCED.every((k) => f[k] === START[k])
+              ? { ...f, ...REAL_START }
+              : f,
+          );
+      })
       .catch((e) => setOptionsError(errorText(e)));
   }, []);
 
@@ -313,7 +330,9 @@ export default function StartRacePage() {
                         url: `${options.demo_site_url}/shop/`,
                         owner: f.owner || "demo-owner.near",
                         budget:
-                          f.budget === START.budget ? DEMO_BUDGET : f.budget,
+                          dry && f.budget === START.budget
+                            ? DEMO_BUDGET
+                            : f.budget,
                       }))
                     }
                   >

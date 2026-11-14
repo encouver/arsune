@@ -1,10 +1,20 @@
 # Production override for https://arsune.augevi.com on the shared server:
 #   docker compose -p arsune -f compose.yaml -f compose.prod.yaml up -d --build
-# No host port is published. Only `ui` joins the Traefik network. Settlement stays dry, AI agents
-# are off unless the server .env has the ARSUNE_MODEL_* values (only `swarm` gets them), and the
-# race host starts no race by itself.
+# No host port is published. Only `ui` joins the Traefik network. Settlement is real money:
+# api, worker and coordinator run near_intents with the relayer account from the server .env
+# (ARSUNE_NEAR_ACCOUNT_ID, ARSUNE_NEAR_PRIVATE_KEY; only these three services get the key).
+# ARSUNE_SETTLEMENT_MODE=dry in the server .env switches back to simulation. AI agents are off
+# unless the server .env has the ARSUNE_MODEL_* values (only `swarm` gets them), and the race
+# host starts no race by itself.
 x-restart: &restart
   restart: unless-stopped
+x-settlement: &settlement
+  ARSUNE_SETTLEMENT_MODE: ${ARSUNE_SETTLEMENT_MODE:-near_intents}
+  ARSUNE_NEAR_ACCOUNT_ID: ${ARSUNE_NEAR_ACCOUNT_ID:-}
+  ARSUNE_NEAR_PRIVATE_KEY: ${ARSUNE_NEAR_PRIVATE_KEY:-}
+  ARSUNE_NEAR_RPC_URL: ${ARSUNE_NEAR_RPC_URL:-}
+  ARSUNE_MAX_PAYMENT_AMOUNT: ${ARSUNE_MAX_PAYMENT_AMOUNT:-}
+  ARSUNE_ONECLICK_JWT: ${ARSUNE_ONECLICK_JWT:-}
 
 services:
   postgres:
@@ -22,16 +32,19 @@ services:
     ports: !reset []
     mem_limit: 384m
     environment:
+      <<: *settlement
       # The one browser origin that the API accepts (CORS).
       ARSUNE_UI_ORIGIN: https://arsune.augevi.com
   worker:
     <<: *restart
+    environment: *settlement
     # One claim check at a time: each one runs its own Chromium.
     command: ["celery", "-A", "app.workers.queue:app", "worker", "--concurrency=1", "--loglevel=INFO"]
     shm_size: 256m
     mem_limit: 1g
   coordinator:
     <<: *restart
+    environment: *settlement
     mem_limit: 192m
   demo:
     <<: *restart
@@ -39,10 +52,21 @@ services:
     mem_limit: 128m
   swarm:
     <<: *restart
-    # No --demo-on-start and no --hunters/--scouts: a race starts only from the UI, and the host
-    # gives every UI race its fixed size (12 hunters + 3 scouts, backend/swarm/host.py UI_RACE).
+    # No --demo-on-start and no --hunters/--scouts: a race starts only from the UI. A simulated
+    # race has a fixed size (12 hunters + 3 scouts, backend/swarm/host.py UI_RACE).
     # With a model, each UI race also gets 1 AI hunter, up to --ai-races-per-day per UTC day.
     # Empty values are ignored: without them AI stays off.
+    # Real money: --accounts gives the host the named agent accounts (scripts/near_swarm_accounts.py).
+    # When Arsune reports near_intents, a UI race runs live with one agent per hunter and scout
+    # account; the AI hunter takes the last hunter account. The swarm never gets the relayer key.
+    # The file must exist on the server (mode 600), or compose refuses to start.
+    volumes:
+      - type: bind
+        source: ./.data/swarm-accounts.json
+        target: /run/arsune/swarm-accounts.json
+        read_only: true
+        bind:
+          create_host_path: false
     environment:
       ARSUNE_MODEL_BASE_URL: ${ARSUNE_MODEL_BASE_URL:-}
       ARSUNE_MODEL_API_KEY: ${ARSUNE_MODEL_API_KEY:-}
@@ -59,6 +83,7 @@ services:
       - --browser-pages=3
       - --state-host=0.0.0.0
       - --ai-races-per-day=50
+      - --accounts=/run/arsune/swarm-accounts.json
     shm_size: 256m
     ports: !reset []
     mem_limit: 384m

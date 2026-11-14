@@ -1,6 +1,6 @@
 # Deploy Arsune to arsune.augevi.com
 
-Public demo: https://arsune.augevi.com (simulation money).
+Public site: https://arsune.augevi.com (real USDC on NEAR mainnet, `near_intents` settlement).
 
 ## What runs where
 
@@ -11,6 +11,18 @@ Arsune lives in `~/arsune` on the server and runs as the Compose project `arsune
 Only `ui` joins the `traefik-public` network. Everything else talks over the private project network.
 
 Settings come from `compose.yaml` plus `compose.prod.yaml`. The containers never read `.env`.
+Docker Compose reads `~/arsune/.env` on the server for the `${VAR}` values in `compose.prod.yaml`.
+
+## Real money (once)
+
+1. In `~/arsune/.env` on the server (never in the repo), set the relayer account:
+   `ARSUNE_NEAR_ACCOUNT_ID` and `ARSUNE_NEAR_PRIVATE_KEY`. Optional: `ARSUNE_NEAR_RPC_URL`,
+   `ARSUNE_MAX_PAYMENT_AMOUNT`, `ARSUNE_ONECLICK_JWT`. `ARSUNE_SETTLEMENT_MODE` defaults to
+   `near_intents` here; set it to `dry` to go back to simulation. Only `api`, `worker` and
+   `coordinator` get these values.
+2. Copy the swarm accounts file (written by `scripts/near_swarm_accounts.py`) to
+   `~/arsune/.data/swarm-accounts.json`, mode 600. The `swarm` container mounts it read-only.
+   Without the file, Compose refuses to start `swarm`.
 
 ## DNS (once)
 
@@ -45,9 +57,12 @@ Evidence files are in the `evidence` volume (`arsune_evidence`).
 
 ## Limits
 
-- Simulation only: settlement is `dry`. No keys, no money.
-- AI agents are off. No model settings exist.
-- A race has 15 agents (12 hunters + 3 scouts). The host rejects any other size.
+- Real money: settlement is `near_intents`. Owners fund hunts with USDC (signed deposit, or 1Click
+  from another chain). One signed funding transfer is at most 1 USDC (`ARSUNE_MAX_PAYMENT_AMOUNT`).
+- A live race has one agent per hunter and scout account in the accounts file (owner,
+  hunter-1..4, scout-1: 4 hunters and 1 scout; with a model, hunter-4 is the AI hunter). The host
+  refuses a bounty whose reward plus bond is above 1 USDC.
+- With `ARSUNE_SETTLEMENT_MODE=dry`, a race has 15 agents (12 hunters + 3 scouts).
 - One race at a time. No race starts by itself; a visitor starts it from the UI.
 - Claim checks run one at a time (worker concurrency 1).
 - Rate limits per client IP at Traefik: 20 requests/second (burst 60) for the whole site;

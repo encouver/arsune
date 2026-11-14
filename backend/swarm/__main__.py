@@ -120,7 +120,8 @@ def parse(argv: list[str]) -> tuple[Config, Path | None]:
 def parse_serve(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="python -m swarm serve",
-        description="Host races for the web UI, one at a time, in simulation only.",
+        description="Host races for the web UI, one at a time. Simulation only, unless "
+        "--accounts is given and Arsune moves real money.",
     )
     parser.add_argument("--api", default="http://127.0.0.1:8540", help="Arsune API base URL")
     parser.add_argument("--state-host", default="127.0.0.1")
@@ -152,6 +153,12 @@ def parse_serve(argv: list[str]) -> argparse.Namespace:
         default=AI_RACES_PER_DAY,
         help="UI races per UTC day that get an AI hunter",
     )
+    parser.add_argument(
+        "--accounts",
+        type=Path,
+        help="swarm accounts file: with it, races run live (real USDC) when Arsune reports "
+        "near_intents or escrow settlement; one agent per hunter and scout account",
+    )
     parser.add_argument("--quiet", action="store_true", help="do not print events")
     return parser.parse_args(argv)
 
@@ -178,12 +185,13 @@ def main_serve(argv: list[str]) -> int:
             ai_races_per_day=args.ai_races_per_day,
             browser_pages=args.browser_pages,
             quiet=args.quiet,
+            accounts=args.accounts,
         )
         await serve(host, args.state_host, args.state_port, demo)
 
     try:
         asyncio.run(main_loop())
-    except OSError as exc:
+    except (OSError, SwarmError) as exc:
         print(f"swarm serve: {exc}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
