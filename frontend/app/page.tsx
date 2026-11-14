@@ -7,6 +7,7 @@ import {
   api,
   DEFAULT_FEE_BPS,
   errorText,
+  ownerKeyName,
   Options,
   OwnerBounty,
   parseUsdc,
@@ -101,6 +102,8 @@ export default function StartRacePage() {
         bond_amount: parseUsdc(form.bond),
         budget: parseUsdc(form.budget),
       });
+      if (bounty.owner_key)
+        localStorage.setItem(ownerKeyName(bounty.id), bounty.owner_key);
       router.push(`/bounties/${bounty.id}`);
     } catch (err) {
       setError(errorText(err));
@@ -186,8 +189,8 @@ export default function StartRacePage() {
               <li>
                 <strong>You get proof</strong>
                 <span>
-                  Each leak comes with the exact steps, so you can replay it
-                  and fix it.
+                  Each leak comes with the exact steps, so you can replay it and
+                  fix it.
                 </span>
               </li>
             </ol>
@@ -286,8 +289,8 @@ export default function StartRacePage() {
                 <span aria-hidden="true">→</span>
               </button>
               <p className="bo-muted">
-                Free to start. Next, you prove that you own the site and set
-                up the test user.
+                Free to start. Next, you prove that you own the site and set up
+                the test user.
               </p>
             </form>
             {options && (
@@ -310,7 +313,8 @@ export default function StartRacePage() {
                   </button>
                 </div>
                 <small data-testid="demo-hint">
-                  A small shop with known bugs. We do the ownership step for you.
+                  A small shop with known bugs. We do the ownership step for
+                  you.
                 </small>
               </div>
             )}

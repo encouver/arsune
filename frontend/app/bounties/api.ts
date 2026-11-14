@@ -92,7 +92,25 @@ export type BountySummary = {
   created_at: string;
 };
 
+export type AccessMarker = { index: number; label: string; value: string };
+
+export type AccessTest = {
+  ready: boolean;
+  login_path: string | null;
+  login_body: Record<string, unknown> | null;
+  markers: AccessMarker[];
+};
+
+export const ownerKeyName = (bountyId: string) =>
+  `arsune-owner-key:${bountyId}`;
+
 export type OwnerBounty = BountySummary & {
+  test_account?: {
+    login_path: string;
+    login_body: Record<string, unknown>;
+  } | null;
+  security_test_ready?: boolean;
+  owner_key?: string;
   site_check: SiteCheck | null;
   proof_token: string;
   proof_url: string;
@@ -177,13 +195,19 @@ function detailText(detail: unknown): string | null {
   return null;
 }
 
-export async function api<T>(path: string, body?: unknown): Promise<T> {
+export async function api<T>(
+  path: string,
+  body?: unknown,
+  extra: { method?: string; headers?: Record<string, string> } = {},
+): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, {
-      method: body === undefined ? "GET" : "POST",
-      headers:
-        body === undefined ? undefined : { "Content-Type": "application/json" },
+      method: extra.method ?? (body === undefined ? "GET" : "POST"),
+      headers: {
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+        ...extra.headers,
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
       cache: "no-store",
     });

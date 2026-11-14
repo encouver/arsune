@@ -26,6 +26,7 @@ import {
   utcTime,
 } from "../api";
 import { FundStep } from "../fund-step";
+import { SecurityStep } from "../security-step";
 import {
   PHASE_STATUS,
   RacePhase,
@@ -75,11 +76,11 @@ function lockedText(b: OwnerBounty): string {
   if (b.status === "pending_proof")
     return "First show that you own the site. Arsune then loads it.";
   if (b.status === "paused")
-    return "The hunt is paused. Check your site in step 2 to resume it.";
+    return "The hunt is paused. Check your site in step 3 to resume it.";
   if (b.status === "closed" && b.closed_reason === "budget_spent")
-    return "The budget is spent. Add money in step 3 to open the hunt again.";
+    return "The budget is spent. Add money in step 4 to open the hunt again.";
   if (b.status === "closed") return "This hunt is closed.";
-  return "Fund the hunt in step 3 first.";
+  return "Fund the hunt in step 4 first.";
 }
 
 export default function BountyPage({
@@ -202,6 +203,11 @@ export default function BountyPage({
       proofDone ? "done" : "active",
       proofDone ? "Done" : "Waiting for proof",
     ],
+    [
+      "Set up the security test",
+      bounty.security_test_ready ? "done" : "active",
+      bounty.security_test_ready ? "Done" : "Required",
+    ],
     ["Arsune loads your site", ...site],
     ["Fund the hunt", ...fund],
     ["Start the hunt", RACE_STATE[phase], PHASE_STATUS[phase]],
@@ -254,7 +260,7 @@ export default function BountyPage({
           >
             {glance.map(([title, state, status], i) => (
               <li key={title} data-step={state}>
-                <a href={`#step-${i + 1}`}>
+                <a href={i === 1 ? "#security-step" : `#step-${i < 1 ? 1 : i}`}>
                   <span className="bo-strip-n" aria-hidden="true">
                     {state === "done" ? "✓" : i + 1}
                   </span>
@@ -294,7 +300,23 @@ export default function BountyPage({
               />
             </Step>
             <Step
+              n={0}
+              label={2}
+              id="security-step"
+              title="Set up the security test"
+              state={bounty.security_test_ready ? "done" : "active"}
+              status={bounty.security_test_ready ? "Done" : "Required"}
+            >
+              <SecurityStep
+                bountyId={bounty.id}
+                demo={!!options && bounty.origin === options.demo_site_origin}
+                ready={!!bounty.security_test_ready}
+                onChange={refresh}
+              />
+            </Step>
+            <Step
               n={2}
+              label={3}
               title="Arsune loads your site"
               state={site[0]}
               status={site[1]}
@@ -306,7 +328,13 @@ export default function BountyPage({
                 onChange={refresh}
               />
             </Step>
-            <Step n={3} title="Fund the hunt" state={fund[0]} status={fund[1]}>
+            <Step
+              n={3}
+              label={4}
+              title="Fund the hunt"
+              state={fund[0]}
+              status={fund[1]}
+            >
               {fund[0] === "locked" ? (
                 <p className="bo-muted">
                   You fund the hunt after Arsune loads your site.
@@ -323,6 +351,7 @@ export default function BountyPage({
             </Step>
             <Step
               n={4}
+              label={5}
               title="Start the hunt"
               state={RACE_STATE[phase]}
               status={PHASE_STATUS[phase]}
@@ -351,9 +380,13 @@ function Step({
   state,
   status,
   collapse = false,
+  label = n,
+  id = `step-${n}`,
   children,
 }: {
   n: number;
+  label?: number;
+  id?: string;
   title: string;
   state: StepState;
   status: string;
@@ -364,29 +397,21 @@ function Step({
   const top = (
     <>
       <h2>
-        <span className="bo-step-label">{n}.</span> {title}
+        <span className="bo-step-label">{label}.</span> {title}
       </h2>
-      <span
-        className={`sw-chip bo-chip-${state}`}
-        data-testid={`step-${n}-status`}
-      >
+      <span className={`sw-chip bo-chip-${state}`} data-testid={`${id}-status`}>
         {status}
       </span>
     </>
   );
   return (
-    <li
-      className="bo-step"
-      id={`step-${n}`}
-      data-step={state}
-      data-testid={`step-${n}`}
-    >
+    <li className="bo-step" id={id} data-step={state} data-testid={id}>
       <span className="bo-step-n" aria-hidden="true">
-        {state === "done" ? "✓" : state === "error" ? "!" : n}
+        {state === "done" ? "✓" : state === "error" ? "!" : label}
       </span>
       <section className="sw-panel" aria-label={title}>
         {collapse && state === "done" ? (
-          <details className="bo-done" data-testid={`step-${n}-done`}>
+          <details className="bo-done" data-testid={`${id}-done`}>
             <summary className="sw-panel-top">
               {top}
               <ShowHide />
@@ -704,8 +729,8 @@ function PausedBanner({
       data-testid="paused-banner"
     >
       <div className="sw-error" role="alert">
-        Arsune paused this hunt because it cannot load your site. Agents send
-        no new reports until it loads again. {bounty.paused_reason}
+        Arsune paused this hunt because it cannot load your site. Agents send no
+        new reports until it loads again. {bounty.paused_reason}
       </div>
       <div className="bo-actions">
         <button
