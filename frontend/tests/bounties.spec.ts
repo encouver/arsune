@@ -660,7 +660,7 @@ test("dry flow: demo proof, site check, one-click funding, then ready to race", 
     page.getByRole("button", { name: "Start the hunt" }),
   ).toBeEnabled();
   await expect(page.getByTestId("race-hint")).toHaveText(
-    "15 agents will search 127.0.0.1:8541/shop/. You pay only for proven bugs.",
+    "16 agents (1 AI security agent + 12 hunters + 3 scouts) will search 127.0.0.1:8541/shop/. You pay only for proven bugs.",
   );
   const strip = page.getByTestId("step-strip");
   await expect(strip).toContainText("Fund the huntFunded");
