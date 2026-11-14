@@ -586,6 +586,8 @@ class Copycat(Hunter):
         if self.losses_in_row >= self.swarm.copy_loss_limit:
             return None
         for key, claim in self.swarm.feed.proven.items():
+            if claim.get("claim_type") == "access_leak":
+                continue  # an access leak needs an agent's own probes, never a copy
             if key not in self.known and claim["hunter_account"] != self.account:
                 self.known.add(key)
                 return copy_of(claim), None

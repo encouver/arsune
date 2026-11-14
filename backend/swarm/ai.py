@@ -14,6 +14,14 @@ import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
 
+from swarm.access import (
+    MAX_ROUNDS,
+    PLAN_TOKENS,
+    AccessHunt,
+    access_finding,
+    login_of,
+)
+from swarm.access import system_prompt as access_system
 from swarm.agents import ALL_FINDERS, MAX_UNRESOLVED, Hunter, Scout, Strategy
 from swarm.findings import (
     LABELS,
@@ -474,12 +482,15 @@ class AiHunter(Hunter):
 
     spec = AI_SPEC
     uses_ai = True
+    access_transport = None  # tests swap in a fake site for the access hunt
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.notebook = Notebook()
         self.considered: set[str] = set()
         self.scripted = False
+        # Only a bounty with a test account can prove an access leak.
+        self.access_done = login_of(self.swarm.bounty) is None
 
     def can_claim(self) -> bool:
         return len(self.pending) < MAX_UNRESOLVED and self.wallet.can_afford(self.bond)
@@ -493,7 +504,7 @@ class AiHunter(Hunter):
         notebook = self.notebook
         may_buy = self.fresh_offers() or self.swarm.scouts_searching()
         waiting = notebook.unreviewed or notebook.again
-        return bool(self.queue or self.can_search() or waiting or may_buy)
+        return bool(self.queue or self.can_search() or waiting or may_buy or not self.access_done)
 
     async def act(self) -> bool:
         if self.scripted:
@@ -503,6 +514,9 @@ class AiHunter(Hunter):
             if item:
                 await self.claim(*item)
                 return True
+        if self.access_ready():
+            await self.hunt_access()
+            return True
         if self.worth_a_call():
             await self.consult(self.fresh_offers()[:MAX_OFFERS] if self.can_claim() else [])
             return True
@@ -510,6 +524,55 @@ class AiHunter(Hunter):
             await self.search()
             return True
         return False
+
+    def access_ready(self) -> bool:
+        """Probe as account A once the crawl has a few pages to read scripts from."""
+        return not self.access_done and (self.crawl.done or len(self.crawl.pages) >= BATCH)
+
+    async def hunt_access(self):
+        """Log in as account A, ask the model for probes, run them, claim what leaks."""
+        self.access_done = True
+        self.state = "searching"
+        hunt = AccessHunt(self.swarm.site_url, login_of(self.swarm.bounty), self.access_transport)
+        try:
+            login = await hunt.log_in()
+            if login is None:
+                self.log(f"{self.id} could not log in as test account A; it skips access probes.")
+                return
+            await hunt.gather(list(self.crawl.pages.values()), login)
+            new: list[str] = []
+            for round_ in range(MAX_ROUNDS + 1):
+                may_probe = round_ < MAX_ROUNDS
+                try:
+                    answer = await self.swarm.ai.ask(
+                        access_system(), hunt.user_prompt(self.id, new, may_probe), PLAN_TOKENS
+                    )
+                    require_keys(answer, ("leaks", "probes", "note"))
+                except BudgetSpent:
+                    self.go_scripted()
+                    return
+                except ModelFailure as exc:
+                    self.log(f"{self.id} stops its access probes: {exc}.")
+                    return
+                for probe, why in hunt.leaks(answer):
+                    finding = access_finding(hunt.origin, probe, why)
+                    if finding.key not in self.known:
+                        self.known.add(finding.key)
+                        self.queue.append((finding, None))
+                        self.log(f"{self.id}: {why or finding.evidence}; claiming access_leak")
+                plans = hunt.plans(answer) if may_probe else []
+                if not plans:
+                    note = reason(answer.get("note"))
+                    if note and not new:
+                        self.log(f"{self.id} plans no access probe: {note}.")
+                    return
+                self.log(
+                    f"{self.id} probes as account A: "
+                    + "; ".join(p["why"] or "no reason" for p in plans)
+                )
+                new = [await hunt.run(plan) for plan in plans]
+        finally:
+            await hunt.close()
 
     def worth_a_call(self) -> bool:
         """A full batch of new pages, or the last ones. Tips on offer and pages to see again

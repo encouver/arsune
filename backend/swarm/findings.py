@@ -22,6 +22,7 @@ LABELS = {
     "price_mismatch": "price mismatch",
     "broken_image": "broken image",
     "page_error": "page error",
+    "access_leak": "access leak",
 }
 SUSPICIOUS_LINK = re.compile(
     r"old|legacy|retired|archive|previous|gift|report|missing|deprecated|beta", re.IGNORECASE
