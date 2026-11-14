@@ -693,7 +693,7 @@ test("a top-up reopens a bounty whose budget ran out", async ({ page }) => {
   await expect(page.getByTestId("bounty-status")).toHaveText("Budget spent");
   await expect(page.getByTestId("step-3-status")).toHaveText("Budget spent");
   await expect(page.getByTestId("race-locked")).toHaveText(
-    "The budget is spent. Add money in step 3 to open the bounty again.",
+    "The budget is spent. Add money in step 3 to open the hunt again.",
   );
   await expect(page.getByTestId("reopen-hint")).toHaveText(
     "The budget ran out, so the hunt is closed. Add at least 0.70 USDC to open it again.",
@@ -1272,7 +1272,7 @@ test("results come first, in plain words; hashes and IDs stay in Details", async
   await expect(details).toContainText(PROVEN);
   await expect(details).toContainText(HUNTER);
   await expect(details).toContainText(FINGERPRINT);
-  await expect(details).toContainText("Bond0.10 USDC");
+  await expect(details).toContainText("Deposit0.10 USDC");
   await expect(details).toContainText("Reward and bond paid.");
   const hash = details.getByTestId("evidence-hash");
   await expect(hash).toHaveText(`sha256 ${HASH.slice(0, 12)}…`);

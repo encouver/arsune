@@ -616,7 +616,7 @@ test("agents show by name; a 64-hex account stays in the tooltip", async ({
   await expect(page.getByTestId("agent-tip")).toHaveText(/^hunter-048 · /);
   expect(await page.getByTestId("who-won").innerHTML()).not.toMatch(HEX64);
   await expect(page.getByTestId("line-latest")).toContainText(
-    "an unnamed agent claimed",
+    "an unnamed agent reported",
   );
   expect(await page.getByTestId("race-line").innerText()).not.toMatch(HEX64);
   // A hex account as the agent filter: the bar shows the name only.
@@ -721,17 +721,17 @@ test("no horizontal scroll at 390 px with 110 agents", async ({
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390);
-  // The line is vertical: Check sits below Claim, Claim below Find.
+  // The line is vertical: Check sits below Report, Report below Find.
   const line = page.getByTestId("race-line");
   const box = async (step: string) =>
     (await line.locator(`[data-step="${step}"]`).boundingBox())!;
-  const [find, claim, check] = [
+  const [find, report, check] = [
     await box("find"),
-    await box("claim"),
+    await box("report"),
     await box("check"),
   ];
-  expect(claim.y).toBeGreaterThan(find.y);
-  expect(check.y).toBeGreaterThan(claim.y);
+  expect(report.y).toBeGreaterThan(find.y);
+  expect(check.y).toBeGreaterThan(report.y);
   const paid = (await line.getByTestId("line-paid").boundingBox())!;
   expect(paid.y).toBeGreaterThan(check.y);
   for (const mark of await marks.all()) {
