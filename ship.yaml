@@ -1,0 +1,7 @@
+env:
+  prod:
+    ssh:
+      host: api.staging.personaizit.com
+      user: augevi
+      files:
+        .env.prod: ~/arsune/.env

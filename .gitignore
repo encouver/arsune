@@ -18,3 +18,4 @@ contracts/**/target/
 
 # Claude Code agent worktrees
 .claude/worktrees/
+.env.prod
