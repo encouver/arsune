@@ -7,11 +7,12 @@ response, a claim, a log line or evidence.
 
 import hashlib
 import hmac
-import json
 import secrets
+from urllib.parse import urlsplit
 
 from app import demo_shop
-from app.bounty.claims import MAX_STEP_BODY, STEP_PATH
+from app.browser.policy import TargetPolicyError, validate_target
+from app.browser.session import in_scope, scope_base
 
 MARKER_LABELS = (
     "other user's data",
@@ -20,6 +21,7 @@ MARKER_LABELS = (
     "chatbot instructions",
 )
 _CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+MAX_FIELD = 256
 SETUP_FIRST = "Set up the security test first (step 2)."
 
 
@@ -33,30 +35,42 @@ def _new_code() -> str:
     return "KX-" + "-".join("".join(chars[i : i + 4]) for i in range(0, 16, 4))
 
 
-def initial(is_demo: bool) -> dict:
-    """The demo shop plants fixed markers and has a known test account; other sites set A later."""
-    return demo_shop.access_test() if is_demo else {"login": None, "markers": new_markers()}
+def initial(site_url: str | None) -> dict:
+    """The demo shop has a known test account; other sites set A later. Pass the demo URL only."""
+    if site_url:
+        parts = urlsplit(site_url)
+        return demo_shop.access_test(f"{parts.scheme}://{parts.netloc}")
+    return {"account": None, "markers": new_markers()}
+
+
+def account(access_test: dict | None) -> dict | None:
+    """Test account A: login_url, email, password. Older demo rows stored a JSON login step."""
+    access_test = access_test or {}
+    if access_test.get("account"):
+        return access_test["account"]
+    return None
 
 
 def ready(access_test: dict | None) -> bool:
-    return bool(access_test and access_test.get("login") and access_test.get("markers"))
+    return bool(account(access_test) and (access_test or {}).get("markers"))
 
 
 def public_view(access_test: dict | None) -> dict | None:
-    """What an agent needs to log in as A. No marker."""
+    """What an agent needs to log in as A (a test account). No marker."""
     if not ready(access_test):
         return None
-    login = access_test["login"]
-    return {"login_path": login["path"], "login_body": login["body"]}
+    test_account = account(access_test)
+    return {key: test_account[key] for key in ("login_url", "email", "password")}
 
 
 def owner_view(access_test: dict | None) -> dict:
     markers = (access_test or {}).get("markers") or []
-    login = (access_test or {}).get("login")
+    test_account = account(access_test) or {}
     return {
         "ready": ready(access_test),
-        "login_path": login["path"] if login else None,
-        "login_body": login["body"] if login else None,
+        "login_url": test_account.get("login_url"),
+        "email": test_account.get("email"),
+        "password": test_account.get("password"),
         "markers": [
             {
                 "index": n + 1,
@@ -68,15 +82,22 @@ def owner_view(access_test: dict | None) -> dict:
     }
 
 
-def checked_login(path, body) -> dict:
-    """Return the login step or raise ValueError with a plain reason."""
-    if not isinstance(path, str) or not STEP_PATH.fullmatch(path):
-        raise ValueError("The login path must start with one / and name a path on the site.")
-    if not isinstance(body, dict) or not body:
-        raise ValueError("The login body must be a non-empty JSON object.")
-    if len(json.dumps(body)) > MAX_STEP_BODY:
-        raise ValueError(f"The login body must be at most {MAX_STEP_BODY} bytes of JSON.")
-    return {"path": path, "body": body}
+async def checked_account(site_url: str, login_url, email, password) -> dict:
+    """Return test account A or raise ValueError with a plain reason."""
+    if not isinstance(login_url, str) or not in_scope(login_url, scope_base(host(site_url))):
+        raise ValueError("The login page must be a full URL on the bounty site or its subdomains.")
+    try:
+        login_url = await validate_target(login_url)
+    except TargetPolicyError as exc:
+        raise ValueError(str(exc)) from None
+    for name, value in (("email", email), ("password", password)):
+        if not isinstance(value, str) or not 1 <= len(value) <= MAX_FIELD:
+            raise ValueError(f"The {name} must be text of 1 to {MAX_FIELD} characters.")
+    return {"login_url": login_url, "email": email, "password": password}
+
+
+def host(url: str) -> str:
+    return urlsplit(url).hostname or ""
 
 
 def new_owner_key() -> tuple[str, str]:

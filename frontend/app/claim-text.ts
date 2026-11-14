@@ -100,7 +100,20 @@ export function claimKind(type: string): string {
 function lastStep(d: Record<string, unknown>) {
   const steps = Array.isArray(d.steps) ? d.steps : [];
   const step = steps[steps.length - 1] as Record<string, unknown> | undefined;
-  return step ? { method: text(step.method), path: text(step.path) } : null;
+  if (!step) return null;
+  return {
+    method: text(step.method),
+    path: text(step.path) || urlPath(text(step.url)),
+  };
+}
+
+function urlPath(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.pathname + u.search;
+  } catch {
+    return "";
+  }
 }
 
 function overflow(reason?: string | null) {

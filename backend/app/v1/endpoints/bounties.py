@@ -34,8 +34,10 @@ def get_access_test(bounty_id: str, x_owner_key: str | None = Header(None)):
 
 
 @router.put("/bounties/{bounty_id}/access-test")
-def set_access_test(bounty_id: str, request: SetAccessTest, x_owner_key: str | None = Header(None)):
-    return bounties.set_access_test(bounty_id, x_owner_key, request)
+async def set_access_test(
+    bounty_id: str, request: SetAccessTest, x_owner_key: str | None = Header(None)
+):
+    return await bounties.set_access_test(bounty_id, x_owner_key, request)
 
 
 def accepted_while_checking(response: Response, site_check: dict | None):

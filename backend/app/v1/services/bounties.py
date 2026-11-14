@@ -278,7 +278,7 @@ async def create_bounty(request: CreateBounty):
             id=str(uuid4()),
             url=url,
             origin=origin(url),
-            access_test=access.initial(origin(url) == origin(settings.demo_url)),
+            access_test=access.initial(url if origin(url) == origin(settings.demo_url) else None),
             owner_key_hash=owner_key_hash,
             owner_account=request.owner_account,
             proof_token=secrets.token_urlsafe(24),
@@ -307,9 +307,13 @@ def get_access_test(bounty_id, owner_key):
         return access.owner_view(owned_bounty(session, bounty_id, owner_key).access_test)
 
 
-def set_access_test(bounty_id, owner_key, request):
+async def set_access_test(bounty_id, owner_key, request):
     try:
-        login = access.checked_login(request.login_path, request.login_body)
+        with Session() as session:
+            site_url = owned_bounty(session, bounty_id, owner_key).url
+        test_account = await access.checked_account(
+            site_url, request.login_url, request.email, request.password
+        )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     with Session.begin() as session:
@@ -317,7 +321,8 @@ def set_access_test(bounty_id, owner_key, request):
         if bounty.status == "closed":
             raise HTTPException(409, not_open(bounty))
         current = bounty.access_test or {"markers": access.new_markers()}
-        bounty.access_test = {**current, "login": login}
+        current.pop("login", None)
+        bounty.access_test = {**current, "account": test_account}
         bounty.updated_at = utcnow()
         return access.owner_view(bounty.access_test)
 

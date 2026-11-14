@@ -5,6 +5,7 @@ from urllib.parse import unquote, urlsplit
 from playwright.async_api import Error as BrowserError
 
 from app.browser.policy import origin
+from app.browser.session import LOGIN_SECONDS, LoginFailed, login_session, replay_steps, scope_base
 from app.core.scan import VIEWPORTS
 
 
@@ -140,8 +141,6 @@ def check_page_error(page, message):
     return "unverified", "The page did not load completely, so the error cannot be ruled out."
 
 
-MAX_STEP_BYTES = 256 * 1024
-STEP_SECONDS = 10
 STEP_FAILED = (BrowserError, TimeoutError, ValueError)
 QUOTE_CHARS = 80
 NO_LEAK = "No step showed data that account A must not see."
@@ -168,61 +167,54 @@ def echoed_markers(steps, markers):
     return {n for n, marker in enumerate(markers) if marker.casefold() in sent}
 
 
-async def replay_step(context, site_origin, step):
-    """Run one step with the context's request client: same origin, no redirects, capped."""
-    url = site_origin + step["path"]
-    if urlsplit(url).scheme + "://" + urlsplit(url).netloc != site_origin:
-        raise ValueError("A step left the bounty site.")
-    options = {"method": step["method"], "max_redirects": 0, "timeout": STEP_SECONDS * 1000}
-    if step["method"] == "POST":
-        options["data"] = step["body"]
-    async with asyncio.timeout(STEP_SECONDS + 1):
-        response = await context.request.fetch(url, **options)
-        try:
-            length = int(response.headers.get("content-length") or 0)
-            body = b"" if length > MAX_STEP_BYTES else (await response.body())[:MAX_STEP_BYTES]
-            return response.status, body.decode("utf-8", "replace")
-        finally:
-            await response.dispose()
-
-
 async def check_access_leak(item, context, access_test):
-    """Log in as account A in a clean context, replay the steps, and look for the markers."""
-    login, markers = (access_test or {}).get("login"), (access_test or {}).get("markers") or []
-    if not login or not markers or context is None:
+    """Log in as account A in a real browser, replay the steps, and look for the markers."""
+    test_account = (access_test or {}).get("account")
+    markers = (access_test or {}).get("markers") or []
+    if not test_account or not markers or context is None:
         return "unverified", NO_TEST, []
     steps = item.get("details", {}).get("steps") or []
     site_origin = origin(item["urls"][0])
+    base = scope_base(urlsplit(test_account["login_url"]).hostname or "")
     echoed = echoed_markers(steps, markers)
+    browser = context.browser
     try:
-        status, _ = await replay_step(
-            context, site_origin, {"method": "POST", "path": login["path"], "body": login["body"]}
-        )
+        async with asyncio.timeout(LOGIN_SECONDS * 3):
+            session = await login_session(
+                browser,
+                test_account["login_url"],
+                test_account["email"],
+                test_account["password"],
+                base,
+            )
+    except LoginFailed as exc:
+        return "unverified", f"Arsune could not log in as test account A: {exc}", []
     except STEP_FAILED:
         return "unverified", "Arsune could not log in as test account A.", []
-    if not 200 <= status < 400:
-        return "unverified", f"The login of test account A returned HTTP {status}.", []
+    results = await replay_steps(browser, session, steps, base, site_origin)
     evidence = []
-    for number, step in enumerate(steps, 1):
+    for number, (step, result) in enumerate(zip(steps, results, strict=True), 1):
+        parts = urlsplit(result["url"])
+        shown_path = parts.path + (f"?{parts.query}" if parts.query else "")
         record = {
-            "url": site_origin + step["path"],
+            "url": result["url"],
             "method": step["method"],
-            "path": step["path"],
+            "path": shown_path,
+            "status": result["status"],
             "marker": None,
         }
-        try:
-            record["status"], text = await replay_step(context, site_origin, step)
-        except STEP_FAILED:
-            record["status"], record["error"] = None, "The step did not finish."
+        if result["status"] is None:
+            record["error"] = result.get("error") or "The step did not finish."
             evidence.append(record)
             continue
+        text = result["body"]
         shown = next((n for n, m in enumerate(markers) if n not in echoed and m in text), None)
         if shown is not None:
             record["marker"] = shown + 1
             record["quote"] = marker_quote(text, markers[shown], markers)
             evidence.append(record)
             reason = (
-                f"Step {number} ({step['method']} {step['path']}) returned HTTP "
+                f"Step {number} ({step['method']} {shown_path}) returned HTTP "
                 f"{record['status']} with marker {shown + 1} of {len(markers)}, data that "
                 f'account A must not see: "{record["quote"]}"'
             )

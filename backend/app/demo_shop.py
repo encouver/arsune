@@ -784,6 +784,7 @@ ALICE = {"email": "alice@demo.shop", "password": "alice-demo"}
 # Bob's password is random, so a claim cannot simply log in as Bob.
 _BOB_PASSWORD = secrets.token_urlsafe(18)
 LOGIN_PATH = f"{SHOP}/api/login"
+LOGIN_PAGE = f"{SHOP}/login"
 ANON_KEY = "nw-anon-4f1c9a2e7b"
 SESSION_COOKIE = "northwind_session"
 _SESSIONS: dict[str, str] = {}
@@ -810,9 +811,10 @@ def access_markers():
     ]
 
 
-def access_test():
+def access_test(site_origin):
     """The owner test setup that a demo bounty stores (never shown publicly)."""
-    return {"login": {"path": LOGIN_PATH, "body": dict(ALICE)}, "markers": access_markers()}
+    account = {"login_url": site_origin.rstrip("/") + LOGIN_PAGE, **ALICE}
+    return {"account": account, "markers": access_markers()}
 
 
 def _orders():
@@ -924,6 +926,43 @@ def _login_required():
 @shop_api.get("/static/app.js")
 def app_js():
     return Response(APP_JS, media_type="text/javascript")
+
+
+LOGIN_FORM = f"""
+<form id="nw-login" method="post" action="{LOGIN_PATH}">
+  <p><label>Email <input type="email" name="email" autocomplete="username" required></label></p>
+  <p><label>Password <input type="password" name="password" autocomplete="current-password"
+     required></label></p>
+  <p><button type="submit">Log in</button> <span class="error" role="alert"></span></p>
+</form>
+<script>
+document.querySelector("#nw-login").addEventListener("submit", async (event) => {{
+  event.preventDefault();
+  const form = event.target;
+  const answer = await fetch("{LOGIN_PATH}", {{
+    method: "POST",
+    headers: {{"Content-Type": "application/json"}},
+    body: JSON.stringify({{email: form.email.value, password: form.password.value}}),
+  }});
+  if (answer.ok) location.href = "{SHOP}/account";
+  else form.querySelector(".error").textContent = "Wrong email or password.";
+}});
+</script>
+"""
+
+
+@shop_api.get("/login")
+def login_page():
+    return _layout("Log in", LOGIN_FORM)
+
+
+@shop_api.get("/account")
+def account_page(request: Request):
+    user = _user(request)
+    if not user:
+        return RedirectResponse(LOGIN_PAGE, status_code=303)
+    body = f'<p>Logged in as {escape(user)}.</p><p id="nw-my-orders">Loading orders</p>'
+    return _layout("Your account", body)
 
 
 @shop_api.post("/api/login")

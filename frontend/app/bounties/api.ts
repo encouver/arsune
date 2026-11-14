@@ -96,8 +96,9 @@ export type AccessMarker = { index: number; label: string; value: string };
 
 export type AccessTest = {
   ready: boolean;
-  login_path: string | null;
-  login_body: Record<string, unknown> | null;
+  login_url: string | null;
+  email: string | null;
+  password: string | null;
   markers: AccessMarker[];
 };
 
@@ -106,8 +107,9 @@ export const ownerKeyName = (bountyId: string) =>
 
 export type OwnerBounty = BountySummary & {
   test_account?: {
-    login_path: string;
-    login_body: Record<string, unknown>;
+    login_url: string;
+    email: string;
+    password: string;
   } | null;
   security_test_ready?: boolean;
   owner_key?: string;

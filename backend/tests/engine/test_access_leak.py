@@ -63,9 +63,8 @@ PLANTS = [
 
 
 async def check(steps, setup=None):
-    urls, details = await scoped_claim(
-        ORIGIN, "access_leak", [ORIGIN + steps[-1]["path"]], {"steps": steps}
-    )
+    last = steps[-1].get("url") or ORIGIN + steps[-1]["path"]
+    urls, details = await scoped_claim(ORIGIN, "access_leak", [last], {"steps": steps})
     item = {"claim_type": "access_leak", "urls": urls, "details": details}
 
     async def keep():
@@ -76,7 +75,7 @@ async def check(steps, setup=None):
         async def observe(target, viewport):
             raise AssertionError("An access claim reads no page.")
 
-        return await check_candidate(item, observe, context, setup or access_test())
+        return await check_candidate(item, observe, context, setup or access_test(ORIGIN))
 
 
 @pytest.mark.parametrize(("marker", "steps"), PLANTS)
@@ -92,7 +91,7 @@ async def test_each_planted_leak_is_proven_without_showing_the_marker(marker, st
     assert shown["marker"] == marker and len(shown["quote"]) <= 90
     path = steps[-1]["path"].split("?")[0]
     again = final_fingerprint("access_leak", result["urls"], result["details"], result["evidence"])
-    other_query = {**shown, "path": path + "?select=*&x=1"}
+    other_query = {**shown, "url": ORIGIN + path + "?select=*&x=1"}
     assert again == final_fingerprint("access_leak", [], {}, [other_query])
 
 
@@ -112,8 +111,21 @@ async def test_a_step_that_sends_a_marker_proves_nothing():
 
 
 async def test_a_bounty_without_a_security_test_leaves_the_claim_unverified():
-    result = await check(PLANTS[0][1], {"login": None, "markers": access_markers()})
+    result = await check(PLANTS[0][1], {"account": None, "markers": access_markers()})
     assert result["status"] == "unverified"
+
+
+async def test_a_wrong_password_leaves_the_claim_unverified_with_a_reason():
+    setup = access_test(ORIGIN)
+    setup["account"] = {**setup["account"], "password": "wrong"}
+    result = await check(PLANTS[2][1], setup)
+    assert result["status"] == "unverified"
+    assert "Still on the login page" in result["checker_reason"]
+
+
+async def test_absolute_step_urls_work_like_paths():
+    result = await check([{"method": "GET", "url": ORIGIN + "/shop/api/admin/stats", "body": None}])
+    assert result["status"] == "confirmed" and "marker 3 of 4" in result["checker_reason"]
 
 
 async def test_claim_rules():
@@ -121,7 +133,8 @@ async def test_claim_rules():
     urls, details = await scoped_claim(
         ORIGIN, "access_leak", [ORIGIN + "/shop/api/db/profiles?select=*"], {"steps": steps}
     )
-    assert urls == [ORIGIN + "/shop/api/db/profiles"] and details == {"steps": steps}
+    assert urls == [ORIGIN + "/shop/api/db/profiles"]
+    assert details == {"steps": [{"method": "GET", "url": ORIGIN + steps[0]["path"], "body": None}]}
     bad = [
         ([ORIGIN + "/shop/api/other"], {"steps": steps}),
         ([ORIGIN + "/x"], {"steps": [get("/x")] * 7}),
@@ -132,6 +145,11 @@ async def test_claim_rules():
         ([ORIGIN + "/x"], {"steps": [get("/x")], "marker": "x"}),
         ([ORIGIN + "/x"], {"steps": [{**get("/x"), "marker": "x"}]}),
         (["http://other.example/x"], {"steps": [get("/x")]}),
+        (["http://other.example/x"], {"steps": [{**get("/x"), "url": "http://other.example/x"}]}),
+        (
+            ["http://other.example/x"],
+            {"steps": [{"method": "GET", "url": "http://other.example/x", "body": None}]},
+        ),
     ]
     for claim_urls, claim_details in bad:
         with pytest.raises((ClaimError, TargetPolicyError)):

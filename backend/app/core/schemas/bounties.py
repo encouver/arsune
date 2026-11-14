@@ -60,7 +60,8 @@ class CreateClaim(BaseModel):
 
 
 class SetAccessTest(BaseModel):
-    """Test account A: the login step that Arsune's checker replays before a claim's steps."""
+    """Test account A: Arsune logs in on this page in a real browser before a claim's steps."""
 
-    login_path: str = Field(min_length=1, max_length=2048)
-    login_body: dict[str, Any]
+    login_url: str = Field(min_length=8, max_length=2048)
+    email: str = Field(min_length=1, max_length=256)
+    password: str = Field(min_length=1, max_length=256)

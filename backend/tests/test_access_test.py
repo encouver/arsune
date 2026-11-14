@@ -37,8 +37,9 @@ def test_public_views_show_test_account_a_but_never_a_marker(client, site):
     bounty = create(client, site)
     assert bounty["owner_key"]
     assert bounty["test_account"] == {
-        "login_path": "/shop/api/login",
-        "login_body": {"email": "alice@demo.shop", "password": "alice-demo"},
+        "login_url": site + "/shop/login",
+        "email": "alice@demo.shop",
+        "password": "alice-demo",
     }
     texts = [
         client.get(f"/api/bounties/{bounty['id']}").text,
@@ -66,21 +67,24 @@ def test_only_the_owner_reads_and_sets_the_security_test(client, site):
     response = client.post(f"/api/bounties/{bounty['id']}/verify")
     assert response.status_code == 409
     assert response.json()["detail"] == "Set up the security test first (step 2)."
-    assert (
-        client.put(url, json={"login_path": "x", "login_body": {}}, headers=owner).status_code
-        == 422
-    )
-    body = {"login_path": "/login", "login_body": {"user": "a", "password": "b"}}
+    for bad in (
+        {"login_url": "/login", "email": "a", "password": "b"},
+        {"login_url": "https://other.example/login", "email": "a", "password": "b"},
+        {"login_url": site + "/login", "email": "", "password": "b"},
+    ):
+        assert client.put(url, json=bad, headers=owner).status_code == 422
+    body = {"login_url": site + "/login", "email": "a@x.com", "password": "b"}
     assert client.put(url, json=body).status_code == 403
     view = client.put(url, json=body, headers=owner).json()
-    assert view["ready"] and view["login_path"] == "/login"
+    assert view["ready"] and view["login_url"] == site + "/login"
+    assert view["email"] == "a@x.com" and view["password"] == "b"
     values = [m["value"] for m in view["markers"]]
     assert len(set(values)) == 4 and all(
         len(v) >= 16 and "ARSUNE" not in v.upper() and "MARKER" not in v.upper() for v in values
     )
     assert values != access_markers()
     public = client.get(f"/api/bounties/{bounty['id']}").json()
-    assert public["test_account"] == {"login_path": "/login", "login_body": body["login_body"]}
+    assert public["test_account"] == body
     # The rule passes; the proof check that follows is the next step.
     detail = client.post(f"/api/bounties/{bounty['id']}/verify").json()["detail"]
     assert detail != "Set up the security test first (step 2)."

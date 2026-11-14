@@ -225,7 +225,13 @@ class BrowserPool:
         self._slots = asyncio.Semaphore(size)
         self._start = asyncio.Lock()
         self._playwright = None
+        self._browser = None
         self._contexts: dict[str, object] = {}
+
+    async def browser(self):
+        """The shared Chromium itself, for agents that need their own context (a login)."""
+        await self._context("desktop")
+        return self._browser
 
     async def _context(self, kind: str):
         async with self._start:
@@ -233,7 +239,7 @@ class BrowserPool:
                 from playwright.async_api import async_playwright
 
                 self._playwright = await async_playwright().start()
-                browser = await self._playwright.chromium.launch()
+                browser = self._browser = await self._playwright.chromium.launch()
                 self._contexts = {
                     "mobile": await browser.new_context(viewport=MOBILE),
                     "desktop": await browser.new_context(viewport=DESKTOP),

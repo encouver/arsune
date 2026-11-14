@@ -6,7 +6,8 @@ import re
 from urllib.parse import urljoin, urlsplit
 
 from app.browser.checker import failing_images, matching_errors, normalize_message
-from app.browser.policy import origin, validate_target
+from app.browser.policy import TargetPolicyError, origin, validate_target
+from app.browser.session import in_scope, scope_base, step_url
 
 # Each supported claim type names its pages through exactly these detail keys.
 CLAIM_TYPES = {
@@ -47,31 +48,47 @@ def step_page(path: str) -> str:
     return page.rstrip("/") or "/"
 
 
-def access_fingerprint(marker_index: int, method: str, path: str) -> str:
+def access_fingerprint(marker_index: int, method: str, url: str) -> str:
     """One leak is one marker shown by one endpoint, whatever the query or the hunter."""
-    value = json.dumps(["access_leak", marker_index, f"{method} {step_page(path)}"])
+    parts = urlsplit(url)
+    endpoint = f"{method} {(parts.hostname or '').lower()}{step_page(parts.path)}"
+    value = json.dumps(["access_leak", marker_index, endpoint])
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def scoped_steps(steps) -> list[dict]:
+async def scoped_steps(steps, site_origin: str) -> list[dict]:
+    """Steps with absolute URLs on the bounty's registrable domain (a path uses the origin)."""
     if not isinstance(steps, list) or not 1 <= len(steps) <= MAX_STEPS:
         raise ClaimError(f"An access claim needs 1 to {MAX_STEPS} steps.")
+    base = scope_base(urlsplit(site_origin).hostname or "")
     clean = []
     for step in steps:
-        if not isinstance(step, dict) or set(step) != {"method", "path", "body"}:
-            raise ClaimError("Each step must contain exactly: method, path, body.")
-        method, path, body = step["method"], step["path"], step["body"]
+        keys = set(step) if isinstance(step, dict) else set()
+        if keys not in ({"method", "url", "body"}, {"method", "path", "body"}):
+            raise ClaimError("Each step must contain exactly: method, url (or path), body.")
+        method, body = step["method"], step["body"]
         if method not in ("GET", "POST"):
             raise ClaimError("A step method must be GET or POST.")
-        if not isinstance(path, str) or not STEP_PATH.fullmatch(path):
+        if "path" in step and (
+            not isinstance(step["path"], str) or not STEP_PATH.fullmatch(step["path"])
+        ):
             raise ClaimError("A step path must start with one / and name a path on the site.")
+        url = step_url(step, site_origin)
+        if not isinstance(url, str) or len(url) > 2048 or "#" in url:
+            raise ClaimError("A step URL must be text of at most 2048 characters, no fragment.")
+        if not (in_scope(url, base) or origin(url) == site_origin):
+            raise ClaimError("Every step URL must be on the bounty site or its subdomains.")
+        try:
+            url = await validate_target(url)
+        except TargetPolicyError as exc:
+            raise ClaimError(str(exc)) from None
         if method == "GET" and body is not None:
             raise ClaimError("A GET step has no body.")
         if method == "POST" and not isinstance(body, dict):
             raise ClaimError("A POST step body must be a JSON object.")
         if body is not None and len(json.dumps(body)) > MAX_STEP_BODY:
             raise ClaimError(f"A step body must be at most {MAX_STEP_BODY} bytes of JSON.")
-        clean.append({"method": method, "path": path, "body": body})
+        clean.append({"method": method, "url": url, "body": body})
     return clean
 
 
@@ -113,7 +130,7 @@ def final_fingerprint(claim_type: str, urls: list[str], details: dict, evidence:
     if claim_type == "access_leak":
         shown = next((o for o in evidence if o.get("marker") is not None), None)
         if shown:
-            return access_fingerprint(shown["marker"], shown["method"], shown["path"])
+            return access_fingerprint(shown["marker"], shown["method"], shown["url"])
         return fingerprint(claim_type, urls, details)
     if claim_type == "price_mismatch":
         return fingerprint(claim_type, [land(u) for u in urls], details)
@@ -149,14 +166,16 @@ async def scoped_claim(site_origin: str, claim_type: str, urls: list, details: d
         return value
 
     if claim_type == "access_leak":
-        steps = scoped_steps(details["steps"])
-        page = await on_site(site_origin + step_page(steps[-1]["path"]))
+        steps = await scoped_steps(details["steps"], site_origin)
+        page = spell_url(urlsplit(steps[-1]["url"]))
         # The query string of the last step may be part of the URL; the page is what counts.
         given = [u.split("?", 1)[0] if isinstance(u, str) else u for u in urls]
-        if len(given) != 1 or step_page(urlsplit(await on_site(given[0])).path) != step_page(
-            urlsplit(page).path
-        ):
-            raise ClaimError("The claim URL must be the site origin plus the last step path.")
+        claimed = urlsplit(given[0]) if len(given) == 1 and isinstance(given[0], str) else None
+        if not claimed or not claimed.hostname or claimed.scheme not in ("http", "https"):
+            raise ClaimError("The claim URL must be the URL of the last step.")
+        claimed, wanted = urlsplit(spell_url(claimed)), urlsplit(page)
+        if claimed.netloc != wanted.netloc or step_page(claimed.path) != step_page(wanted.path):
+            raise ClaimError("The claim URL must be the URL of the last step.")
         return [page], {"steps": steps}
     urls = [await on_site(u) for u in urls]
     if len(set(urls)) != len(urls):

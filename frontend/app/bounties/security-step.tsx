@@ -19,32 +19,15 @@ function hint(label: string): string {
   );
 }
 
-type Form = {
-  path: string;
-  userKey: string;
-  userVal: string;
-  passKey: string;
-  passVal: string;
-};
+type Form = { loginUrl: string; email: string; password: string };
 
-const EMPTY: Form = {
-  path: "/api/login",
-  userKey: "email",
-  userVal: "",
-  passKey: "password",
-  passVal: "",
-};
+const EMPTY: Form = { loginUrl: "", email: "", password: "" };
 
 function toForm(t: AccessTest): Form {
-  const entries = Object.entries(t.login_body ?? {});
-  if (!t.login_path || entries.length < 2) return EMPTY;
-  const [[userKey, userVal], [passKey, passVal]] = entries;
   return {
-    path: t.login_path,
-    userKey,
-    userVal: String(userVal),
-    passKey,
-    passVal: String(passVal),
+    loginUrl: t.login_url ?? "",
+    email: t.email ?? "",
+    password: t.password ?? "",
   };
 }
 
@@ -111,11 +94,9 @@ export function SecurityStep({
       const t = await api<AccessTest>(
         `/api/bounties/${encodeURIComponent(bountyId)}/access-test`,
         {
-          login_path: form.path.trim(),
-          login_body: {
-            [form.userKey.trim()]: form.userVal,
-            [form.passKey.trim()]: form.passVal,
-          },
+          login_url: form.loginUrl.trim(),
+          email: form.email.trim(),
+          password: form.password,
         },
         { method: "PUT", headers: { "X-Owner-Key": key as string } },
       );
@@ -148,47 +129,33 @@ export function SecurityStep({
       )}
       <form onSubmit={save}>
         <label className="bo-field">
-          Login URL path
+          Login page URL
           <input
-            name="login_path"
-            value={form.path}
-            onChange={set("path")}
+            name="login_url"
+            type="url"
+            placeholder="https://app.example.com/sign-in"
+            value={form.loginUrl}
+            onChange={set("loginUrl")}
             required
           />
         </label>
         <label className="bo-field">
-          Email or username field name
+          Email of the test user
           <input
-            name="user_key"
-            value={form.userKey}
-            onChange={set("userKey")}
-            required
-          />
-        </label>
-        <label className="bo-field">
-          Email or username of the test user
-          <input
-            name="user_value"
-            value={form.userVal}
-            onChange={set("userVal")}
-            required
-          />
-        </label>
-        <label className="bo-field">
-          Password field name
-          <input
-            name="pass_key"
-            value={form.passKey}
-            onChange={set("passKey")}
+            name="email"
+            autoComplete="off"
+            value={form.email}
+            onChange={set("email")}
             required
           />
         </label>
         <label className="bo-field">
           Password of the test user
           <input
-            name="pass_value"
-            value={form.passVal}
-            onChange={set("passVal")}
+            name="password"
+            autoComplete="off"
+            value={form.password}
+            onChange={set("password")}
             required
           />
         </label>
