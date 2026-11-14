@@ -270,7 +270,7 @@ On 10 November 2026, three AI hunters and one AI scout ran on `claude-opus-5-5`,
 
 ## Escrow contract
 
-`contracts/escrow/` is a NEAR contract that holds bounty money and bonds inside `intents.near`. Arsune stays the judge, but the contract fixes every amount and every receiver, and each ruling is a public record with the hash of Arsune's evidence bundle. The bounty flow uses it with `ARSUNE_SETTLEMENT_MODE=escrow` (opt-in; the default stays `dry`): Arsune creates the bounty on the escrow, relays the signed deposits, and sends one `rule` transaction for each decided claim ([docs/SETTLEMENT.md](docs/SETTLEMENT.md#escrow-mode)). It is tested on a local NEAR sandbox with the real `intents.near` wasm (read from mainnet and checked against its code hash), also end to end with the Arsune API and worker, and with mocked RPC. It is not deployed on mainnet. All Rust runs in Docker:
+`contracts/escrow/` is a NEAR contract that holds bounty money and bonds inside `intents.near`. Arsune stays the judge, but the contract fixes every amount and every receiver, and each ruling is a public record with the hash of Arsune's evidence bundle. The bounty flow uses it with `ARSUNE_SETTLEMENT_MODE=escrow` (opt-in; the default stays `dry`): Arsune creates the bounty on the escrow, relays the signed deposits, and sends one `rule` transaction for each decided claim ([docs/SETTLEMENT.md](docs/SETTLEMENT.md#escrow-mode)). It is tested on a local NEAR sandbox with the real `intents.near` wasm (read from mainnet and checked against its code hash), also end to end with the Arsune API and worker, and with mocked RPC. It is deployed on NEAR mainnet on 14 Nov 2026 as [`escrow.arsune.near`](https://nearblocks.io/address/escrow.arsune.near) (code_hash `GSF2obxd3HuyheiNTE69wB3yDTh7Z9vREmDFi24Yr14s`, the wasm above; [deploy tx](https://nearblocks.io/txns/9eH5kUxM9Wy6bEEi3BbFGJr75FB4UEnZ3AEDyjbJph3L)). The account has no access key, so nobody can change the code or move the money except through the contract. All Rust runs in Docker:
 
 ```sh
 contracts/escrow/test.sh
@@ -369,6 +369,6 @@ npm --prefix frontend run build
 - In the simulation, all 110 agents run in one process on one machine. Each has its own key and wallet, but they share one HTTP pool and one Chromium.
 - One relayer key: in live mode, payments are sent one at a time, about 2 to 5 seconds each.
 - NEAR Intents (`intents.near`) is on mainnet only. There is no testnet run.
-- The escrow contract is not deployed on mainnet and not audited. Escrow mode is tested on a local NEAR sandbox and with mocked RPC only.
+- The escrow contract is deployed on mainnet (`escrow.arsune.near`, locked) but not audited. The public site still runs in `dry` mode; escrow mode is tested on a local NEAR sandbox and with mocked RPC.
 - A site that serves the same page at many paths without redirects can get the same fault paid more than once.
 - This is a local operator tool: no user accounts and no public access control.

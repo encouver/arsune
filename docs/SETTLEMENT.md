@@ -380,7 +380,7 @@ about 0.09 NEAR, mostly 11 × 0.007 NEAR for account creation.
 through `EscrowSettlement` in `backend/app/settlement/escrow.py`. Arsune is the judge, the fee
 account and the relayer. It never holds bounty money or bonds: the escrow holds them as its own
 balance on `intents.near`, and the contract sends every payout. Tested in a local sandbox and
-with an in-memory chain; not deployed on mainnet.
+with an in-memory chain. Deployed and locked on mainnet as `escrow.arsune.near` (14 Nov 2026).
 
 | Step | What Arsune does |
 | - | - |

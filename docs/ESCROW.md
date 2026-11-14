@@ -12,7 +12,7 @@ evidence.
   `ARSUNE_SETTLEMENT_MODE=escrow` (opt-in; see [SETTLEMENT.md](SETTLEMENT.md#escrow-mode)).
 - Deploy script: `scripts/near_escrow_deploy.py`.
 - Status: tested in a local sandbox only, also end to end with the Arsune API and worker (see
-  "End-to-end run on a local sandbox"). Not deployed on mainnet. Not audited.
+  "End-to-end run on a local sandbox"). Deployed on NEAR mainnet on 14 Nov 2026 as [`escrow.arsune.near`](https://nearblocks.io/address/escrow.arsune.near) (code_hash `GSF2obxd3HuyheiNTE69wB3yDTh7Z9vREmDFi24Yr14s`, the wasm above; [deploy tx](https://nearblocks.io/txns/9eH5kUxM9Wy6bEEi3BbFGJr75FB4UEnZ3AEDyjbJph3L)). The account has no access key, so nobody can change the code or move the money except through the contract. Not audited.
 
 ## Where the money is
 
