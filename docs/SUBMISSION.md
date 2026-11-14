@@ -113,6 +113,6 @@ The race starts by itself and ends in about 2 minutes. To start a new demo race,
 
 - Five provable bug types only.
 - The demo shop has known faults. Results on it are test results, not accuracy on every website.
-- Escrow contract: deployed and locked on mainnet as `escrow.arsune.near` (https://nearblocks.io/txns/9eH5kUxM9Wy6bEEi3BbFGJr75FB4UEnZ3AEDyjbJph3L), tested on a local sandbox, not audited.
+- Escrow contract: deployed and locked on mainnet as `escrow.arsune.near` (https://nearblocks.io/txns/9eH5kUxM9Wy6bEEi3BbFGJr75FB4UEnZ3AEDyjbJph3L), tested on a local sandbox, not audited. One real hunt ran through it on mainnet on 14 Nov 2026 (proven report paid, fake report lost its deposit; links in README "Real hunt on mainnet").
 - TODO: live mainnet run. The README table of NearBlocks links is still empty.
 - The monthly price of $10 per site is planned and not built.

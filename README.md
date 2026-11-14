@@ -278,6 +278,22 @@ contracts/escrow/test.sh
 
 Last run (9 Nov 2026): 72 unit tests and 11 sandbox tests pass. The sandbox tests run the escrow against the real `intents.near` wasm (defuse 0.4.5). The built wasm is 224,153 bytes, sha256 `e556b06aed47fd4a26bb86932c4c7869aa62f33e57c9e170a043e3411f954b18`. See [docs/ESCROW.md](docs/ESCROW.md).
 
+### Real hunt on mainnet (14 Nov 2026)
+
+`scripts/mainnet_escrow_hunt.py` ran one small hunt on the demo shop through `escrow.arsune.near`, with a fresh owner and a fresh hunter (implicit accounts). Reward 0.10 USDC, deposit 0.01 USDC, owner funding 0.30 USDC. The proven report was paid by the contract; the fake report lost its deposit to the owner; the owner closed the hunt and the rest went back. The escrow record and Arsune's evidence hash matched for both rulings. All USDC returned to the relayer at the end.
+
+| Step | Transaction |
+| - | - |
+| Hunt opened on the escrow | [2kcJ6USN…](https://nearblocks.io/txns/2kcJ6USNnL9auRXem3mYjeXT8sqRR6ayDVVkSoGhnc5y) |
+| Owner funds 0.30 USDC | [74LF6kuh…](https://nearblocks.io/txns/74LF6kuhYz943k2MSc4hC4UmSkZaDcRVySE6MwhfF22B) |
+| Deposit for the real report | [5cByWcCx…](https://nearblocks.io/txns/5cByWcCxcxDURjwq3eyihyMGDSVw6hzZ17qxSShPF6Yk) |
+| Ruling "proven": 0.10 reward + deposit back + 0.01 fee | [4qCCgHAo…](https://nearblocks.io/txns/4qCCgHAo645novXfxtXvNg7Jhjo3bCWp4BUR1JE2GtCn) |
+| Deposit for the fake report | [7eRGcYAQ…](https://nearblocks.io/txns/7eRGcYAQBoN5KucwhgMTj1aQGTFe8KewfnMYFC6NBuBb) |
+| Ruling "rejected": deposit to the owner | [47PoSr4v…](https://nearblocks.io/txns/47PoSr4vAvD5xEJSNQu5jmADuDuKn5Ayfr99XqMrTyY8) |
+| Owner closes the hunt | [m6WhQqzL…](https://nearblocks.io/txns/m6WhQqzLdBDi8Mc4PWYfmJVHwJ39tVoj56ofXQwZif5) |
+| Rest (0.20 USDC) back to the owner | [8gSSCEJJ…](https://nearblocks.io/txns/8gSSCEJJubfudvhnQv2wQNJoHm9w6K7ryXdszXULbUdQ) |
+
+
 ## Dry and live mode
 
 | | Dry (default, Compose) | Live (`near_intents`) |
