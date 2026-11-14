@@ -1,6 +1,13 @@
 "use client";
 
-import { ReactNode, use, useCallback, useEffect, useState } from "react";
+import {
+  ReactNode,
+  use,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import SiteHeader from "../../site-header";
 import {
   api,
@@ -387,6 +394,9 @@ function Step({
   );
 }
 
+const AUTO_CHECK_MS = 10_000;
+const AUTO_CHECK_FOR_MS = 10 * 60_000;
+
 function ProveStep({
   bounty,
   options,
@@ -401,25 +411,24 @@ function ProveStep({
   const [busy, setBusy] = useState<"check" | "demo" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
+  const [autoCheck, setAutoCheck] = useState(true);
   const isDemo = !!options && bounty.origin === options.demo_site_origin;
-
-  if (proofDone)
-    return (
-      <Message
-        kind="ok"
-        testId="proof-done"
-        text={`Ownership proven. Arsune read the token at ${bounty.proof_url}.`}
-      />
-    );
+  const waiting = !!options && !proofDone && bounty.status === "pending_proof";
+  // Refs let the timer see the latest state without restarting its 10-minute window.
+  const busyRef = useRef(false);
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const demoTried = useRef(false);
 
   async function verify() {
     // The proof is read now; the site check runs in Arsune's worker and the page polls it.
     await api(`/api/bounties/${bounty.id}/verify`, {});
     setInfo(null);
-    await onChange();
+    await onChangeRef.current();
   }
 
   async function run(kind: "check" | "demo") {
+    busyRef.current = true;
     setBusy(kind);
     setError(null);
     try {
@@ -427,20 +436,59 @@ function ProveStep({
         setInfo("Publishing the token on the demo site…");
         await api(`/api/bounties/${bounty.id}/demo-proof`, {});
         setInfo("The demo site serves the token. Checking ownership…");
-      } else setInfo("Reading the proof file…");
+      } else setInfo("Looking for the proof on your site…");
       await verify();
     } catch (e) {
       setInfo(null);
       setError(errorText(e));
     } finally {
+      busyRef.current = false;
       setBusy(null);
     }
   }
 
-  const command = `mkdir -p .well-known && printf '%s\\n' '${bounty.proof_token}' > .well-known/arsune-bounty.txt`;
-  return (
-    <>
-      {isDemo && (
+  // The demo shop needs no work from the owner: set the proof once on load.
+  useEffect(() => {
+    if (!waiting || !isDemo || demoTried.current) return;
+    demoTried.current = true;
+    void run("demo");
+  }, [waiting, isDemo]);
+
+  // Another site: look for the proof quietly while the owner adds it.
+  useEffect(() => {
+    if (!waiting || isDemo) return;
+    const started = Date.now();
+    const timer = setInterval(async () => {
+      if (Date.now() - started > AUTO_CHECK_FOR_MS) {
+        clearInterval(timer);
+        setAutoCheck(false);
+        return;
+      }
+      if (busyRef.current) return;
+      busyRef.current = true;
+      try {
+        await verify();
+      } catch {
+        // A failed automatic try is expected until the proof is up.
+      } finally {
+        busyRef.current = false;
+      }
+    }, AUTO_CHECK_MS);
+    return () => clearInterval(timer);
+  }, [waiting, isDemo, bounty.id]);
+
+  if (proofDone)
+    return (
+      <Message
+        kind="ok"
+        testId="proof-done"
+        text="Ownership proven. Arsune found the token on your site."
+      />
+    );
+
+  if (isDemo)
+    return (
+      <>
         <div className="bo-actions">
           <button
             type="button"
@@ -452,56 +500,65 @@ function ProveStep({
               ? "Setting proof…"
               : "Demo site: set proof automatically"}
           </button>
-          <span className="bo-muted">
-            This is the local demo shop, so Arsune can publish the token.
+          <span className="bo-muted" data-testid="demo-proof-note">
+            This is the demo shop. Arsune sets the proof for you.
           </span>
         </div>
-      )}
+        <Message kind="info" text={info} testId="proof-info" />
+        <Message kind="error" text={error} testId="proof-error" />
+      </>
+    );
+
+  const tag = `<meta name="arsune-bounty" content="${bounty.proof_token}">`;
+  const command = `mkdir -p .well-known && printf '%s\\n' '${bounty.proof_token}' > .well-known/arsune-bounty.txt`;
+  const home = bounty.origin.replace(/:(80|443)$/, "");
+  return (
+    <>
       <ol className="bo-how">
         <li>
           <div>
-            <strong>
-              Publish this token as the whole content of the proof file
-            </strong>
+            <strong>Add a meta tag (easiest)</strong>
+            Put this tag in the &lt;head&gt; of your home page, {home}/:
+            <Code text={tag} label="meta tag" testId="proof-meta" />
+          </div>
+        </li>
+        <li>
+          <div>
+            <strong>Or upload a file</strong>
+            Publish this token as the whole content of the file:
             <Code
               text={bounty.proof_token}
               label="proof token"
               testId="proof-token"
             />
-          </div>
-        </li>
-        <li>
-          <div>
-            <strong>Serve it at this exact address</strong>
+            Serve it at this exact address:
             <Code
               text={bounty.proof_url}
               label="proof file address"
               testId="proof-url"
             />
             <span className="bo-muted">
-              Plain text, HTTP 200, at most 4 KB. Redirects must stay on{" "}
-              {bounty.origin.replace(/:(80|443)$/, "")}. From your site&apos;s
-              public folder:
+              Plain text, HTTP 200, at most 4 KB. Redirects must stay on {home}.
+              From your site&apos;s public folder:
             </span>
             <Code text={command} label="shell command" />
-          </div>
-        </li>
-        <li>
-          <div>
-            <strong>Check ownership</strong>
-            Arsune reads the file once. Then it loads your site (step 2).
           </div>
         </li>
       </ol>
       <div className="bo-actions">
         <button
           type="button"
-          className={`bo-btn${isDemo ? " bo-btn-quiet" : ""}`}
+          className="bo-btn"
           onClick={() => run("check")}
           disabled={!!busy}
         >
           {busy === "check" ? "Checking…" : "Check ownership"}
         </button>
+        {autoCheck && (
+          <span className="bo-muted" data-testid="proof-auto">
+            Arsune checks your site every 10 seconds.
+          </span>
+        )}
       </div>
       <Message kind="info" text={info} testId="proof-info" />
       <Message kind="error" text={error} testId="proof-error" />

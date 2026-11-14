@@ -1,9 +1,10 @@
-"""Read the owner's proof file under the shared destination policy."""
+"""Read the owner's proof (a file, or a meta tag on the home page) under the shared destination policy."""
 
 import asyncio
 import hmac
 import ipaddress
 import socket
+from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import httpx
@@ -12,7 +13,12 @@ from app.browser.policy import TargetPolicyError, origin, validate_target
 
 PROOF_PATH = "/.well-known/arsune-bounty.txt"
 MAX_PROOF_BYTES = 4096
+MAX_PAGE_BYTES = 512 * 1024
 MAX_REDIRECTS = 3
+META_NAME = "arsune-bounty"
+NO_PROOF = (
+    f"Arsune found no proof: no file at {PROOF_PATH} and no {META_NAME} meta tag on the home page."
+)
 
 
 class ProofError(ValueError):
@@ -20,29 +26,67 @@ class ProofError(ValueError):
 
 
 async def proof_matches(site_url: str, token: str) -> bool:
+    """True if the proof file or the home page meta tag holds the token. Else ProofError."""
+    try:
+        body = await read(site_url, PROOF_PATH, MAX_PROOF_BYTES)
+        if same(body.decode("utf-8").strip(), token):
+            return True
+        file_problem = "The proof file does not contain this bounty's token."
+    except UnicodeDecodeError:
+        file_problem = "The proof file is not UTF-8 text."
+    except ProofError as exc:
+        file_problem = str(exc)
+    try:
+        page = await read(site_url, "/", MAX_PAGE_BYTES)
+        if any(same(found, token) for found in meta_tokens(page)):
+            return True
+    except ProofError:
+        pass
+    raise ProofError(f"{NO_PROOF} {file_problem}")
+
+
+async def read(site_url: str, path: str, limit: int) -> bytes:
     try:
         async with asyncio.timeout(10):
-            body = await fetch_proof(site_url)
+            return await fetch_proof(site_url, path, limit)
     except TargetPolicyError as exc:
         raise ProofError(f"The proof file could not be read: {exc}") from exc
     except (TimeoutError, httpx.HTTPError, OSError) as exc:
         raise ProofError("The proof file could not be read in time.") from exc
-    try:
-        text = body.decode("utf-8").strip()
-    except UnicodeDecodeError:
-        return False
-    return hmac.compare_digest(text.encode(), token.encode())
 
 
-def proof_url(site_url: str) -> str:
+def same(found: str, token: str) -> bool:
+    return hmac.compare_digest(found.encode(), token.encode())
+
+
+class MetaFinder(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.tokens = []
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if tag == "meta" and (values.get("name") or "").strip().lower() == META_NAME:
+            self.tokens.append((values.get("content") or "").strip())
+
+
+def meta_tokens(page: bytes) -> list[str]:
+    finder = MetaFinder()
+    finder.feed(page.decode("utf-8", errors="replace"))
+    return finder.tokens
+
+
+def proof_url(site_url: str, path: str = PROOF_PATH) -> str:
     parts = urlsplit(site_url)
-    return urlunsplit((parts.scheme, parts.netloc, PROOF_PATH, "", ""))
+    return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
 
-async def fetch_proof(site_url: str) -> bytes:
+async def fetch_proof(site_url: str, path: str = PROOF_PATH, limit: int = MAX_PROOF_BYTES) -> bytes:
+    """GET a path on the site's origin. A body above the limit is an error for the file;
+    a home page is cut at the limit, since its head comes first."""
     from app.core.config import settings
 
-    target = await validate_target(proof_url(site_url))
+    target = await validate_target(proof_url(site_url, path))
     async with httpx.AsyncClient(timeout=5, follow_redirects=False, trust_env=False) as client:
         for _ in range(MAX_REDIRECTS + 1):
             parts = urlsplit(target)
@@ -65,7 +109,10 @@ async def fetch_proof(site_url: str) -> bytes:
             async with client.stream(
                 "GET",
                 endpoint,
-                headers={"host": parts.netloc, "accept": "text/plain"},
+                headers={
+                    "host": parts.netloc,
+                    "accept": "text/plain" if path == PROOF_PATH else "text/html",
+                },
                 extensions={"sni_hostname": parts.hostname},
             ) as response:
                 location = response.headers.get("location")
@@ -80,7 +127,9 @@ async def fetch_proof(site_url: str) -> bytes:
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
                     body.extend(chunk)
-                    if len(body) > MAX_PROOF_BYTES:
+                    if len(body) > limit:
+                        if path != PROOF_PATH:
+                            return bytes(body[:limit])
                         raise TargetPolicyError("The proof file exceeds the size limit.")
                 return bytes(body)
     raise TargetPolicyError("The proof file exceeds the redirect limit.")

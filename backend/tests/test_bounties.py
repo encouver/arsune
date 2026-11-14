@@ -1,5 +1,6 @@
 """Bounty proof, claim scope, real browser checks, and once-only settlement."""
 
+import asyncio
 import copy
 import json
 import os
@@ -340,6 +341,32 @@ def test_owner_proof_requires_the_exact_token_under_the_url_policy(client, proof
         "/proof.txt": (200, {}, f"  {token}\n".encode()),
     }
     assert verify_and_check(client, bounty)["status"] == "open"
+
+
+def test_owner_proof_can_be_a_meta_tag_on_the_home_page(proof_site):
+    token = "meta-token-of-16-chars"
+    ProofServer.responses = {}
+
+    def home(html):
+        ProofServer.responses = {"/": (200, {}, html.encode())}
+        return asyncio.run(proof.proof_matches(proof_site + "/shop", token))
+
+    assert home(f'<head><meta name="arsune-bounty" content="{token}"></head>')
+    assert home(f"<meta content='{token}' NAME='arsune-bounty' />")
+    for html in (
+        '<meta name="arsune-bounty" content="wrong-token">',
+        f'<meta name="description" content="{token}"><p>{token}</p>',
+    ):
+        with pytest.raises(proof.ProofError) as failed:
+            home(html)
+        assert str(failed.value).startswith(proof.NO_PROOF)
+        assert "HTTP 404" in str(failed.value)
+    # The file is read first; a wrong file still lets the meta tag pass.
+    ProofServer.responses = {
+        proof.PROOF_PATH: (200, {}, b"wrong"),
+        "/": (200, {}, f'<meta name="arsune-bounty" content="{token}">'.encode()),
+    }
+    assert asyncio.run(proof.proof_matches(proof_site, token))
 
 
 def test_claims_are_limited_to_the_bounty_scope(client, site, monkeypatch):

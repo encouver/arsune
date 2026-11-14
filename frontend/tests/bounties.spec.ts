@@ -105,6 +105,7 @@ type Api = {
   calls: { method: string; path: string; body: unknown }[];
   funding: Record<string, unknown>[];
   verifyError?: string;
+  demoProofError?: string;
   quoteError?: string;
   // What Arsune's site check cannot load; unset, the check passes.
   siteProblem?: string;
@@ -232,8 +233,11 @@ async function mockApi(
       finishSiteCheck(state);
       return json(b);
     }
-    if (path === `/api/bounties/${ID}/demo-proof`)
+    if (path === `/api/bounties/${ID}/demo-proof`) {
+      if (state.demoProofError)
+        return json({ detail: state.demoProofError }, 409);
       return json({ published: true, proof_url: b.proof_url });
+    }
     if (path === `/api/bounties/${ID}/verify`) {
       if (state.verifyError) return json({ detail: state.verifyError }, 409);
       checking(state);
@@ -498,9 +502,8 @@ test("start page: validates, creates the race and opens its page", async ({
     bond_amount: 250_000,
     budget: 12_500_000,
   });
-  await expect(page.getByTestId("step-1-status")).toHaveText(
-    "Waiting for proof",
-  );
+  // The demo shop's page sets the proof on load.
+  await expect(page.getByTestId("step-1-status")).toHaveText("Done");
   await expect(
     page.getByTestId("step-4").getByLabel("Standard agents (free)"),
   ).toBeChecked();
@@ -563,7 +566,12 @@ test("dry flow: demo proof, site check, one-click funding, then ready to race", 
 }) => {
   const api = await mockApi(page, "dry");
   api.host = host();
+  // The page sets the demo proof on load; when that fails, the button is the fallback.
+  api.demoProofError = "The demo site did not answer.";
   await page.goto(`/bounties/${ID}`);
+  await expect(page.getByTestId("proof-error")).toHaveText(
+    "The demo site did not answer.",
+  );
   await expect(page.getByTestId("step-1-status")).toHaveText(
     "Waiting for proof",
   );
@@ -578,11 +586,17 @@ test("dry flow: demo proof, site check, one-click funding, then ready to race", 
   await expect(
     page.getByRole("button", { name: "Start the race" }),
   ).toBeDisabled();
-  await expect(page.getByTestId("proof-token")).toHaveText(TOKEN);
-  await expect(page.getByTestId("proof-url")).toHaveText(
-    "http://127.0.0.1:8541/.well-known/arsune-bounty.txt",
+  // The demo shop needs no manual steps.
+  await expect(page.getByTestId("demo-proof-note")).toHaveText(
+    "This is the demo shop. Arsune sets the proof for you.",
   );
+  await expect(page.getByTestId("proof-token")).toHaveCount(0);
+  await expect(page.getByTestId("proof-meta")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Check ownership" }),
+  ).toHaveCount(0);
 
+  api.demoProofError = undefined;
   await page
     .getByRole("button", { name: "Demo site: set proof automatically" })
     .click();
@@ -608,6 +622,7 @@ test("dry flow: demo proof, site check, one-click funding, then ready to race", 
   await expect(page.getByTestId("bounty-status")).toHaveText("Open");
   const order = api.calls.filter((c) => c.method === "POST").map((c) => c.path);
   expect(order).toEqual([
+    `/api/bounties/${ID}/demo-proof`,
     `/api/bounties/${ID}/demo-proof`,
     `/api/bounties/${ID}/verify`,
   ]);
@@ -655,6 +670,19 @@ test("dry flow: demo proof, site check, one-click funding, then ready to race", 
   await expect(strip).toContainText("Start the raceReady to start");
 });
 
+test("the demo shop proves ownership on load, without a click", async ({
+  page,
+}) => {
+  const api = await mockApi(page, "dry");
+  await page.goto(`/bounties/${ID}`);
+  await expect(page.getByTestId("step-1-status")).toHaveText("Done");
+  const posts = api.calls.filter((c) => c.method === "POST").map((c) => c.path);
+  expect(posts).toEqual([
+    `/api/bounties/${ID}/demo-proof`,
+    `/api/bounties/${ID}/verify`,
+  ]);
+});
+
 test("a top-up reopens a bounty whose budget ran out", async ({ page }) => {
   const api = await mockApi(page, "dry");
   Object.assign(api.bounty, {
@@ -696,6 +724,12 @@ test("manual proof gives exact instructions and shows the checker's refusal", as
   await expect(
     page.getByRole("button", { name: "Demo site: set proof automatically" }),
   ).toHaveCount(0);
+  await expect(page.getByTestId("proof-meta")).toHaveText(
+    `<meta name="arsune-bounty" content="${TOKEN}">`,
+  );
+  await expect(page.getByTestId("proof-auto")).toHaveText(
+    "Arsune checks your site every 10 seconds.",
+  );
   await expect(page.getByText(`printf '%s\\n' '${TOKEN}'`)).toBeVisible();
   await page.getByRole("button", { name: "Check ownership" }).click();
   await expect(page.getByTestId("proof-error")).toHaveText(
@@ -712,6 +746,27 @@ test("manual proof gives exact instructions and shows the checker's refusal", as
   await expect(page.getByTestId("proof-done")).toContainText(
     "Ownership proven",
   );
+});
+
+test("the owner page looks for the proof every 10 seconds, quietly", async ({
+  page,
+}) => {
+  const api = await mockApi(page, "dry", "https://shop.example.com/");
+  api.verifyError = "Arsune found no proof.";
+  await page.clock.install();
+  await page.goto(`/bounties/${ID}`);
+  await expect(page.getByTestId("proof-auto")).toBeVisible();
+  const verifies = () =>
+    api.calls.filter((c) => c.path.endsWith("/verify")).length;
+  expect(verifies()).toBe(0);
+  await page.clock.runFor(10_000);
+  await expect.poll(verifies).toBe(1);
+  // A failed automatic try shows no error.
+  await expect(page.getByTestId("proof-error")).toHaveCount(0);
+  api.verifyError = undefined;
+  await page.clock.runFor(10_000);
+  await expect(page.getByTestId("step-1-status")).toHaveText("Done");
+  expect(verifies()).toBe(2);
 });
 
 test("a site that Arsune cannot load completely does not open, and the owner checks again", async ({

@@ -21,10 +21,10 @@ test("a real race on the demo shop, from the start page to the results", async (
   const id = new URL(page.url()).pathname.split("/").pop()!;
   console.log("BOUNTY", id);
 
-  await page
-    .getByRole("button", { name: "Demo site: set proof automatically" })
-    .click();
-  await expect(page.getByTestId("step-1-status")).toHaveText("Done");
+  // The page sets the demo proof on load.
+  await expect(page.getByTestId("step-1-status")).toHaveText("Done", {
+    timeout: 30_000,
+  });
   await expect(page.getByTestId("step-2-status")).toHaveText("Done", {
     timeout: 120_000,
   });

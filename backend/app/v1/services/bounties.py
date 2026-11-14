@@ -377,11 +377,9 @@ async def verify_bounty(bounty_id):
         url, token, needs_proof = bounty.url, bounty.proof_token, bounty.status == "pending_proof"
     if needs_proof:
         try:
-            matches = await proof_matches(url, token)
+            await proof_matches(url, token)
         except ProofError as exc:
             raise HTTPException(409, str(exc)) from exc
-        if not matches:
-            raise HTTPException(409, "The proof file does not contain this bounty's token.")
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
         if bounty.status in ("pending_proof", "paused"):
