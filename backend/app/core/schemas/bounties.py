@@ -35,6 +35,12 @@ class CreateBounty(BaseModel):
     reuse_proof: list[ReuseProof] = Field(default_factory=list, max_length=100)
 
 
+class FundIntent(BaseModel):
+    fund_id: ClientId
+    sender: Account
+    amount: Amount
+
+
 class FundBounty(BaseModel):
     fund_id: ClientId
     sender: Account

@@ -980,6 +980,10 @@ test("a failed signed transfer gets a new fund_id and memo, a 422 keeps them", a
     return route.fulfill({ status, json: { detail: "no" } });
   });
   await page.goto(`/bounties/${ID}`);
+  // The wallet is the main path; the paste form sits in a closed section.
+  await expect(page.getByTestId("wallet-connect")).toBeVisible();
+  await expect(page.getByLabel("Signer account")).toBeHidden();
+  await page.getByText("Advanced: paste a signed transfer").click();
   await page.getByLabel("Signer account").fill("alice.near");
   await page.getByLabel("Signed transfer (JSON)").fill("{}");
   const memo = page.getByTestId("fund-memo");

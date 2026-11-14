@@ -1,7 +1,13 @@
 from fastapi import APIRouter, Header
 from fastapi.responses import Response
 
-from app.core.schemas.bounties import CreateBounty, CreateClaim, FundBounty, SetAccessTest
+from app.core.schemas.bounties import (
+    CreateBounty,
+    CreateClaim,
+    FundBounty,
+    FundIntent,
+    SetAccessTest,
+)
 from app.v1.services import bounties
 
 router = APIRouter()
@@ -64,6 +70,12 @@ def request_site_check(bounty_id: str, response: Response):
 @router.get("/bounties/{bounty_id}/site-check")
 def get_site_check(bounty_id: str):
     return bounties.get_site_check(bounty_id)
+
+
+@router.post("/bounties/{bounty_id}/fund-intent")
+def fund_intent(bounty_id: str, request: FundIntent):
+    """The unsigned NEP-413 transfer a wallet signs; POST the signature to /fund."""
+    return bounties.fund_intent(bounty_id, request)
 
 
 @router.post("/bounties/{bounty_id}/fund")

@@ -120,6 +120,31 @@ def sign_intents(
     `salt` is the Verifier's current 4-byte salt; it is fetched over RPC when omitted.
     """
     key = load_signing_key(private_key)
+    payload = nep413_payload(account_id, intents, deadline, salt=salt, contract=contract, rpc=rpc)
+    nonce = base64.b64decode(payload["nonce"])
+    signature = key.sign(nep413_hash(payload["message"], nonce, payload["recipient"])).signature
+    return {
+        "standard": "nep413",
+        "payload": payload,
+        "public_key": public_key_text(key),
+        "signature": encode_ed25519(signature),
+    }
+
+
+def nep413_payload(
+    account_id: str,
+    intents: list[dict],
+    deadline: datetime,
+    *,
+    salt: bytes | None = None,
+    contract: str | None = None,
+    rpc: NearRpc | None = None,
+) -> dict:
+    """The unsigned NEP-413 payload {recipient, nonce (base64), message} for these intents.
+
+    A wallet's signMessage(message, recipient, nonce bytes) signs exactly what
+    `sign_intents` signs, so its signature passes `verify_signed_transfer`.
+    """
     deadline, salt, contract = _signing_inputs(deadline, salt, contract, rpc)
     message = json.dumps(
         {"deadline": format_deadline(deadline), "intents": intents, "signer_id": account_id},
@@ -127,17 +152,7 @@ def sign_intents(
         sort_keys=True,
     )
     nonce = versioned_nonce(salt, deadline)
-    signature = key.sign(nep413_hash(message, nonce, contract)).signature
-    return {
-        "standard": "nep413",
-        "payload": {
-            "recipient": contract,
-            "nonce": base64.b64encode(nonce).decode(),
-            "message": message,
-        },
-        "public_key": public_key_text(key),
-        "signature": encode_ed25519(signature),
-    }
+    return {"recipient": contract, "nonce": base64.b64encode(nonce).decode(), "message": message}
 
 
 def sign_transfer(
@@ -154,13 +169,13 @@ def sign_transfer(
     rpc: NearRpc | None = None,
 ) -> dict:
     """Return a signed `transfer` of `amount` (smallest unit) of `token_id` to `receiver_id`."""
-    intent = _transfer_intent(receiver_id, token_id, amount, memo)
+    intent = transfer_intent(receiver_id, token_id, amount, memo)
     return sign_intents(
         account_id, private_key, [intent], deadline, salt=salt, contract=contract, rpc=rpc
     )
 
 
-def _transfer_intent(receiver_id: str, token_id: str, amount: int, memo: str) -> dict:
+def transfer_intent(receiver_id: str, token_id: str, amount: int, memo: str) -> dict:
     check_amount(amount)
     return {
         "intent": "transfer",
@@ -215,7 +230,7 @@ def sign_transfer_erc191(
     rpc: NearRpc | None = None,
 ) -> dict:
     """`sign_transfer` for a hunter that holds only an Ethereum key."""
-    intent = _transfer_intent(receiver_id, token_id, amount, memo)
+    intent = transfer_intent(receiver_id, token_id, amount, memo)
     return sign_intents_erc191(
         private_key_hex, [intent], deadline, salt, contract=contract, rpc=rpc
     )

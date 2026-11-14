@@ -25,7 +25,7 @@ from app.browser.policy import TargetPolicyError, origin
 from app.core.config import settings
 from app.core.db import Session
 from app.core.models import Bounty, Claim, Job, LedgerEntry, utcnow
-from app.core.schemas.bounties import CreateBounty, CreateClaim, FundBounty
+from app.core.schemas.bounties import CreateBounty, CreateClaim, FundBounty, FundIntent
 from app.settlement.base import SettlementError
 from app.settlement.near_tx import OutcomeUnknown
 from app.v1.services.jobs import JOB_ID
@@ -507,6 +507,28 @@ async def transfer_in(signed, *, sender, amount, memo, msg=None):
     return await run_in_threadpool(
         settlement.collect, signed, sender=sender, amount=amount, memo=memo, msg=msg
     )
+
+
+def fund_intent(bounty_id, request: FundIntent):
+    """The message, nonce and recipient a wallet signs (NEP-413) to fund with fund_id."""
+    require_account(request.sender, "sender")
+    require_one_transfer(request.amount)
+    memo = f"arsune:fund:{request.fund_id}"
+    with Session() as session:
+        bounty = find_bounty(session, bounty_id)
+        if session.get(LedgerEntry, request.fund_id):
+            raise HTTPException(409, "This fund_id is already used.")
+        if not budget.takes_funds(bounty):
+            raise HTTPException(409, FUNDS_RULE)
+    try:
+        return settlement.transfer_payload(
+            sender=request.sender,
+            amount=request.amount,
+            memo=memo,
+            msg=settlement.fund_msg(bounty_id),
+        )
+    except SettlementError:
+        raise HTTPException(503, "The settlement network is unavailable.") from None
 
 
 async def fund_bounty(bounty_id, request: FundBounty):

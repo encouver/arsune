@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import {
   ACCOUNT,
   api,
@@ -19,6 +19,17 @@ import {
   utcTime,
 } from "./api";
 import { Code, Message } from "./ui";
+import {
+  connectedAccount,
+  connectWallet,
+  depositToIntents,
+  disconnectWallet,
+  intentsBalance,
+  PreparedTransfer,
+  signTransfer,
+  WalletAccount,
+  walletBalance,
+} from "./wallet";
 
 type Refresh = () => Promise<void>;
 
@@ -478,6 +489,25 @@ function DirectOption({
     signer_id: sender.trim() || "<your account>",
   });
 
+  async function fund(from: string, signedIntent: unknown, id: string) {
+    await api(`/api/bounties/${bounty.id}/fund`, {
+      fund_id: id,
+      sender: from,
+      amount,
+      signed_intent: signedIntent,
+    });
+    setDone(
+      `Arsune collected ${usdc(units)} USDC with memo arsune:fund:${id}.`,
+    );
+    setFundId(newId());
+  }
+
+  function failed(err: unknown) {
+    setError(errorText(err));
+    // Only a 422 refused the request before the fund_id was spent.
+    if ((err as { status?: number }).status !== 422) setFundId(newId());
+  }
+
   async function submitSigned(e: FormEvent) {
     e.preventDefault();
     setError(null);
@@ -493,20 +523,11 @@ function DirectOption({
     }
     setBusy(true);
     try {
-      await api(`/api/bounties/${bounty.id}/fund`, {
-        fund_id: fundId,
-        sender: sender.trim(),
-        amount,
-        signed_intent: intent,
-      });
-      setDone(`Arsune collected ${usdc(amount)} USDC with memo ${memo}.`);
-      setFundId(newId());
+      await fund(sender.trim(), intent, fundId);
       setSigned("");
       await onChange();
     } catch (err) {
-      setError(errorText(err));
-      // Only a 422 refused the request before the fund_id was spent.
-      if ((err as { status?: number }).status !== 422) setFundId(newId());
+      failed(err);
     } finally {
       setBusy(false);
     }
@@ -515,10 +536,22 @@ function DirectOption({
   return (
     <section className="bo-option" data-testid="direct-option">
       <h3>NEAR wallet: signed transfer</h3>
+      <WalletFund
+        bounty={bounty}
+        options={options}
+        amount={amount}
+        fundId={fundId}
+        fund={fund}
+        failed={failed}
+        setError={setError}
+        setDone={setDone}
+        onConnect={setSender}
+        onChange={onChange}
+      />
       <Message kind="ok" text={done} testId="signed-done" />
       <Message kind="error" text={error} testId="signed-error" />
-      <details className="bo-details" open>
-        <summary>Signed transfer instructions</summary>
+      <details className="bo-details">
+        <summary>Advanced: paste a signed transfer</summary>
         <p className="bo-text">
           Sign a NEP-413 <code>transfer</code> intent for{" "}
           {options?.intents_contract ?? "intents.near"}: exactly{" "}
@@ -534,7 +567,9 @@ function DirectOption({
         <Code text={message} label="intent message" />
         <span className="bo-muted">
           Use a versioned nonce with the salt from{" "}
-          <code>GET /api/settlement</code>. In Python:{" "}
+          <code>GET /api/settlement</code>, or get the exact message and nonce
+          from <code>POST /api/bounties/{bounty.id}/fund-intent</code>. In
+          Python:{" "}
           <code>
             {escrow
               ? "app.settlement.escrow.sign_deposit"
@@ -574,5 +609,190 @@ function DirectOption({
         </form>
       </details>
     </section>
+  );
+}
+
+// Connect -> (move USDC into NEAR Intents) -> sign and fund. Each step shows when it is next.
+function WalletFund({
+  bounty,
+  options,
+  amount,
+  fundId,
+  fund,
+  failed,
+  setError,
+  setDone,
+  onConnect,
+  onChange,
+}: {
+  bounty: OwnerBounty;
+  options: Options | null;
+  amount: number | null;
+  fundId: string;
+  fund: (from: string, signedIntent: unknown, id: string) => Promise<void>;
+  failed: (err: unknown) => void;
+  setError: (text: string | null) => void;
+  setDone: (text: string | null) => void;
+  onConnect: (accountId: string) => void;
+  onChange: Refresh;
+}) {
+  const [account, setAccount] = useState<WalletAccount | null>(null);
+  const [inIntents, setInIntents] = useState<bigint | null>(null);
+  const [inWallet, setInWallet] = useState<bigint | null>(null);
+  const [step, setStep] = useState<string | null>(null);
+  const intents = options?.intents_contract;
+  const token = options?.token;
+
+  useEffect(() => {
+    let live = true;
+    connectedAccount().then((a) => {
+      if (live && a) {
+        setAccount(a);
+        onConnect(a.accountId);
+      }
+    });
+    return () => {
+      live = false;
+    };
+    // Restore an earlier connection once.
+  }, []);
+
+  const loadBalances = useCallback(async () => {
+    if (!account || !intents || !token) return;
+    try {
+      const [a, b] = await Promise.all([
+        intentsBalance(intents, account.accountId, token),
+        walletBalance(account.accountId, token).catch(() => null),
+      ]);
+      setInIntents(a);
+      setInWallet(b);
+    } catch {
+      setError("Could not read your USDC balance from NEAR. Try again.");
+    }
+  }, [account, intents, token, setError]);
+
+  useEffect(() => {
+    loadBalances();
+  }, [loadBalances]);
+
+  async function run(name: string, work: () => Promise<void>) {
+    setStep(name);
+    setError(null);
+    setDone(null);
+    try {
+      await work();
+    } catch (err) {
+      if (name === "fund") failed(err);
+      else setError(errorText(err));
+    } finally {
+      setStep(null);
+    }
+  }
+
+  const connect = () =>
+    run("connect", async () => {
+      const a = await connectWallet();
+      setAccount(a);
+      onConnect(a.accountId);
+    });
+
+  const disconnect = () =>
+    run("disconnect", async () => {
+      await disconnectWallet().catch(() => {});
+      setAccount(null);
+      setInIntents(null);
+      setInWallet(null);
+    });
+
+  const need = amount ? BigInt(amount) : BigInt(0);
+  const short = inIntents === null ? BigInt(0) : need - inIntents;
+
+  const move = () =>
+    run("move", async () => {
+      if (!account || !intents || !token) return;
+      await depositToIntents(account, intents, token, short);
+      await loadBalances();
+    });
+
+  const signAndFund = () =>
+    run("fund", async () => {
+      if (!account || !amount) return;
+      const id = fundId;
+      const prepared = await api<PreparedTransfer>(
+        `/api/bounties/${bounty.id}/fund-intent`,
+        { fund_id: id, sender: account.accountId, amount },
+      );
+      const signedIntent = await signTransfer(account, prepared);
+      await fund(account.accountId, signedIntent, id);
+      await Promise.all([loadBalances(), onChange()]);
+    });
+
+  if (!account)
+    return (
+      <div className="bo-actions">
+        <button
+          type="button"
+          className="bo-btn"
+          onClick={connect}
+          disabled={step !== null || !options}
+          data-testid="wallet-connect"
+        >
+          {step === "connect"
+            ? "Waiting for the wallet…"
+            : "Connect NEAR wallet"}
+        </button>
+      </div>
+    );
+
+  return (
+    <div className="bo-form" data-testid="wallet-fund">
+      <p className="bo-muted" data-testid="wallet-account">
+        Connected as <strong>{account.accountId}</strong>.{" "}
+        <button
+          type="button"
+          className="bo-link"
+          onClick={disconnect}
+          disabled={step !== null}
+        >
+          Disconnect
+        </button>
+      </p>
+      <p className="bo-muted" data-testid="intents-balance">
+        Your USDC in NEAR Intents:{" "}
+        {inIntents === null ? "checking…" : usdc(Number(inIntents))}
+      </p>
+      {!amount ? null : inIntents === null ? null : short > BigInt(0) ? (
+        <>
+          <button
+            type="button"
+            className="bo-btn"
+            onClick={move}
+            disabled={step !== null}
+            data-testid="wallet-move"
+          >
+            {step === "move"
+              ? "Waiting for the wallet…"
+              : `Move ${usdc(Number(short))} USDC into NEAR Intents`}
+          </button>
+          <span className="bo-muted">
+            One transaction from your wallet (1 yoctoNEAR and gas).
+            {inWallet !== null &&
+              ` Your wallet holds ${usdc(Number(inWallet))} USDC.`}
+          </span>
+        </>
+      ) : (
+        <button
+          type="button"
+          className="bo-btn"
+          onClick={signAndFund}
+          disabled={step !== null}
+          data-testid="wallet-fund-button"
+        >
+          {step === "fund"
+            ? "Signing and funding…"
+            : `Sign and fund ${usdc(amount)} USDC`}
+        </button>
+      )}
+    </div>
   );
 }

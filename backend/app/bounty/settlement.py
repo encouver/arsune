@@ -2,6 +2,7 @@
 
 import time
 from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from uuid import uuid4
 
@@ -14,6 +15,8 @@ from app.settlement.dry import DRY_ACCOUNT, DRY_SALT, DrySettlement
 
 EXPLORER_TX = "https://nearblocks.io/txns/{}"
 SALT_SECONDS = 300
+# Time the owner has to approve the signature in the wallet.
+FUND_INTENT_TTL = timedelta(minutes=5)
 # Every process that sends with Arsune's relayer key takes this PostgreSQL advisory lock.
 RELAYER_LOCK = 0x4152_5355_4E45
 _salt = {"value": None, "at": 0.0}
@@ -79,6 +82,28 @@ def fund_msg(bounty_id: str) -> str | None:
     from app.settlement import escrow
 
     return escrow.fund_msg(bounty_id)
+
+
+def transfer_payload(*, sender: str, amount: int, memo: str, msg: str | None = None) -> dict:
+    """The unsigned NEP-413 payload a wallet signs so `check_transfer` accepts it:
+    {message, nonce (base64), recipient}, with a deadline FUND_INTENT_TTL ahead."""
+    from app.settlement import near_intents
+
+    if settings.settlement_mode == "escrow":
+        from app.settlement.escrow import deposit_intent
+
+        intent = deposit_intent(settings.escrow_contract, settings.bounty_token, amount, msg, memo)
+    else:
+        intent = near_intents.transfer_intent(arsune_account(), settings.bounty_token, amount, memo)
+    deadline = datetime.now(UTC) + FUND_INTENT_TTL
+    payload = near_intents.nep413_payload(
+        sender,
+        [intent],
+        deadline,
+        salt=bytes.fromhex(current_salt()),
+        contract=settings.intents_contract,
+    )
+    return {**payload, "memo": memo, "deadline": near_intents.format_deadline(deadline)}
 
 
 def bond_msg(bounty_id: str, claim_id: str, scout: dict | None) -> str | None:
