@@ -1,0 +1,18 @@
+# Escrow mode on NEAR mainnet for scripts/mainnet_escrow_hunt.py. The relayer id and key come
+# from the repo .env through compose interpolation; no key value is written here.
+x-escrow: &escrow
+  ARSUNE_SETTLEMENT_MODE: escrow
+  ARSUNE_ESCROW_CONTRACT: escrow.arsune.near
+  ARSUNE_ESCROW_CLAIMS: "20"
+  ARSUNE_ESCROW_BOUNTY_DAYS: "1"
+  ARSUNE_NEAR_RPC_URL: https://free.rpc.fastnear.com
+  ARSUNE_INTENTS_CONTRACT: intents.near
+  ARSUNE_NEAR_ACCOUNT_ID: ${ARSUNE_NEAR_ACCOUNT_ID:?set ARSUNE_NEAR_ACCOUNT_ID in .env}
+  ARSUNE_NEAR_PRIVATE_KEY: ${ARSUNE_NEAR_PRIVATE_KEY:?set ARSUNE_NEAR_PRIVATE_KEY in .env}
+services:
+  api:
+    environment: *escrow
+  worker:
+    environment: *escrow
+  coordinator:
+    environment: *escrow
