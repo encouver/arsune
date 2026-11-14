@@ -451,10 +451,10 @@ test("start page: validates, creates the race and opens its page", async ({
     "AI-built sites leak data.Let agents find the leaks before attackers do. Pay only for proof.",
   );
   await expect(page.locator(".lead")).toContainText(
-    "You pay only for proven leaks.",
+    "You pay only for proven problems.",
   );
   await expect(page.locator(".start-steps strong")).toHaveText([
-    "Set a test user",
+    "Prove the site is yours",
     "Agents attack",
     "You get proof",
   ]);

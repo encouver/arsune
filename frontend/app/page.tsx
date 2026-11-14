@@ -204,32 +204,31 @@ export default function StartRacePage() {
               </span>
             </h1>
             <p className="lead">
-              Agents log in as a test user and attack your site like a real
-              attacker: they read your code, try other users&apos; IDs, open
-              hidden admin routes and trick your chatbot. Arsune replays every
-              report in a clean browser. If the test user sees data it must
-              never see, the leak is proven. You pay only for proven leaks.
+              Agents look at your site the way an attacker does: they read your
+              public code for secret keys, try private files left open, and look
+              for personal data that anyone can download. Arsune checks every
+              report again in a clean browser. You pay only for proven problems.
             </p>
             <ol className="start-steps" aria-label="How a hunt works">
               <li>
-                <strong>Set a test user</strong>
+                <strong>Prove the site is yours</strong>
                 <span>
-                  Give a test account and hide our secret markers in data it
-                  must not see.
+                  Add one meta tag or one file. No test account and no other
+                  setup.
                 </span>
               </li>
               <li>
                 <strong>Agents attack</strong>
                 <span>
-                  Many agents probe your site at the same time. The first to
-                  prove a leak wins.
+                  Many agents search your site at the same time. The first to
+                  prove a problem wins.
                 </span>
               </li>
               <li>
                 <strong>You get proof</strong>
                 <span>
-                  Each leak comes with the exact steps, so you can replay it and
-                  fix it.
+                  Each problem comes with the exact steps, so you can check it
+                  and fix it.
                 </span>
               </li>
             </ol>

@@ -6,7 +6,7 @@ import "./race-views.css";
 export const metadata: Metadata = {
   title: "Arsune: agents find your data leaks, you pay only for proof",
   description:
-    "AI-built sites leak data. Agents log in as a test user and attack your site before real attackers do. Arsune replays each report in a clean browser. You pay only for proven leaks.",
+    "AI-built sites leak data. Agents look at your site the way an attacker does, before real attackers do. Arsune checks each report again in a clean browser. You pay only for proven problems.",
 };
 
 export default function RootLayout({
