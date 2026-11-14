@@ -127,6 +127,7 @@ export function RaceStep({
             // The state of an earlier run of this bounty is not this race.
             swarm && host?.run_id && swarm.run_id !== host.run_id ? null : swarm
           }
+          hostAgents={host ? agentCount(host) : null}
         />
         <div className="bo-actions">
           <a
@@ -227,9 +228,11 @@ function Finished({ swarm }: { swarm: SwarmState }) {
 function LiveRace({
   bounty,
   swarm,
+  hostAgents,
 }: {
   bounty: OwnerBounty;
   swarm: SwarmState | null;
+  hostAgents: number | null;
 }) {
   // Only claims made since this race started; none until its state arrives.
   const since = swarm ? Date.parse(swarm.started_at) : NaN;
@@ -258,7 +261,8 @@ function LiveRace({
       <RaceLine
         claims={claims}
         ledger={ledger}
-        agentCount={swarm ? swarm.agents.length : null}
+        // The agent list is empty until the site check passes: the host knows the race size.
+        agentCount={swarm?.agents.length ? swarm.agents.length : hostAgents}
         nameOf={nameOf}
         titleOf={titleOf}
         finished={!!swarm?.finished}

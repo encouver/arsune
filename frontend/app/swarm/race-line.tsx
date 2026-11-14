@@ -237,7 +237,7 @@ export default function RaceLine({
   const finding =
     agentCount === null
       ? "Agents search the site"
-      : `${agentCount} agents search the site`;
+      : `${agentCount} agents ${finished ? "searched" : "search"} the site`;
   return (
     <section
       className="rv-line"
@@ -260,8 +260,8 @@ export default function RaceLine({
                 finding
               ) : (
                 <>
-                  <span data-testid="line-agents">{agentCount}</span> agents
-                  search the site
+                  <span data-testid="line-agents">{agentCount}</span> agents{" "}
+                  {finished ? "searched" : "search"} the site
                 </>
               )}
             </span>
