@@ -48,6 +48,17 @@ export function Results({ bounty }: { bounty: OwnerBounty }) {
       .filter((r) => r.kind === "bond_in" && r.claim_id)
       .map((r) => [r.claim_id as string, r.amount]),
   );
+  const rewardUrls = new Map(
+    bounty.ledger
+      .filter(
+        (r) =>
+          r.kind === "reward_out" &&
+          r.claim_id &&
+          r.settlement_mode !== "dry" &&
+          r.explorer_url,
+      )
+      .map((r) => [r.claim_id as string, r.explorer_url as string]),
+  );
   return (
     <section
       className="sw-panel bo-results"
@@ -84,6 +95,7 @@ export function Results({ bounty }: { bounty: OwnerBounty }) {
                   title={titleOf(c)}
                   group={g}
                   bond={bonds.get(c.id) ?? bounty.bond_amount}
+                  rewardUrl={rewardUrls.get(c.id)}
                 />
               ))}
           </ul>
@@ -123,11 +135,13 @@ function ClaimResult({
   title,
   group,
   bond,
+  rewardUrl,
 }: {
   claim: OwnerClaim;
   title: string;
   group: Group;
   bond: number;
+  rewardUrl?: string;
 }) {
   const reason = claimReason(c);
   return (
@@ -193,6 +207,17 @@ function ClaimResult({
           data-testid="evidence-link"
         >
           Evidence
+        </a>
+      )}
+      {rewardUrl && (
+        <a
+          className="bo-link bo-result-evidence"
+          href={rewardUrl}
+          target="_blank"
+          rel="noreferrer"
+          data-testid="nearblocks-link"
+        >
+          NearBlocks →
         </a>
       )}
     </li>

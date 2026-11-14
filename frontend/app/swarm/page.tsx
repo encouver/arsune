@@ -271,6 +271,16 @@ export default function SwarmPage() {
     () => (swarm ? claimsOfRace(claims, swarm.started_at) : claims),
     [swarm, claims],
   );
+  const rewardUrls = new Map<string, string>();
+  for (const r of rows) {
+    if (
+      r.kind === "reward_out" &&
+      r.claim_id &&
+      r.settlement_mode !== "dry" &&
+      r.explorer_url
+    )
+      rewardUrls.set(r.claim_id, r.explorer_url);
+  }
   const raceRows = swarm ? ledgerOfClaims(rows, raceClaims) : rows;
   const agentClaims = agentFilter
     ? claimsOfAgent(raceClaims, agentFilter.account, agentFilter.role)
@@ -463,7 +473,13 @@ export default function SwarmPage() {
               </li>
             )}
             {shownClaims.slice(0, 60).map((c) => (
-              <ClaimRow key={c.id} claim={c} title={titleOf(c)} names={names} />
+              <ClaimRow
+                key={c.id}
+                claim={c}
+                title={titleOf(c)}
+                names={names}
+                rewardUrl={rewardUrls.get(c.id)}
+              />
             ))}
           </ol>
         </section>
@@ -587,10 +603,12 @@ function ClaimRow({
   claim: c,
   title,
   names,
+  rewardUrl,
 }: {
   claim: Claim;
   title: string;
   names: Names;
+  rewardUrl?: string;
 }) {
   const group = claimGroup(c);
   const reason = claimReason(c);
@@ -624,6 +642,19 @@ function ClaimRow({
               data-testid="claim-evidence"
             >
               Evidence
+            </a>
+          </>
+        )}
+        {rewardUrl && (
+          <>
+            {" · "}
+            <a
+              href={rewardUrl}
+              target="_blank"
+              rel="noreferrer"
+              data-testid="claim-nearblocks"
+            >
+              NearBlocks →
             </a>
           </>
         )}
