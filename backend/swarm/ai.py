@@ -7,12 +7,14 @@ short ids (p3, L7, F2, T1). The agent maps the ids back to what it observed and 
 else, then claims through the same bond path as every other hunter. The model's short reason
 goes to the swarm log, so the board shows why the agent acted.
 
-The model never sees keys. When the run's AI budget is spent, the agent goes on scripted.
+The model sees public anon keys only. When the run's AI budget is spent, the agent goes on scripted.
 """
 
 import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+
+from playwright.async_api import Error as BrowserError
 
 from swarm.access import (
     MAX_ROUNDS,
@@ -39,6 +41,8 @@ from swarm.findings import (
 )
 from swarm.llm import BudgetSpent, ModelFailure, clean
 from swarm.market import MAX_SHARE_BPS, STEP_BPS, Tip, percent
+from swarm.security import SYSTEM as SECURITY_SYSTEM
+from swarm.security import SecurityHunt
 from swarm.site import Crawl, Page, failed_images, uncaught_errors
 from swarm.state import usdc
 
@@ -491,6 +495,7 @@ class AiHunter(Hunter):
         self.scripted = False
         # Only a bounty with a test account can prove an access leak.
         self.access_done = login_of(self.swarm.bounty) is None
+        self.security_done = False
 
     def can_claim(self) -> bool:
         return len(self.pending) < MAX_UNRESOLVED and self.wallet.can_afford(self.bond)
@@ -504,7 +509,14 @@ class AiHunter(Hunter):
         notebook = self.notebook
         may_buy = self.fresh_offers() or self.swarm.scouts_searching()
         waiting = notebook.unreviewed or notebook.again
-        return bool(self.queue or self.can_search() or waiting or may_buy or not self.access_done)
+        return bool(
+            self.queue
+            or self.can_search()
+            or waiting
+            or may_buy
+            or not self.access_done
+            or not self.security_done
+        )
 
     async def act(self) -> bool:
         if self.scripted:
@@ -514,6 +526,9 @@ class AiHunter(Hunter):
             if item:
                 await self.claim(*item)
                 return True
+        if not self.security_done and (self.crawl.done or len(self.crawl.pages) >= BATCH):
+            await self.hunt_security()
+            return True
         if self.access_ready():
             await self.hunt_access()
             return True
@@ -524,6 +539,47 @@ class AiHunter(Hunter):
             await self.search()
             return True
         return False
+
+    async def hunt_security(self):
+        """Plan anonymous probes with the shared AI budget and queue only local proofs."""
+        self.security_done = True
+        self.state = "searching"
+        try:
+            browser = self.access_browser or await self.swarm.browser.browser()
+            hunt = SecurityHunt(self.swarm.site_url, browser)
+            await hunt.gather(list(self.crawl.pages.values()))
+        except (BrowserError, TimeoutError):
+            self.log(f"{self.id} stops anonymous probes because the browser did not finish.")
+            return
+        results = []
+        for _ in range(MAX_ROUNDS):
+            try:
+                answer = await self.swarm.ai.ask(
+                    SECURITY_SYSTEM,
+                    hunt.context + "\nProbe results: " + "\n".join(results),
+                    PLAN_TOKENS,
+                )
+                require_keys(answer, ("probes", "note"))
+            except BudgetSpent:
+                self.go_scripted()
+                return
+            except ModelFailure:
+                self.log(f"{self.id} stops anonymous probes after a model error.")
+                return
+            plans = hunt.plans(answer)
+            if not plans:
+                return
+            for plan in plans:
+                finding = await hunt.run(plan)
+                results.append(
+                    f"{plan['type']}: " + (finding.evidence if finding else "not proved")
+                )
+                if finding and finding.key not in self.known:
+                    self.known.add(finding.key)
+                    self.queue.append((finding, None))
+                    self.log(
+                        f"{self.id}: anonymous probe proved {finding.claim_type}; {finding.evidence}"
+                    )
 
     def access_ready(self) -> bool:
         """Probe as account A once the crawl has a few pages to read scripts from."""

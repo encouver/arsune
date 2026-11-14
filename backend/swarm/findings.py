@@ -23,6 +23,9 @@ LABELS = {
     "broken_image": "broken image",
     "page_error": "page error",
     "access_leak": "access leak",
+    "data_exposure": "personal data open to anyone",
+    "secret_key": "secret key in public code",
+    "private_file": "private file open to anyone",
 }
 SUSPICIOUS_LINK = re.compile(
     r"old|legacy|retired|archive|previous|gift|report|missing|deprecated|beta", re.IGNORECASE

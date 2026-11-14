@@ -813,6 +813,7 @@ async def test_the_swarm_stops_when_the_bounty_pauses_and_makes_no_model_call_af
 
     for name in ("page_width", "price_facts", "desktop_look"):
         monkeypatch.setattr(BrowserPool, name, unmeasured)
+    monkeypatch.setattr(AiHunter, "hunt_security", no_security_probes)
     arsune = FakeArsune(budget=20_000_000)
 
     def pausing(system, user):
@@ -993,6 +994,7 @@ PRICE = {"key": "visible-price|abc", "value": "USD 29", "context": None}
 
 def ai_hunter(model, limit=0.5):
     swarm, hunter, log = lone_hunter(QuoteApi([("new", 100_000)]), AiHunter, ai=model.client(limit))
+    hunter.security_done = True  # These tests exercise page review, with no browser.
     hunter.notebook.add(seen(LISTING, facts=[{**PRICE, "value": "USD 19"}]))
     hunter.notebook.add(seen(PLAN, {ORIGIN + "/site/gone": 404}, width=640, facts=[PRICE]))
     return swarm, hunter, log
@@ -1468,6 +1470,10 @@ def smart_model(system: str, user: str) -> str:
     return json.dumps({"claims": found, "tips": tips, "note": "every link answers"})
 
 
+async def no_security_probes(hunter):
+    hunter.security_done = True
+
+
 async def test_full_simulation_with_ai_agents(monkeypatch):
     async def unmeasured(self, url):
         return None
@@ -1475,6 +1481,7 @@ async def test_full_simulation_with_ai_agents(monkeypatch):
     monkeypatch.setattr(BrowserPool, "page_width", unmeasured)
     monkeypatch.setattr(BrowserPool, "price_facts", unmeasured)
     monkeypatch.setattr(BrowserPool, "desktop_look", unmeasured)
+    monkeypatch.setattr(AiHunter, "hunt_security", no_security_probes)
     arsune, model = FakeArsune(budget=20_000_000), FakeModel(smart_model)
     summary = await asyncio.wait_for(
         run(
