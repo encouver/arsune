@@ -52,6 +52,7 @@ export function Results({ bounty }: { bounty: OwnerBounty }) {
     <section
       className="sw-panel bo-results"
       aria-label="Results"
+      id="results"
       data-testid="results"
     >
       <div className="sw-panel-top">

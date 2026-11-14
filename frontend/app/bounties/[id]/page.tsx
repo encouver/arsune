@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import SiteHeader from "../../site-header";
+import { BugsFound } from "../../bugs-found";
 import {
   api,
   bountyLabel,
@@ -266,6 +267,15 @@ export default function BountyPage({
             ))}
           </ol>
 
+          {bounty.claims.length > 0 && (
+            <BugsFound
+              claims={bounty.claims}
+              site={siteName(bounty.url)}
+              bountyId={bounty.id}
+              finished={bounty.status !== "open"}
+              evidenceHref="#results"
+            />
+          )}
           <Results bounty={bounty} />
 
           <ol className="bo-steps" aria-label="Steps">

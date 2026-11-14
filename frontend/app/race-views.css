@@ -695,3 +695,103 @@
     animation: none;
   }
 }
+
+/* Bugs found: the proven bugs, first thing on the live and owner pages. */
+.bf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin-bottom: 8px;
+}
+.bf-head h2 {
+  margin: 0;
+  font: italic 400 22px/1.2 var(--serif);
+}
+.bf-actions {
+  display: flex;
+  gap: 8px;
+}
+.bf-actions button {
+  font: inherit;
+  font-size: 13px;
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--white);
+  color: var(--ink);
+  cursor: pointer;
+}
+.bf-actions button:hover {
+  border-color: var(--green);
+}
+.bf-empty {
+  margin: 4px 0;
+  font-size: 14px;
+  color: var(--muted);
+}
+.bf-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.bf-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(0, 14rem) auto;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 9px 6px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+}
+.bf-list li:first-child {
+  border-top: 0;
+}
+.bf-mark {
+  color: var(--rv-paid);
+  font-weight: 700;
+}
+.bf-title {
+  overflow-wrap: anywhere;
+}
+.bf-page {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bf-list a {
+  white-space: nowrap;
+  color: var(--green);
+}
+.bf-new {
+  animation: bf-flash 1.5s ease-out;
+}
+@keyframes bf-flash {
+  from {
+    background: var(--lime);
+  }
+  to {
+    background: transparent;
+  }
+}
+@media (max-width: 600px) {
+  .bf-list li {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .bf-page {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .bf-list a {
+    grid-column: 3;
+    grid-row: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bf-new {
+    animation: none;
+  }
+}

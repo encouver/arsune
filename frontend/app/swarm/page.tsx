@@ -13,6 +13,7 @@ import {
   isHexAccount,
 } from "../claim-text";
 import SiteHeader from "../site-header";
+import { BugsFound } from "../bugs-found";
 import { clock, pagePath, share, usdc } from "./format";
 import RaceLine, { PoolBar } from "./race-line";
 import {
@@ -330,6 +331,16 @@ export default function SwarmPage() {
           <p className="rv-story" data-testid="race-story" aria-live="polite">
             {story}
           </p>
+        )}
+
+        {bounty && (
+          <BugsFound
+            claims={raceClaims}
+            site={siteName(bounty.url)}
+            bountyId={bounty.id}
+            finished={finished}
+            evidenceHref="#claims"
+          />
         )}
 
         {other && (
