@@ -47,7 +47,6 @@ def test_public_views_show_test_account_a_but_never_a_marker(client, site):
     ]
     for value in access_markers():
         assert all(value not in text for text in texts)
-        assert "ARSUNE-MARKER" not in "".join(texts)
     assert "owner_key" not in client.get(f"/api/bounties/{bounty['id']}").json()
 
 
@@ -76,7 +75,9 @@ def test_only_the_owner_reads_and_sets_the_security_test(client, site):
     view = client.put(url, json=body, headers=owner).json()
     assert view["ready"] and view["login_path"] == "/login"
     values = [m["value"] for m in view["markers"]]
-    assert len(set(values)) == 4 and all(v.startswith("ARSUNE-MARKER-") for v in values)
+    assert len(set(values)) == 4 and all(
+        len(v) >= 16 and "ARSUNE" not in v.upper() and "MARKER" not in v.upper() for v in values
+    )
     assert values != access_markers()
     public = client.get(f"/api/bounties/{bounty['id']}").json()
     assert public["test_account"] == {"login_path": "/login", "login_body": body["login_body"]}

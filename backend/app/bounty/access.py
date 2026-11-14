@@ -19,11 +19,18 @@ MARKER_LABELS = (
     "admin-only data",
     "chatbot instructions",
 )
+_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 SETUP_FIRST = "Set up the security test first (step 2)."
 
 
 def new_markers() -> list[str]:
-    return ["ARSUNE-MARKER-" + secrets.token_hex(10) for _ in MARKER_LABELS]
+    return [_new_code() for _ in MARKER_LABELS]
+
+
+def _new_code() -> str:
+    """KX-xxxx-xxxx-xxxx-xxxx: 80 random bits that look like an ordinary reference code."""
+    chars = [secrets.choice(_CODE_ALPHABET) for _ in range(16)]
+    return "KX-" + "-".join("".join(chars[i : i + 4]) for i in range(0, 16, 4))
 
 
 def initial(is_demo: bool) -> dict:
