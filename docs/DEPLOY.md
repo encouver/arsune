@@ -20,7 +20,10 @@ Docker Compose reads `~/arsune/.env` on the server for the `${VAR}` values in `c
    `ARSUNE_MAX_PAYMENT_AMOUNT`, `ARSUNE_ONECLICK_JWT`. `ARSUNE_SETTLEMENT_MODE` defaults to
    `near_intents` here; set it to `dry` to go back to simulation. Only `api`, `worker` and
    `coordinator` get these values.
-2. Copy the swarm accounts file (written by `scripts/near_swarm_accounts.py`) to
+2. Set `ARSUNE_OWNER_SESSION_SECRET` in `~/arsune/.env` to a long random value
+   (`openssl rand -hex 32`). It signs the 7-day sessions of "Sign in with NEAR". Without it,
+   the API makes a random secret at start, so every restart signs all owners out.
+3. Copy the swarm accounts file (written by `scripts/near_swarm_accounts.py`) to
    `~/arsune/.data/swarm-accounts.json`, mode 600. The `swarm` container mounts it read-only.
    Without the file, Compose refuses to start `swarm`.
 

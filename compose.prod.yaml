@@ -35,6 +35,8 @@ services:
       <<: *settlement
       # The one browser origin that the API accepts (CORS).
       ARSUNE_UI_ORIGIN: https://arsune.augevi.com
+      # Signs "Sign in with NEAR" owner sessions. Unset: sessions end when the API restarts.
+      ARSUNE_OWNER_SESSION_SECRET: ${ARSUNE_OWNER_SESSION_SECRET:-}
   worker:
     <<: *restart
     environment: *settlement

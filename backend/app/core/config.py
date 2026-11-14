@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     escrow_claims: int = Field(default=50, ge=1, le=1000)  # storage prepaid by Arsune
     escrow_bounty_days: int = Field(default=30, ge=1, le=365)
     swarm_accounts_file: Path = Path(".data/swarm-accounts.json")
+    # Signs owner sessions (sign in with NEAR). Empty: a random secret per API process.
+    owner_session_secret: SecretStr = SecretStr("")
 
     @property
     def model_enabled(self) -> bool:

@@ -172,7 +172,7 @@ export async function signTransfer(
 
 // Arsune wants "ed25519:<base58>". Wallets return the public key in that form and the
 // NEP-413 signature as base64 (some as "ed25519:<base58>" already).
-function ed25519Text(value: string, size: number): string {
+export function ed25519Text(value: string, size: number): string {
   if (value.startsWith("ed25519:")) return value;
   const bytes = Uint8Array.from(atob(value), (c) => c.charCodeAt(0));
   if (bytes.length !== size)

@@ -1,4 +1,5 @@
 import { tasks } from "./nav";
+import OwnerSignIn from "./owner-sign-in";
 
 // `current` is the page's path; the older tools pass theirs and match no link.
 export default function SiteHeader({ current }: { current: string }) {
@@ -21,6 +22,7 @@ export default function SiteHeader({ current }: { current: string }) {
           </a>
         ))}
       </nav>
+      <OwnerSignIn />
     </header>
   );
 }

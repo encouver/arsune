@@ -8,7 +8,7 @@ from app.core.schemas.bounties import (
     FundIntent,
     SetAccessTest,
 )
-from app.v1.services import bounties
+from app.v1.services import bounties, owner
 
 router = APIRouter()
 
@@ -18,9 +18,16 @@ def settlement():
     return bounties.settlement_view()
 
 
+def signed_in(authorization):
+    """The signed-in owner's account. A session that is sent but not valid is refused."""
+    if authorization is None:
+        return None
+    return owner.required_account(authorization)
+
+
 @router.post("/bounties", status_code=201)
-async def create_bounty(request: CreateBounty):
-    return await bounties.create_bounty(request)
+async def create_bounty(request: CreateBounty, authorization: str | None = Header(None)):
+    return await bounties.create_bounty(request, signed_in(authorization))
 
 
 @router.get("/bounties")
@@ -34,16 +41,24 @@ def get_bounty(bounty_id: str):
 
 
 @router.get("/bounties/{bounty_id}/access-test")
-def get_access_test(bounty_id: str, x_owner_key: str | None = Header(None)):
-    """Owner only: test account A and the secret markers to plant."""
-    return bounties.get_access_test(bounty_id, x_owner_key)
+def get_access_test(
+    bounty_id: str,
+    x_owner_key: str | None = Header(None),
+    authorization: str | None = Header(None),
+):
+    """Owner only (owner key or session): test account A and the secret markers to plant."""
+    return bounties.get_access_test(bounty_id, x_owner_key, owner.session_account(authorization))
 
 
 @router.put("/bounties/{bounty_id}/access-test")
 async def set_access_test(
-    bounty_id: str, request: SetAccessTest, x_owner_key: str | None = Header(None)
+    bounty_id: str,
+    request: SetAccessTest,
+    x_owner_key: str | None = Header(None),
+    authorization: str | None = Header(None),
 ):
-    return await bounties.set_access_test(bounty_id, x_owner_key, request)
+    account = owner.session_account(authorization)
+    return await bounties.set_access_test(bounty_id, x_owner_key, request, account)
 
 
 def accepted_while_checking(response: Response, site_check: dict | None):

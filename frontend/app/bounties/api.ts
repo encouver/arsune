@@ -108,6 +108,17 @@ export const ownerKeyName = (bountyId: string) =>
 export const ownerSiteName = (bountyId: string) =>
   `arsune-owner-site:${bountyId}`;
 
+/** IDs of the hunts that this browser created: it has their owner keys. */
+export function localOwnedIds(): string[] {
+  const prefix = "arsune-owner-key:";
+  const ids: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const name = localStorage.key(i) ?? "";
+    if (name.startsWith(prefix)) ids.push(name.slice(prefix.length));
+  }
+  return ids;
+}
+
 // Earlier bounties of this browser on the same site: the server reuses their proof token.
 // Keys saved before the site was stored go last; the server checks the origin itself.
 export function reusableProofs(siteUrl: string) {

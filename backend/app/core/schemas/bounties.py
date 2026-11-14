@@ -78,3 +78,12 @@ class SetAccessTest(BaseModel):
     login_url: str = Field(min_length=8, max_length=2048)
     email: str = Field(min_length=1, max_length=256)
     password: str = Field(min_length=1, max_length=256)
+
+
+class OwnerLogin(BaseModel):
+    """A wallet's NEP-413 signature of the challenge with this nonce."""
+
+    account_id: Account
+    public_key: str = Field(max_length=100)
+    signature: str = Field(max_length=200)
+    nonce: str = Field(min_length=1, max_length=64)

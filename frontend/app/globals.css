@@ -1263,3 +1263,40 @@ footer > span {
 @media (prefers-reduced-motion: reduce) {
   .sw-live i.sw-pulse { animation: none; }
 }
+
+.owner-sign-in {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12px;
+  margin-left: 24px;
+}
+.owner-sign-in button {
+  font: inherit;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  background: transparent;
+  cursor: pointer;
+}
+.owner-sign-in span {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.owner-sign-in small {
+  max-width: 220px;
+}
+@media (max-width: 760px) {
+  .owner-sign-in {
+    font-size: 10px;
+    margin-left: 12px;
+  }
+  .owner-sign-in span {
+    max-width: 100px;
+  }
+}
+.ra-mine h2 {
+  font-size: 18px;
+  margin: 28px 0 12px;
+}

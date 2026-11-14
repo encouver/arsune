@@ -6,7 +6,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 from fastapi.concurrency import run_in_threadpool
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from app.bounty import access, budget, reputation, settlement, site_check
@@ -257,31 +257,38 @@ def claim_detail(session, claim):
     }
 
 
-def reusable_proof_token(session, site_origin, pairs):
+def reusable_proof_token(session, site_origin, pairs, account=None):
     """The token of the owner's newest earlier bounty on this origin, else a fresh token.
 
-    The token is public on the site, so reuse needs the owner key of that earlier bounty.
-    A pair that does not qualify is ignored without any answer.
+    The token is public on the site, so reuse needs the owner key of that earlier bounty, or
+    a signed-in session of its owner_account (`account`). A typed owner_account alone is not
+    enough. A pair that does not qualify is ignored without any answer.
     """
     ids = [pair.bounty_id for pair in pairs]
+    owned = Bounty.id.in_(ids)
+    if account:
+        owned = or_(owned, Bounty.owner_account == account)
     rows = session.scalars(
         select(Bounty)
-        .where(
-            Bounty.id.in_(ids),
-            Bounty.origin == site_origin,
-            Bounty.status != "pending_proof",
-        )
+        .where(owned, Bounty.origin == site_origin, Bounty.status != "pending_proof")
         .order_by(Bounty.created_at.desc())
     ).all()
     keys = {pair.bounty_id: pair.owner_key for pair in pairs}
     for old in rows:
-        if access.owner_key_matches(old.owner_key_hash, keys[old.id]):
+        if (account and old.owner_account == account) or access.owner_key_matches(
+            old.owner_key_hash, keys.get(old.id)
+        ):
             return old.proof_token
     return secrets.token_urlsafe(24)
 
 
-async def create_bounty(request: CreateBounty):
+async def create_bounty(request: CreateBounty, account=None):
+    """`account` is the signed-in owner, if any: the bounty must be theirs."""
     require_account(request.owner_account, "owner")
+    if account and request.owner_account != account:
+        raise HTTPException(
+            403, f"You are signed in as {account}. Use that account as the owner, or sign out."
+        )
     try:
         url = await canonical_url(request.url)
     except (ClaimError, TargetPolicyError) as exc:
@@ -297,7 +304,7 @@ async def create_bounty(request: CreateBounty):
         raise HTTPException(422, f"The escrow permits a fee of at most {MAX_ESCROW_FEE_BPS} bps.")
     owner_key, owner_key_hash = access.new_owner_key()
     with Session.begin() as session:
-        proof_token = reusable_proof_token(session, origin(url), request.reuse_proof)
+        proof_token = reusable_proof_token(session, origin(url), request.reuse_proof, account)
         bounty = Bounty(
             id=str(uuid4()),
             url=url,
@@ -319,29 +326,36 @@ async def create_bounty(request: CreateBounty):
         return {**bounty_detail(session, bounty), "owner_key": owner_key}
 
 
-def owned_bounty(session, bounty_id, owner_key, lock=False):
+def owned_bounty(session, bounty_id, owner_key, account=None, lock=False):
+    """The bounty, for its owner key or a signed-in session of its owner_account."""
     bounty = find_bounty(session, bounty_id, lock=lock)
-    if not access.owner_key_matches(bounty.owner_key_hash, owner_key):
-        raise HTTPException(403, "Only the bounty owner can do this. Send the owner key.")
+    signed_in = account is not None and account == bounty.owner_account
+    if not signed_in and not access.owner_key_matches(bounty.owner_key_hash, owner_key):
+        raise HTTPException(
+            403,
+            "Only the bounty owner can do this. Send the owner key, "
+            "or sign in with the owner's NEAR account.",
+        )
     return bounty
 
 
-def get_access_test(bounty_id, owner_key):
+def get_access_test(bounty_id, owner_key, account=None):
     with Session() as session:
-        return access.owner_view(owned_bounty(session, bounty_id, owner_key).access_test)
+        bounty = owned_bounty(session, bounty_id, owner_key, account)
+        return access.owner_view(bounty.access_test)
 
 
-async def set_access_test(bounty_id, owner_key, request):
+async def set_access_test(bounty_id, owner_key, request, account=None):
     try:
         with Session() as session:
-            site_url = owned_bounty(session, bounty_id, owner_key).url
+            site_url = owned_bounty(session, bounty_id, owner_key, account).url
         test_account = await access.checked_account(
             site_url, request.login_url, request.email, request.password
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
     with Session.begin() as session:
-        bounty = owned_bounty(session, bounty_id, owner_key, lock=True)
+        bounty = owned_bounty(session, bounty_id, owner_key, account, lock=True)
         if bounty.status == "closed":
             raise HTTPException(409, not_open(bounty))
         current = bounty.access_test or {"markers": access.new_markers()}

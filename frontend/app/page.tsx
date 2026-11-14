@@ -17,6 +17,8 @@ import {
   usdc,
 } from "./bounties/api";
 import { Message, SimTag } from "./bounties/ui";
+import { forgetSessionOn, sessionHeaders } from "./owner-session";
+import { useOwnerSession } from "./owner-sign-in";
 import SiteHeader from "./site-header";
 
 type Form = {
@@ -77,6 +79,13 @@ export default function StartRacePage() {
   const [touched, setTouched] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const session = useOwnerSession();
+  const signedIn = session?.account_id ?? null;
+
+  // Signed in: the hunt belongs to the signed-in account.
+  useEffect(() => {
+    if (signedIn) setForm((f) => ({ ...f, owner: signedIn }));
+  }, [signedIn]);
 
   useEffect(() => {
     api<Options>("/api/funding/options")
@@ -114,14 +123,18 @@ export default function StartRacePage() {
     if (Object.keys(issues).length) return;
     setBusy(true);
     try {
-      const bounty = await api<OwnerBounty>("/api/bounties", {
-        url: form.url.trim(),
-        owner_account: form.owner.trim(),
-        reward_amount: parseUsdc(form.reward),
-        bond_amount: parseUsdc(form.bond),
-        budget: parseUsdc(form.budget),
-        reuse_proof: reusableProofs(form.url.trim()),
-      });
+      const bounty = await api<OwnerBounty>(
+        "/api/bounties",
+        {
+          url: form.url.trim(),
+          owner_account: form.owner.trim(),
+          reward_amount: parseUsdc(form.reward),
+          bond_amount: parseUsdc(form.bond),
+          budget: parseUsdc(form.budget),
+          reuse_proof: reusableProofs(form.url.trim()),
+        },
+        { headers: sessionHeaders() },
+      );
       if (bounty.owner_key) {
         localStorage.setItem(ownerKeyName(bounty.id), bounty.owner_key);
         localStorage.setItem(
@@ -131,6 +144,7 @@ export default function StartRacePage() {
       }
       router.push(`/bounties/${bounty.id}`);
     } catch (err) {
+      forgetSessionOn(err);
       setError(errorText(err));
       setBusy(false);
     }
@@ -253,12 +267,15 @@ export default function StartRacePage() {
               {field(
                 "owner",
                 "Your NEAR account",
-                "Next, you show that you own this site.",
+                signedIn
+                  ? "You are signed in with this account."
+                  : "Next, you show that you own this site.",
                 <input
                   name="owner"
                   placeholder="you.near"
                   autoComplete="off"
                   value={form.owner}
+                  readOnly={!!signedIn}
                   onChange={set("owner")}
                   aria-invalid={!!shown.owner}
                 />,
@@ -328,7 +345,7 @@ export default function StartRacePage() {
                       setForm((f) => ({
                         ...f,
                         url: `${options.demo_site_url}/shop/`,
-                        owner: f.owner || "demo-owner.near",
+                        owner: signedIn ?? (f.owner || "demo-owner.near"),
                         budget:
                           dry && f.budget === START.budget
                             ? DEMO_BUDGET
