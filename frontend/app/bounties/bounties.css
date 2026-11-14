@@ -1,7 +1,7 @@
 /* Owner pages: create, prove and fund a bounty. Builds on the swarm board (.sw-*). */
 .bo-grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 18px; align-items: start; }
 .bo-form { display: grid; gap: 14px; }
-.bo-field { display: grid; gap: 4px; font-size: 12px; font-weight: 700; }
+.bo-field { display: grid; align-content: start; gap: 4px; font-size: 12px; font-weight: 700; }
 .bo-field small { font-weight: 400; color: var(--muted); font-size: 12px; }
 .bo-field small.bo-invalid { color: #b3261a; font-weight: 700; }
 .bo-field input, .bo-field select, .bo-field textarea {
@@ -10,7 +10,7 @@
 }
 .bo-field textarea { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; min-height: 96px; }
 .bo-field input[aria-invalid="true"] { border-color: #d0332a; background: #fff7f5; }
-.bo-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.bo-row { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; align-items: start; }
 .bo-row-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .bo-unit { position: relative; }
 .bo-unit input { padding-right: 52px; }

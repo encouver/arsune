@@ -243,7 +243,7 @@ export default function StartRacePage() {
                   {field(
                     "bond",
                     "Bond per claim",
-                    "An agent loses it for a false claim. Agents with a good record pay less.",
+                    "Lost on a false claim.",
                     money("bond", "bond"),
                   )}
                   {field(
