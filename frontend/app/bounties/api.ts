@@ -109,6 +109,7 @@ export const ownerSiteName = (bountyId: string) =>
   `arsune-owner-site:${bountyId}`;
 
 // Earlier bounties of this browser on the same site: the server reuses their proof token.
+// Keys saved before the site was stored go last; the server checks the origin itself.
 export function reusableProofs(siteUrl: string) {
   let site: string;
   try {
@@ -116,16 +117,20 @@ export function reusableProofs(siteUrl: string) {
   } catch {
     return [];
   }
-  const pairs: { bounty_id: string; owner_key: string }[] = [];
+  const prefix = "arsune-owner-key:";
+  const same: { bounty_id: string; owner_key: string }[] = [];
+  const unknown: { bounty_id: string; owner_key: string }[] = [];
   for (let i = 0; i < localStorage.length; i++) {
     const name = localStorage.key(i) ?? "";
-    if (!name.startsWith("arsune-owner-site:")) continue;
-    if (localStorage.getItem(name) !== site) continue;
-    const id = name.slice("arsune-owner-site:".length);
-    const key = localStorage.getItem(ownerKeyName(id));
-    if (key) pairs.push({ bounty_id: id, owner_key: key });
+    if (!name.startsWith(prefix)) continue;
+    const id = name.slice(prefix.length);
+    const key = localStorage.getItem(name);
+    if (!key) continue;
+    const saved = localStorage.getItem(ownerSiteName(id));
+    if (saved === site) same.push({ bounty_id: id, owner_key: key });
+    else if (saved === null) unknown.push({ bounty_id: id, owner_key: key });
   }
-  return pairs.slice(-10);
+  return [...same, ...unknown].slice(0, 10);
 }
 
 export type OwnerBounty = BountySummary & {
