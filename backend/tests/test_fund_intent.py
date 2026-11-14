@@ -15,6 +15,7 @@ import base58
 import pytest
 from app.bounty import settlement
 from app.core.config import settings
+from app.settlement import near_intents
 from app.settlement.base import SettlementError
 from nacl.signing import SigningKey
 
@@ -168,3 +169,39 @@ def test_prepared_payload_passes_the_mode_check(monkeypatch, mode):
     settlement.check_transfer(signed, sender=OWNER, amount=FUND, memo=memo, msg=msg)
     with pytest.raises(SettlementError):
         settlement.check_transfer(signed, sender=OWNER, amount=FUND, memo=memo + "x", msg=msg)
+
+
+def test_fund_refuses_a_key_unknown_to_near_intents_without_a_ledger_row(client, site, monkeypatch):
+    bounty = open_bounty(client, site)
+    monkeypatch.setattr(settings, "settlement_mode", "near_intents")
+    monkeypatch.setattr(settings, "near_account_id", "arsune-test.near")
+    monkeypatch.setattr(settlement, "current_salt", lambda: "a1b2c3d4")
+    registered = {"value": False}
+    asked = []
+
+    def has_public_key(account_id, public_key, **_):
+        asked.append((account_id, public_key))
+        return registered["value"]
+
+    monkeypatch.setattr(near_intents, "has_public_key", has_public_key)
+    monkeypatch.setattr(
+        settlement,
+        "collect",
+        lambda *a, **k: "tx-collected",
+    )
+    fund_id = str(uuid4())
+    prepared = prepare(client, bounty["id"], fund_id, amount=1000).json()
+    body = {
+        "fund_id": fund_id,
+        "sender": OWNER,
+        "amount": 1000,
+        "signed_intent": page_signed_intent(prepared),
+    }
+    response = client.post(f"/api/bounties/{bounty['id']}/fund", json=body)
+    assert response.status_code == 422
+    assert "Click 'Allow this wallet key' first." in response.text
+    assert asked == [(OWNER, body["signed_intent"]["public_key"])]
+    # No failed ledger row: the same fund_id is still free, and works once the key is added.
+    assert prepare(client, bounty["id"], fund_id, amount=1000).status_code == 200
+    registered["value"] = True
+    assert client.post(f"/api/bounties/{bounty['id']}/fund", json=body).status_code == 200

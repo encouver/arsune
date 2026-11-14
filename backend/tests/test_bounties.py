@@ -893,6 +893,8 @@ class FakeRpc:
         pass
 
     def view(self, contract, method, args):
+        if method == "has_public_key":
+            return True
         if method == "current_salt":
             return "252812b3"
         if method == "simulate_intents":

@@ -20,9 +20,11 @@ import {
 } from "./api";
 import { Code, Message } from "./ui";
 import {
+  addIntentsKey,
   connectedAccount,
   connectWallet,
   depositToIntents,
+  hasIntentsKey,
   disconnectWallet,
   intentsBalance,
   PreparedTransfer,
@@ -640,6 +642,15 @@ function WalletFund({
   const [inIntents, setInIntents] = useState<bigint | null>(null);
   const [inWallet, setInWallet] = useState<bigint | null>(null);
   const [step, setStep] = useState<string | null>(null);
+  // false: NEAR Intents does not know the wallet key yet. null: not checked.
+  const [keyKnown, setKeyKnown] = useState<boolean | null>(null);
+  const [keyText, setKeyText] = useState<string | null>(null);
+  // A signed transfer kept while the owner allows the key. It is valid until its deadline.
+  const [held, setHeld] = useState<{
+    id: string;
+    intent: { public_key: string };
+    deadline: number;
+  } | null>(null);
   const intents = options?.intents_contract;
   const token = options?.token;
 
@@ -675,6 +686,16 @@ function WalletFund({
     loadBalances();
   }, [loadBalances]);
 
+  // Wallets that share their key before signing: ask NEAR Intents right after connecting.
+  useEffect(() => {
+    const key = account?.publicKey;
+    if (!account || !key || !intents) return;
+    setKeyText(key);
+    hasIntentsKey(intents, account.accountId, key)
+      .then(setKeyKnown)
+      .catch(() => {});
+  }, [account, intents]);
+
   async function run(name: string, work: () => Promise<void>) {
     setStep(name);
     setError(null);
@@ -702,6 +723,9 @@ function WalletFund({
       setAccount(null);
       setInIntents(null);
       setInWallet(null);
+      setKeyKnown(null);
+      setKeyText(null);
+      setHeld(null);
     });
 
   const need = amount ? BigInt(amount) : BigInt(0);
@@ -723,8 +747,60 @@ function WalletFund({
         { fund_id: id, sender: account.accountId, amount },
       );
       const signedIntent = await signTransfer(account, prepared);
+      if (intents && keyKnown !== true) {
+        const known = await hasIntentsKey(
+          intents,
+          account.accountId,
+          signedIntent.public_key,
+        );
+        setKeyKnown(known);
+        if (!known) {
+          setKeyText(signedIntent.public_key);
+          setHeld({
+            id,
+            intent: signedIntent,
+            deadline: Date.parse(prepared.deadline),
+          });
+          return;
+        }
+      }
       await fund(account.accountId, signedIntent, id);
       await Promise.all([loadBalances(), onChange()]);
+    });
+
+  // Registering the key is a transaction; the RPC can lag a moment behind it.
+  async function keyAppears(pk: string) {
+    if (!account || !intents) return false;
+    for (let i = 0; i < 8; i++) {
+      if (await hasIntentsKey(intents, account.accountId, pk)) return true;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+    return false;
+  }
+
+  const allowKey = () =>
+    run("key", async () => {
+      if (!account || !intents || !keyText) return;
+      await addIntentsKey(account, intents, keyText);
+      if (!(await keyAppears(keyText)))
+        throw new Error(
+          "The key is not visible in NEAR Intents yet. Wait a moment and try again.",
+        );
+      setKeyKnown(true);
+      const kept = held;
+      setHeld(null);
+      if (kept && kept.deadline - Date.now() > 15_000) {
+        try {
+          await fund(account.accountId, kept.intent, kept.id);
+          await Promise.all([loadBalances(), onChange()]);
+        } catch (err) {
+          failed(err);
+        }
+      } else if (kept) {
+        setDone(
+          "The wallet key is allowed. The signed transfer expired. Click Sign and fund again.",
+        );
+      }
     });
 
   if (!account)
@@ -761,7 +837,32 @@ function WalletFund({
         Your USDC in NEAR Intents:{" "}
         {inIntents === null ? "checking…" : usdc(Number(inIntents))}
       </p>
-      {!amount ? null : inIntents === null ? null : short > BigInt(0) ? (
+      {!amount || keyKnown !== false ? null : (
+        <>
+          <button
+            type="button"
+            className="bo-btn"
+            onClick={allowKey}
+            disabled={step !== null || !keyText}
+            data-testid="wallet-allow-key"
+          >
+            {step === "key"
+              ? "Waiting for the wallet…"
+              : "Allow this wallet key in NEAR Intents (one time)"}
+          </button>
+          <span className="bo-muted">
+            NEAR Intents does not know this wallet key yet. One transaction (1
+            yoctoNEAR and gas){" "}
+            {held
+              ? "sends your signed transfer after it."
+              : keyText
+                ? ""
+                : "after you sign."}
+          </span>
+        </>
+      )}
+      {!amount || keyKnown === false || inIntents === null ? null : short >
+        BigInt(0) ? (
         <>
           <button
             type="button"

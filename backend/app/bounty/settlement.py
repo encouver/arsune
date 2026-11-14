@@ -145,6 +145,17 @@ def check_transfer(signed: dict, *, sender: str, amount: int, memo: str, msg: st
     )
 
 
+def key_registered(signed: dict, *, sender: str) -> bool:
+    """Whether NEAR Intents knows the signing key: a named account must add it once."""
+    if settings.settlement_mode == "dry":
+        return True
+    from app.settlement import near_intents
+
+    return near_intents.has_public_key(
+        sender, signed["public_key"], contract=settings.intents_contract
+    )
+
+
 @contextmanager
 def relayer_lock(mode: str):
     """Serialize real relayer transactions across API and worker processes.

@@ -22,12 +22,23 @@ function getConnector(): Promise<NearConnector> {
   return connector;
 }
 
-export type WalletAccount = { accountId: string; wallet: NearWalletBase };
+export type WalletAccount = {
+  accountId: string;
+  wallet: NearWalletBase;
+  publicKey?: string; // some wallets share it before signing
+};
 
 async function firstAccount(wallet: NearWalletBase): Promise<WalletAccount> {
   const accounts = await wallet.getAccounts({ network: "mainnet" });
   if (!accounts.length) throw new Error("The wallet has no account.");
-  return { accountId: accounts[0].accountId, wallet };
+  let publicKey: string | undefined;
+  try {
+    const key = accounts[0].publicKey;
+    if (key) publicKey = ed25519Text(key, 32);
+  } catch {
+    // An unreadable key only means the check waits until the wallet signs.
+  }
+  return { accountId: accounts[0].accountId, wallet, publicKey };
 }
 
 /** The account of a wallet connected earlier in this browser, or null. */
@@ -79,6 +90,42 @@ async function view<T>(contract: string, method: string, args: object) {
     }
   }
   throw last ?? new Error("The NEAR RPC is unavailable.");
+}
+
+/** Whether NEAR Intents knows this key for the account. Named accounts must add it once. */
+export async function hasIntentsKey(
+  intents: string,
+  accountId: string,
+  publicKey: string,
+): Promise<boolean> {
+  return view<boolean>(intents, "has_public_key", {
+    account_id: accountId,
+    public_key: publicKey,
+  });
+}
+
+/** One transaction: the account adds this key in NEAR Intents (1 yoctoNEAR). */
+export async function addIntentsKey(
+  account: WalletAccount,
+  intents: string,
+  publicKey: string,
+): Promise<void> {
+  await account.wallet.signAndSendTransaction({
+    network: "mainnet",
+    signerId: account.accountId,
+    receiverId: intents,
+    actions: [
+      {
+        type: "FunctionCall",
+        params: {
+          methodName: "add_public_key",
+          args: { public_key: publicKey },
+          gas: (BigInt(30) * TGAS).toString(),
+          deposit: "1",
+        },
+      },
+    ],
+  });
 }
 
 /** "nep141:usdc.near" -> "usdc.near": the fungible token contract. */

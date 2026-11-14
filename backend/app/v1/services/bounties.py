@@ -557,6 +557,18 @@ async def fund_bounty(bounty_id, request: FundBounty):
     check_intent(
         request.signed_intent, sender=request.sender, amount=request.amount, memo=memo, msg=msg
     )
+    try:
+        registered = await run_in_threadpool(
+            settlement.key_registered, request.signed_intent, sender=request.sender
+        )
+    except SettlementError:
+        raise HTTPException(503, "The settlement network is unavailable.") from None
+    if not registered:
+        raise HTTPException(
+            422,
+            "This wallet key is not allowed in NEAR Intents yet. "
+            "Click 'Allow this wallet key' first.",
+        )
     with Session.begin() as session:
         bounty = find_bounty(session, bounty_id, lock=True)
         if not budget.takes_funds(bounty):
