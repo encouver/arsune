@@ -157,16 +157,25 @@ export async function walletBalance(
   return BigInt(raw);
 }
 
-/** Move `units` of the token from the wallet into the signer's own NEAR Intents balance. */
+function txHash(outcome: unknown): string | null {
+  const o = outcome as {
+    transaction?: { hash?: string };
+    transaction_outcome?: { id?: string };
+  } | null;
+  return o?.transaction?.hash ?? o?.transaction_outcome?.id ?? null;
+}
+
+/** Move `units` of the token from the wallet into the signer's own NEAR Intents balance.
+ *  Returns the transaction hash when the wallet reports it. */
 export async function depositToIntents(
   account: WalletAccount,
   intents: string,
   tokenId: string,
   units: bigint,
-): Promise<void> {
+): Promise<string | null> {
   // intents.near is registered on the USDC contract, so no storage_deposit is needed.
   // An empty msg credits the deposit to the sender inside NEAR Intents.
-  await account.wallet.signAndSendTransaction({
+  const outcome = await account.wallet.signAndSendTransaction({
     network: "mainnet",
     signerId: account.accountId,
     receiverId: ftContract(tokenId),
@@ -182,6 +191,7 @@ export async function depositToIntents(
       },
     ],
   });
+  return txHash(outcome);
 }
 
 export type PreparedTransfer = {

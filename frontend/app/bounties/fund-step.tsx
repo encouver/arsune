@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   ACCOUNT,
   api,
@@ -651,6 +651,15 @@ function WalletFund({
     intent: { public_key: string };
     deadline: number;
   } | null>(null);
+  // A move was sent for `need` units. It stays here until NEAR Intents shows the balance.
+  const [moved, setMoved] = useState<{
+    tx: string | null;
+    need: bigint;
+    timedOut: boolean;
+  } | null>(null);
+  // Single flight: no second wallet action while one runs, and no second move per amount.
+  const working = useRef(false);
+  const movedFor = useRef<string | null>(null);
   const intents = options?.intents_contract;
   const token = options?.token;
 
@@ -697,6 +706,8 @@ function WalletFund({
   }, [account, intents]);
 
   async function run(name: string, work: () => Promise<void>) {
+    if (working.current) return;
+    working.current = true;
     setStep(name);
     setError(null);
     setDone(null);
@@ -706,6 +717,7 @@ function WalletFund({
       if (name === "fund") failed(err);
       else setError(errorText(err));
     } finally {
+      working.current = false;
       setStep(null);
     }
   }
@@ -731,12 +743,51 @@ function WalletFund({
   const need = amount ? BigInt(amount) : BigInt(0);
   const short = inIntents === null ? BigInt(0) : need - inIntents;
 
-  const move = () =>
-    run("move", async () => {
+  // Poll until NEAR Intents shows `target`; the RPC lags behind the transaction.
+  async function balanceReaches(target: bigint) {
+    if (!account || !intents || !token) return false;
+    for (let i = 0; i < 30; i++) {
+      try {
+        const now = await intentsBalance(intents, account.accountId, token);
+        setInIntents(now);
+        if (now >= target) return true;
+      } catch {
+        // Try again on the next round.
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    return false;
+  }
+
+  async function watchMove(tx: string | null) {
+    setMoved({ tx, need, timedOut: false });
+    if (await balanceReaches(need)) setMoved(null);
+    else setMoved({ tx, need, timedOut: true });
+  }
+
+  const move = () => {
+    if (movedFor.current === need.toString()) return;
+    return run("move", async () => {
       if (!account || !intents || !token) return;
-      await depositToIntents(account, intents, token, short);
-      await loadBalances();
+      const walletBefore = inWallet;
+      let tx: string | null;
+      try {
+        tx = await depositToIntents(account, intents, token, short);
+      } catch (err) {
+        // The wallet may close after sending. If the wallet balance fell, the move happened.
+        const after = await walletBalance(account.accountId, token).catch(
+          () => null,
+        );
+        if (walletBefore === null || after === null || after >= walletBefore)
+          throw err;
+        movedFor.current = need.toString();
+        await watchMove(null);
+        return;
+      }
+      movedFor.current = need.toString();
+      await watchMove(tx);
     });
+  };
 
   const signAndFund = () =>
     run("fund", async () => {
@@ -765,6 +816,7 @@ function WalletFund({
         }
       }
       await fund(account.accountId, signedIntent, id);
+      movedFor.current = null;
       await Promise.all([loadBalances(), onChange()]);
     });
 
@@ -862,7 +914,49 @@ function WalletFund({
         </>
       )}
       {!amount || keyKnown === false || inIntents === null ? null : short >
-        BigInt(0) ? (
+          BigInt(0) && moved?.need === need ? (
+        <p className="bo-muted" data-testid="wallet-moving">
+          {moved.timedOut ? (
+            <>
+              The move was sent
+              {moved.tx && (
+                <>
+                  {" "}
+                  (tx{" "}
+                  <a
+                    href={`https://nearblocks.io/txns/${moved.tx}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {moved.tx.slice(0, 8)}…
+                  </a>
+                  )
+                </>
+              )}
+              . Wait a moment and reload; do not move again.
+            </>
+          ) : (
+            <>
+              Moving… waiting for NEAR Intents to show it
+              {moved.tx && (
+                <>
+                  {" "}
+                  (tx{" "}
+                  <a
+                    href={`https://nearblocks.io/txns/${moved.tx}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    {moved.tx.slice(0, 8)}…
+                  </a>
+                  )
+                </>
+              )}
+              .
+            </>
+          )}
+        </p>
+      ) : short > BigInt(0) ? (
         <>
           <button
             type="button"
