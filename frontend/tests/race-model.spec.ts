@@ -126,13 +126,13 @@ const base: LineCounts = {
 
 test("rareText names only the rare results that are not zero", () => {
   expect(rareText({ ...base, unchecked: 3, unfunded: 2 })).toBe(
-    "3 could not be checked · 2 proven, but the pool was empty · bond back",
+    "3 could not be checked · 2 proven, but the budget ran out · deposit back",
   );
   expect(rareText({ ...base, unchecked: 1 })).toBe(
-    "1 could not be checked · bond back",
+    "1 could not be checked · deposit back",
   );
   expect(rareText({ ...base, unfunded: 1 })).toBe(
-    "1 proven, but the pool was empty · bond back",
+    "1 proven, but the budget ran out · deposit back",
   );
   expect(rareText(base)).toBe("");
 });
@@ -236,16 +236,16 @@ test("latestSentence words the other results", () => {
   const say = (status: string, outcome: string) =>
     latestSentence([link(status, outcome)], [], nameOf, titleOf)?.text;
   expect(say("rejected", "rejected")).toBe(
-    'hunter-007 claimed "Broken link to /a" on /b → it was not true, bond lost',
+    'hunter-007 reported "Broken link to /a" on /b → it was fake, deposit lost',
   );
   expect(say("duplicate", "duplicate")).toBe(
-    "hunter-007 sent a bug that was already proven → bond back",
+    "hunter-007 sent a bug that was already proven → deposit back",
   );
   expect(say("unverified", "unverified")).toBe(
-    'hunter-007: Arsune could not check "Broken link to /a" → bond back',
+    'hunter-007: Arsune could not check "Broken link to /a" → deposit back',
   );
   expect(say("unfunded", "proven")).toBe(
-    'hunter-007 proved "Broken link to /a", but the pool was empty → bond back',
+    'hunter-007 proved "Broken link to /a", but the budget ran out → deposit back',
   );
 });
 
@@ -446,10 +446,10 @@ test("withRecords takes money from Arsune's records and state from the race host
 
 test("runningStory names the agents and the site", () => {
   expect(runningStory(110, "shop.example/shop/")).toBe(
-    "110 agents search shop.example/shop/. Each claim locks a bond. Arsune checks it in a fresh browser.",
+    "110 agents search shop.example/shop/. Each report needs a deposit. Arsune checks it in a clean browser.",
   );
   expect(runningStory(1, "shop.example")).toBe(
-    "1 agent searches shop.example. Each claim locks a bond. Arsune checks it in a fresh browser.",
+    "1 agent searches shop.example. Each report needs a deposit. Arsune checks it in a clean browser.",
   );
 });
 
@@ -457,26 +457,26 @@ test("finishedStory tells the result and leaves out false claims when there are 
   expect(
     finishedStory({ ...base, paid: 7, lost: 3, paidAmount: 15_400_000 }),
   ).toBe(
-    "7 bugs proven and paid (15.40 USDC). 3 false claims lost their bond. False claims cost the owner nothing.",
+    "7 bugs proven and paid (15.40 USDC). 3 fake reports lost their deposit. Fake reports cost the owner nothing.",
   );
   expect(
     finishedStory({ ...base, paid: 1, lost: 1, paidAmount: 2_140_000 }),
   ).toBe(
-    "1 bug proven and paid (2.14 USDC). 1 false claim lost its bond. False claims cost the owner nothing.",
+    "1 bug proven and paid (2.14 USDC). 1 fake report lost its deposit. Fake reports cost the owner nothing.",
   );
   expect(finishedStory({ ...base, paid: 2, paidAmount: 4_000_000 })).toBe(
     "2 bugs proven and paid (4.00 USDC).",
   );
   // The first result sentence stays, even at 0.
   expect(finishedStory({ ...base, lost: 2 })).toBe(
-    "0 bugs proven and paid (0.00 USDC). 2 false claims lost their bond. False claims cost the owner nothing.",
+    "0 bugs proven and paid (0.00 USDC). 2 fake reports lost their deposit. Fake reports cost the owner nothing.",
   );
   // Repeats and unfunded claims are not part of this line; unchecked claims are.
   expect(finishedStory({ ...base, repeat: 4, unfunded: 1, unchecked: 2 })).toBe(
-    "0 bugs proven and paid (0.00 USDC). 2 could not be checked: their bonds came back.",
+    "0 bugs proven and paid (0.00 USDC). 2 could not be checked: their deposits came back.",
   );
   expect(finishedStory({ ...base, unchecked: 1 })).toBe(
-    "0 bugs proven and paid (0.00 USDC). 1 could not be checked: its bond came back.",
+    "0 bugs proven and paid (0.00 USDC). 1 could not be checked: its deposit came back.",
   );
 });
 
@@ -491,8 +491,8 @@ test("resultStory tells the owner the outcome, leaving out counts of 0", () => {
       paidAmount: 11_000_000,
     }),
   ).toBe(
-    "Your race found 7 bugs. 5 are paid (11.00 USDC). 2 were not paid: the budget ran out. " +
-      "3 false claims cost you nothing: their bonds went into your pool. 4 repeats got their bond back.",
+    "Your hunt found 7 bugs. 5 are paid (11.00 USDC). 2 were not paid: the budget ran out. " +
+      "3 fake reports cost you nothing: their deposits went into your budget. 4 repeats got their deposit back.",
   );
   expect(
     resultStory({
@@ -504,29 +504,29 @@ test("resultStory tells the owner the outcome, leaving out counts of 0", () => {
       paidAmount: 2_000_000,
     }),
   ).toBe(
-    "Your race found 2 bugs. 1 is paid (2.00 USDC). 1 was not paid: the budget ran out. " +
-      "1 false claim cost you nothing: its bond went into your pool. 1 repeat got its bond back.",
+    "Your hunt found 2 bugs. 1 is paid (2.00 USDC). 1 was not paid: the budget ran out. " +
+      "1 fake report cost you nothing: its deposit went into your budget. 1 repeat got its deposit back.",
   );
   expect(resultStory({ ...base, paid: 1, paidAmount: 1_000_000 })).toBe(
-    "Your race found 1 bug. 1 is paid (1.00 USDC).",
+    "Your hunt found 1 bug. 1 is paid (1.00 USDC).",
   );
   expect(resultStory({ ...base, lost: 2 })).toBe(
-    "Your race found 0 bugs. 2 false claims cost you nothing: their bonds went into your pool.",
+    "Your hunt found 0 bugs. 2 fake reports cost you nothing: their deposits went into your budget.",
   );
   expect(resultStory({ ...base, unchecked: 1 })).toBe(
-    "Your race found 0 bugs. 1 could not be checked: its bond came back.",
+    "Your hunt found 0 bugs. 1 could not be checked: its deposit came back.",
   );
   expect(resultStory({ ...base, unchecked: 2 })).toBe(
-    "Your race found 0 bugs. 2 could not be checked: their bonds came back.",
+    "Your hunt found 0 bugs. 2 could not be checked: their deposits came back.",
   );
   // Proven claims that wait for their payment are found, not paid.
   expect(
     resultStory({ ...base, paid: 1, paying: 2, paidAmount: 1_000_000 }),
   ).toBe(
-    "Your race found 3 bugs. 1 is paid (1.00 USDC). 2 payments are on the way.",
+    "Your hunt found 3 bugs. 1 is paid (1.00 USDC). 2 payments are on the way.",
   );
   expect(resultStory({ ...base, paying: 1 })).toBe(
-    "Your race found 1 bug. 1 payment is on the way.",
+    "Your hunt found 1 bug. 1 payment is on the way.",
   );
   // No story before a claim has a result.
   expect(resultStory({ ...base, claims: 3, checking: 3 })).toBeNull();
@@ -574,10 +574,10 @@ test("the stories count with claimGroup and the summary line's money", () => {
   ];
   const counts = lineCounts(claims, ledger);
   expect(resultStory(counts)).toBe(
-    "Your race found 2 bugs. 1 is paid (2.00 USDC). 1 was not paid: the budget ran out. " +
-      "1 false claim cost you nothing: its bond went into your pool. 1 repeat got its bond back.",
+    "Your hunt found 2 bugs. 1 is paid (2.00 USDC). 1 was not paid: the budget ran out. " +
+      "1 fake report cost you nothing: its deposit went into your budget. 1 repeat got its deposit back.",
   );
   expect(finishedStory(counts)).toBe(
-    "1 bug proven and paid (2.00 USDC). 1 false claim lost its bond. False claims cost the owner nothing.",
+    "1 bug proven and paid (2.00 USDC). 1 fake report lost its deposit. Fake reports cost the owner nothing.",
   );
 });

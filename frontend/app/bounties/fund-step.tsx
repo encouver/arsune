@@ -27,7 +27,7 @@ const FUNDING_LABELS: Record<string, string> = {
   deposit_seen: "Deposit seen",
   processing: "Swapping into USDC",
   incomplete_deposit: "Deposit below the minimum",
-  credited: "Credited to the bounty",
+  credited: "Added to your budget",
   refunded: "Refunded",
   failed: "Failed",
   expired: "Expired",
@@ -140,7 +140,7 @@ export function FundStep({
         {bounty.status === "closed" &&
           bounty.closed_reason === "budget_spent" && (
             <p className="bo-text" data-testid="reopen-hint">
-              The budget ran out, so the bounty is closed.{" "}
+              The budget ran out, so the hunt is closed.{" "}
               {bounty.budget_amount < cost
                 ? `Add at least ${usdc(cost - bounty.budget_amount)} USDC to open it again.`
                 : "Any top-up opens it again."}
@@ -307,8 +307,8 @@ function CrossChainOption({
       <h3>From another chain (NEAR Intents 1Click)</h3>
       <p className="bo-muted">
         Pay with any supported asset. 1Click swaps it and delivers exactly{" "}
-        {amount ? usdc(amount) : "—"} USDC to Arsune inside NEAR Intents. The
-        bounty is credited when 1Click reports success.
+        {amount ? usdc(amount) : "—"} USDC to Arsune inside NEAR Intents. Your
+        budget goes up when 1Click reports success.
       </p>
       <form className="bo-form" onSubmit={create}>
         <label className="bo-field">
@@ -422,7 +422,7 @@ function Deposit({
         <Message
           kind="ok"
           testId="deposit-credited"
-          text={`Credited ${usdc(r.delivered_amount)} USDC to the bounty.`}
+          text={`Added ${usdc(r.delivered_amount)} USDC to your budget.`}
         />
       )}
       {r.note && <p className="bo-muted">{r.note}</p>}

@@ -80,9 +80,9 @@ export function racePhase(
 
 export const PHASE_STATUS: Record<RacePhase, string> = {
   locked: "After funding",
-  loading: "Asking the race host…",
-  offline: "Race host offline",
-  other: "Another race runs",
+  loading: "Asking the hunt server…",
+  offline: "Hunt server offline",
+  other: "Another hunt runs",
   ready: "Ready to start",
   running: "Running",
   finished: "Finished",
@@ -139,7 +139,7 @@ export function RaceStep({
             href={`/swarm?bounty=${encodeURIComponent(bounty.id)}`}
             data-testid="board-link"
           >
-            Open the live race →
+            Watch the hunt live →
           </a>
           <button
             type="button"
@@ -147,7 +147,7 @@ export function RaceStep({
             onClick={() => act("stop")}
             disabled={!!busy}
           >
-            {busy === "stop" ? "Stopping…" : "Stop the race"}
+            {busy === "stop" ? "Stopping…" : "Stop the hunt"}
           </button>
         </div>
         <Message kind="error" text={error} testId="race-error" />
@@ -166,12 +166,12 @@ export function RaceStep({
       )}
       {phase === "other" && (
         <p className="bo-msg bo-msg-info" data-testid="host-busy">
-          Another race is running now. You can start this race when it ends.{" "}
+          Another hunt is running now. You can start yours when it ends.{" "}
           <a
             className="bo-link"
             href={`/swarm?bounty=${encodeURIComponent(host?.bounty_id ?? "")}`}
           >
-            Watch that race
+            Watch that hunt
           </a>
         </p>
       )}
@@ -192,8 +192,8 @@ export function RaceStep({
           {busy === "start"
             ? "Starting…"
             : phase === "finished"
-              ? "Start a new race"
-              : "Start the race"}
+              ? "Start a new hunt"
+              : "Start the hunt"}
         </button>
         {host && canStart && (
           <span className="bo-muted" data-testid="race-hint">
@@ -209,7 +209,7 @@ export function RaceStep({
           href={`/swarm?bounty=${encodeURIComponent(bounty.id)}`}
           data-testid="board-link"
         >
-          See the last race →
+          See the last hunt →
         </a>
       )}
     </>
@@ -222,13 +222,13 @@ function Finished({ swarm }: { swarm: SwarmState }) {
     <Message
       kind="error"
       testId="race-finished"
-      text={`The last race did not start: ${swarm.site_check?.reason ?? "Arsune could not load the site."}`}
+      text={`The last hunt did not start: ${swarm.site_check?.reason ?? "Arsune could not load the site."}`}
     />
   ) : (
     <Message
       kind="ok"
       testId="race-finished"
-      text="The last race ended. Its results are at the top of this page."
+      text="The last hunt ended. Its results are at the top of this page."
     />
   );
 }
@@ -260,10 +260,10 @@ function LiveRace({
       <p className="bo-live-head">
         <i className="bo-live-dot" aria-hidden="true" />
         {!swarm
-          ? "Starting the race…"
+          ? "Starting the hunt…"
           : loading
             ? "Arsune is loading your site. Agents start when it loads."
-            : "The race is running."}
+            : "The hunt is running."}
       </p>
       <RaceLine
         claims={claims}
@@ -278,7 +278,7 @@ function LiveRace({
       />
       <ol className="bo-live-stream" data-testid="live-stream">
         {claims.length === 0 && (
-          <li className="sw-empty">No claims yet. The agents are searching.</li>
+          <li className="sw-empty">No reports yet. The agents are searching.</li>
         )}
         {[...claims]
           .reverse()

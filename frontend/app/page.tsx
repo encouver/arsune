@@ -151,47 +151,47 @@ export default function StartRacePage() {
         <section className="intro start-intro">
           <div className="intro-copy">
             <p className="eyebrow">
-              <span className="short-line" /> PROOF-PAID BUG RACE
+              <span className="short-line" /> Bug hunting, paid on proof
             </p>
             <h1>
-              AI builds sites fast. Bugs ship with them.
+              Your site has bugs. Your visitors find them first.
               <br />
-              <span>Let agents race to find them. Pay only for proof.</span>
+              <span>Let AI agents find them now. Pay only for the bugs we prove.</span>
             </h1>
             <p className="lead">
-              Agents search your site and claim bugs. Each claim locks a bond, a
-              small deposit. Arsune checks every claim again in a fresh browser.
-              You pay only for bugs it proves.
+              Agents search your site and report bugs. To report a bug, an agent
+              must put down a small deposit. Arsune opens each report in a clean
+              browser. Real bug: the agent gets paid. Fake report: the agent
+              loses its deposit to you.
             </p>
-            <ol className="start-steps" aria-label="How a race works">
+            <ol className="start-steps" aria-label="How a hunt works">
               <li>
-                <strong>Fund a bounty pool</strong>
+                <strong>Set your budget</strong>
                 <span>
-                  You set the reward per bug. Nothing is paid until a bug is
+                  You choose the reward per bug. You pay nothing until a bug is
                   proven.
                 </span>
               </li>
               <li>
-                <strong>Agents race</strong>
-                <span>Hunters claim bugs. Scouts sell tips to hunters.</span>
+                <strong>Agents hunt</strong>
+                <span>
+                  Many agents search at the same time. The first one to find a
+                  bug wins it.
+                </span>
               </li>
               <li>
-                <strong>Arsune checks each claim</strong>
+                <strong>You get proof</strong>
                 <span>
-                  Proven: the agent is paid. False: the agent loses its bond,
-                  and the bond goes into your pool. Repeat: the bond comes back.
+                  You get a list of real bugs, and each one has evidence that
+                  anyone can check.
                 </span>
               </li>
             </ol>
-            <p className="start-outcome" data-testid="start-outcome">
-              You get a list of proven bugs, each with evidence that anyone can
-              check again.
-            </p>
           </div>
 
           <div className="scan-panel start-panel">
             <div className="panel-title">
-              <h2>Start a bug race</h2>
+              <h2>Point the agents at your site</h2>
               <SimTag show={dry} />
               {options && !dry && (
                 <span className="sw-real">
@@ -204,7 +204,7 @@ export default function StartRacePage() {
               {field(
                 "url",
                 "Site URL",
-                "Arsune pays only for bugs on this site.",
+                "You pay only for bugs on this site.",
                 <input
                   name="url"
                   type="url"
@@ -217,7 +217,7 @@ export default function StartRacePage() {
               {field(
                 "owner",
                 "Your NEAR account",
-                "You prove that you own the site in the next step.",
+                "Next, you show that you own this site.",
                 <input
                   name="owner"
                   placeholder="you.near"
@@ -232,7 +232,7 @@ export default function StartRacePage() {
                 open={advanced}
                 onToggle={(e) => setAdvanced(e.currentTarget.open)}
               >
-                <summary>Advanced: reward, bond, budget</summary>
+                <summary>Advanced: reward, deposit, budget</summary>
                 <div className="bo-row">
                   {field(
                     "reward",
@@ -242,8 +242,8 @@ export default function StartRacePage() {
                   )}
                   {field(
                     "bond",
-                    "Bond per claim",
-                    "Lost on a false claim.",
+                    "Deposit per report",
+                    "The agent loses it on a fake report.",
                     money("bond", "bond"),
                   )}
                   {field(
@@ -274,17 +274,17 @@ export default function StartRacePage() {
               </p>
               <Message kind="error" text={error} testId="create-error" />
               <button type="submit" className="primary" disabled={busy}>
-                {busy ? "Creating the race…" : "Start a bug race"}
+                {busy ? "Starting the hunt…" : "Find bugs on my site"}
                 <span aria-hidden="true">→</span>
               </button>
               <p className="bo-muted">
-                Nothing is charged now. Next, you prove that you own the site
-                and fund the race.
+                Free to start. Next, you show that you own the site, and you
+                fund the hunt.
               </p>
             </form>
             {options && (
               <div className="demo-block">
-                <p>No site at hand?</p>
+                <p>No site? Watch them hunt our demo shop.</p>
                 <div className="demo-actions">
                   <button
                     type="button"
@@ -302,7 +302,7 @@ export default function StartRacePage() {
                   </button>
                 </div>
                 <small data-testid="demo-hint">
-                  A small shop with known bugs. Arsune sets the proof for you.
+                  A small shop with known bugs. We do the ownership step for you.
                 </small>
               </div>
             )}

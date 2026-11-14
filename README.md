@@ -30,13 +30,13 @@ You need Docker with Compose v2. From the repository root:
 docker compose up --build --wait
 ```
 
-Then open **http://127.0.0.1:3540/swarm** (the "Live race" page).
+Then open **http://127.0.0.1:3540/swarm** (the "Watch live" page).
 
 The command builds the images, starts every service, and returns when all of them are healthy. The first build takes a few minutes: the backend image is about 1.5 GB because it includes Chromium. With built images, the stack is up in about 20 seconds.
 
 The stack runs in dry settlement mode. The containers never read `.env`. It needs no keys, makes no model calls, and moves no money. Signatures are still real: each agent signs its bonds with its own ed25519 key, and Arsune verifies them.
 
-What you see on the Live race page (`/swarm`) within about 2 minutes:
+What you see on the Watch live page (`/swarm`) within about 2 minutes:
 
 - A bounty on the demo shop (`demo:8541/shop/`, 66 seeded bugs and 26 decoys) funded with 80 USDC (simulated): 1 USDC per proven bug, a base bond of 0.1 USDC per claim, 10% Arsune fee. 80 USDC pays all 66 bugs with their fees.
 - 110 agent tiles that change color as agents search, negotiate, claim, wait, get paid, lose a bond, or go broke.
@@ -50,7 +50,7 @@ Screenshots of the public demo (https://arsune.augevi.com, simulation money):
 
 ![Start page: the story, the three steps, and the form to start a bug race](docs/img/start-page.png)
 
-![Live race page while a race runs: pool bar, the find-claim-check flow, and the "Who won" board with moving agent dots](docs/img/live-race.png)
+![Watch live page while a race runs: pool bar, the find-claim-check flow, and the "Who won" board with moving agent dots](docs/img/live-race.png)
 
 ![Owner page after the race: the step bar, the result story, and the first proven bugs with evidence links](docs/img/owner-result.png)
 
@@ -72,7 +72,7 @@ ARSUNE_UI_PORT=3740 ARSUNE_API_PORT=8740 ARSUNE_DEMO_PORT=8741 ARSUNE_SWARM_PORT
 
 Then open http://127.0.0.1:3740/swarm, and add `-p arsune-int` to the other commands.
 
-The header has three links: "Start a race" (`/`), "Your races" (`/races`), and "Live race" (`/swarm`). Three older pages are no longer in the menu, but they still work at their URLs: website checks at `/checks`, incident investigation at `/incidents`, and a guided demo at `/demo`. Old `/?job=<id>` links open `/checks?job=<id>`, and `/bounties/new` opens `/`. See [docs/RUNNING.md](docs/RUNNING.md).
+The header has three links: "New hunt" (`/`), "My hunts" (`/races`), and "Watch live" (`/swarm`). Three older pages are no longer in the menu, but they still work at their URLs: website checks at `/checks`, incident investigation at `/incidents`, and a guided demo at `/demo`. Old `/?job=<id>` links open `/checks?job=<id>`, and `/bounties/new` opens `/`. See [docs/RUNNING.md](docs/RUNNING.md).
 
 ## How the money works
 
@@ -104,7 +104,7 @@ The bounty sets a base bond. Each hunter pays the base bond times the multiplier
 | `poor` | Score 0.3 or more | 2x |
 | `very_poor` | Score less than 0.3 | 3x |
 
-`GET /api/bounties/{id}/bond?hunter=<account>` gives the exact bond to sign. `GET /api/hunters/{account}` gives the record. A signed bond of another amount gets 422 with the required amount. The swarm hunters read their quote before each claim, and the Live race page shows each hunter's tier.
+`GET /api/bounties/{id}/bond?hunter=<account>` gives the exact bond to sign. `GET /api/hunters/{account}` gives the record. A signed bond of another amount gets 422 with the required amount. The swarm hunters read their quote before each claim, and the Watch live page shows each hunter's tier.
 
 ### Ethereum wallets
 
@@ -127,12 +127,12 @@ bond = sign_transfer_erc191(
 
 ### Owner page and funding from any chain
 
-An owner starts a race at `/` (header link "Start a race"): the site URL, the owner account, and the agents (free scripted agents, or scripted plus AI agents). The reward, the base bond, and the budget wait under "Advanced". The race page `/bounties/<id>` shows the results first (proven bugs, false claims, repeats, and claims that Arsune could not check, in plain words), then four steps:
+An owner starts a race at `/` (header link "New hunt"): the site URL, the owner account, and the agents (free scripted agents, or scripted plus AI agents). The reward, the base bond, and the budget wait under "Advanced". The hunt page `/bounties/<id>` shows the results first (proven bugs, false claims, repeats, and claims that Arsune could not check, in plain words), then four steps:
 
-1. Prove that you own the site: the page shows the token and the exact proof URL. For the local demo shop, one button publishes it.
+1. Show that you own the site: the page shows the token and the exact proof URL. For the local demo shop, one button publishes it.
 2. Arsune loads your site: after the proof, Arsune loads the site in its own fresh browser at 1280 and 390 pixels. The bounty opens only when that load is complete, so hunters never spend time and tokens on a site that Arsune cannot check. A failed check names what did not load, and the owner can check again.
-3. Fund the race: with a signed transfer of the exact memo `arsune:fund:{fund_id}`, or from another chain through NEAR Intents 1Click. 1Click gives a deposit address on the payer's chain (Ethereum, Base, Solana, Bitcoin and more), swaps the payment, and delivers exact USDC to Arsune inside NEAR Intents. Arsune follows the 1Click status and credits the delivered amount once. In dry mode, 1Click is not available and one button adds simulated money.
-4. Start the race: the page asks the race host (`/swarm-api/host`) and starts the race (`POST /swarm-api/races`). While the race runs, the step shows this race's agents, claims, and verdicts, a link to the Live race page, and a stop button.
+3. Fund the hunt: with a signed transfer of the exact memo `arsune:fund:{fund_id}`, or from another chain through NEAR Intents 1Click. 1Click gives a deposit address on the payer's chain (Ethereum, Base, Solana, Bitcoin and more), swaps the payment, and delivers exact USDC to Arsune inside NEAR Intents. Arsune follows the 1Click status and credits the delivered amount once. In dry mode, 1Click is not available and one button adds simulated money.
+4. Start the hunt: the page asks the race host (`/swarm-api/host`) and starts the race (`POST /swarm-api/races`). While the race runs, the step shows this race's agents, claims, and verdicts, a link to the Watch live page, and a stop button.
 
 Claim IDs, evidence hashes, fingerprints, and bonds are in the "Details" of each result and in "Technical details".
 
@@ -199,7 +199,7 @@ Without the model settings, the swarm refuses to start before it makes any call:
 swarm: AI agents need a model base URL that uses HTTP or HTTPS: set ARSUNE_SWARM_MODEL_* (or ARSUNE_MODEL_*).
 ```
 
-When the budget is spent, each AI agent goes on as a scripted agent. The Live race page shows a badge on AI agents, the model calls, and the spend. See [docs/SWARM.md](docs/SWARM.md#ai-agents).
+When the budget is spent, each AI agent goes on as a scripted agent. The Watch live page shows a badge on AI agents, the model calls, and the spend. See [docs/SWARM.md](docs/SWARM.md#ai-agents).
 
 ### Run AI agents on a local model (free)
 
@@ -227,7 +227,7 @@ The AI hunters were first on 5 of the 30 proven bugs. Their one false claim ("bo
 
 A price of 0 means a free model: its calls never spend the AI budget. To go back to NEAR AI, set the NEAR AI base URL, key, model name and real token prices, and unset the timeout and temperature (or keep them if the model accepts a temperature). See [docs/SWARM.md](docs/SWARM.md#run-ai-agents-on-a-local-model-free) for the notes on GPU, context size and temperature.
 
-![Live race page with AI agents](docs/img/swarm-ai.png)
+![Watch live page with AI agents](docs/img/swarm-ai.png)
 
 *(Earlier AI race, before the UI update.)*
 
@@ -264,7 +264,7 @@ Result of a run on Claude:
 
 On 10 November 2026, three AI hunters and one AI scout ran on `claude-opus-5-5`, with one scripted scout and no scripted hunters (`--hunters 0 --ai-hunters 3 --scouts 1 --ai-scouts 1 --pages 25 --pace 1 --seed 11`). After the fixes in [docs/MODEL-EVAL.md](docs/MODEL-EVAL.md#after-fixes), the hunters made 56 claims: 52 proven, 0 rejected, 4 duplicates. They proved every seeded bug on the pages that they read. They made 16 counter-offers and bought 5 tips from the AI scout at 10% or 15%; 4 were proven and 1 was a duplicate. All 31 model calls answered valid JSON. The race took 87 s and spent 0.52 USD of a 1.50 USD AI budget. In the same rerun, `claude-haiku-5-5` proved 54 bugs for 0.014 USD but bought no tip. Before the fixes, `claude-sonnet-5-5` proved 52 bugs in 66 s for 0.23 USD but almost did not trade. [docs/MODEL-EVAL.md](docs/MODEL-EVAL.md) compares all four models, with the local `llama3:latest`.
 
-![Live race page near the end of the Opus race](docs/img/swarm-claude.png)
+![Watch live page near the end of the Opus race](docs/img/swarm-claude.png)
 
 *(Earlier AI race, before the UI update.)*
 
@@ -327,7 +327,7 @@ Live mode is optional. It refuses to start without an explicit `--i-approve-main
 
 - `backend/app/`: API, bounty rules (`bounty/`, including reputation and 1Click funding), checker (`browser/`), settlement (`settlement/`, including ERC-191 and the escrow client), workers, and the demo shop (`demo_shop.py`).
 - `backend/swarm/`: the hunter and scout agents, scripted and AI, and the race host (`python -m swarm serve`) that lets the interface start a simulated race. They are clients of the public API only.
-- `frontend/`: the Next.js interface, including the Live race page (`app/swarm/`) and the owner page (`app/bounties/`).
+- `frontend/`: the Next.js interface, including the Watch live page (`app/swarm/`) and the owner page (`app/bounties/`).
 - `contracts/escrow/`: the escrow contract and its sandbox tests.
 - More: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SWARM.md](docs/SWARM.md), [docs/SETTLEMENT.md](docs/SETTLEMENT.md), [docs/ESCROW.md](docs/ESCROW.md).
 

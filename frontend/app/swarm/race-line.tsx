@@ -135,7 +135,7 @@ export function PoolBar({ pool }: { pool: Pool }): JSX.Element | null {
   if (pool.fraction === null) return null;
   return (
     <div className="rv-pool" data-testid="pool-bar">
-      <span className="rv-pool-name">Bounty pool</span>
+      <span className="rv-pool-name">Budget</span>
       <span className="rv-pool-bar" aria-hidden="true">
         <i style={{ width: `${pool.fraction * 100}%` }} />
       </span>
@@ -242,7 +242,7 @@ export default function RaceLine({
     <section
       className="rv-line"
       data-testid="race-line"
-      aria-label="Race summary"
+      aria-label="Hunt summary"
     >
       <div className="rv-stage" aria-hidden="true">
         <div className="rv-track">
@@ -266,14 +266,14 @@ export default function RaceLine({
               )}
             </span>
           </Step>
-          <Step n={2} name="Claim">
+          <Step n={2} name="Report">
             <span>
-              <span data-testid="line-claims">{counts.claims}</span> claims ·
-              bond locked
+              <span data-testid="line-claims">{counts.claims}</span> reports ·
+              deposit paid
             </span>
           </Step>
           <Step n={3} name="Check">
-            <span>New? True? Fresh browser</span>
+            <span>New? Real? Clean browser</span>
             {counts.checking > 0 && (
               <span className="rv-checking" data-testid="line-checking">
                 {counts.checking} being checked
@@ -292,16 +292,16 @@ export default function RaceLine({
           />
           <ResultRow
             kind="lost"
-            name="Bond lost"
+            name="Deposit lost"
             count={counts.lost}
-            note="not true"
+            note="fake"
             testId="line-lost"
           />
           <ResultRow
             kind="repeat"
             name="Repeat"
             count={counts.repeat}
-            note="bond back"
+            note="deposit back"
             testId="line-repeat"
           />
         </ul>
@@ -330,16 +330,16 @@ export default function RaceLine({
       </div>
       <ul className="rv-sr">
         <li>Step 1, Find: {finding}.</li>
-        <li>Step 2, Claim: {counts.claims} claims, bond locked.</li>
+        <li>Step 2, Report: {counts.claims} reports, deposit paid.</li>
         <li>
-          Step 3, Check: new, true, in a fresh browser. {counts.checking} being
+          Step 3, Check: new, real, in a clean browser. {counts.checking} being
           checked.
         </li>
         <li>
           Paid: {counts.paid}, {usdc(counts.paidAmount)} USDC paid out.
         </li>
-        <li>Bond lost: {counts.lost}, not true.</li>
-        <li>Repeat: {counts.repeat}, bond back.</li>
+        <li>Deposit lost: {counts.lost}, fake.</li>
+        <li>Repeat: {counts.repeat}, deposit back.</li>
         {rare && <li>{rare}.</li>}
       </ul>
       <div className="rv-latest">
@@ -356,7 +356,7 @@ export default function RaceLine({
           )}
         </p>
         <a className="rv-see-all" href={seeAllHref} data-testid="line-see-all">
-          See all {counts.claims} claims{" "}
+          See all {counts.claims} reports{" "}
           {seeAllHref.startsWith("#") ? "↓" : "→"}
         </a>
       </div>

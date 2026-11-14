@@ -63,20 +63,20 @@ Most agent judges score "the task is done". Arsune pays only for the first bug i
 
 ## 4. Video script (about 80 seconds)
 
-Use the demo stack (`docker compose up --build --wait`). Record with the pages "Start a race", "Your races", and "Live race".
+Use the demo stack (`docker compose up --build --wait`). Record with the pages "New hunt", "My hunts", and "Watch live".
 
 | Time | Shot | Voice-over |
 | --- | --- | --- |
 | 0:00-0:12 | Start page (`/`): the headline and the three steps. | "AI builds sites fast. Bugs ship with them. Let agents race to find them. Pay only for proof." |
 | 0:12-0:25 | Click "Try the demo shop". Fill the owner account. Click start. | "I start a race on the demo shop. Agents will search it. Each claim locks a bond, a small deposit." |
-| 0:25-0:50 | "Live race" page (`/swarm`): agent tiles change color, dots move. Show the story line. | "100 hunters and 10 scouts race. Arsune checks each claim in a fresh browser. No AI model decides." |
+| 0:25-0:50 | "Watch live" page (`/swarm`): agent tiles change color, dots move. Show the story line. | "100 hunters and 10 scouts race. Arsune checks each claim in a fresh browser. No AI model decides." |
 | 0:50-0:62 | Same page: "Who won" and the totals. | "Proven bugs are paid in USDC. False claims lose their bond. The owner pays nothing for them." |
-| 0:62-0:72 | "Your races" (`/races`), then the race page: the result story ("Your race found ... bugs"). | "The owner sees a plain result: bugs found, bugs paid, and false claims that cost nothing." |
+| 0:62-0:72 | "My hunts" (`/races`), then the hunt page: the result story ("Your hunt found ... bugs"). | "The owner sees a plain result: bugs found, bugs paid, and false claims that cost nothing." |
 | 0:72-0:82 | Click an evidence link on a proven claim. Show the hash. | "Every ruling has public evidence. Anyone can check it again." |
 | 0:82-0:88 | End card: repo URL, `@NEARProtocol`. | "Arsune. Pay only for proof." |
 
 Notes:
-- The "Live race" and result story lines come from the UI spec ([simplify-ui](superpowers/specs/2026-11-12-simplify-ui.md)). TODO: check the final wording on the running stack before recording.
+- The "Watch live" and result story lines come from the UI spec ([simplify-ui](superpowers/specs/2026-11-12-simplify-ui.md)). TODO: check the final wording on the running stack before recording.
 - Say "simulation" once. The demo moves no money.
 - TODO: record the video and add its URL.
 
@@ -84,7 +84,7 @@ Notes:
 
 ### Live demo
 
-Open https://arsune.augevi.com, select Start a race, then "Try the demo shop" and "Start a bug race". Set the proof with the demo button, add simulated money, and select "Start the race". Then open "Live race". The public demo uses simulation money (no real money moves), 15 agents per race, one race at a time, and no AI agents.
+Open https://arsune.augevi.com, select New hunt, then "Try the demo shop" and "Find bugs on my site". Set the proof with the demo button, add simulated money, and select "Start the hunt". Then open "Watch live". The public demo uses simulation money (no real money moves), 15 agents per race, one race at a time, and no AI agents.
 
 ### Run it with no keys and no money
 
@@ -100,8 +100,8 @@ The race starts by itself and ends in about 2 minutes. To start a new demo race,
 
 ### What to look at
 
-1. Start page (`/`): the story and the three steps. Header links: "Start a race", "Your races", "Live race".
-2. Live race page (`/swarm`): agent tiles, the claims list with each verdict and reason, "Who won", and "More details".
+1. Start page (`/`): the story and the three steps. Header links: "New hunt", "My hunts", "Watch live".
+2. Watch live page (`/swarm`): agent tiles, the claims list with each verdict and reason, "Who won", and "More details".
 3. Totals: the cost of false claims to the owner is always 0.
 4. Last full run (9 Nov 2026): 226 claims, 66 of 66 bugs proven and paid once, 0 decoys paid, 39 false claims rejected, 81 duplicates, 40 unverified. Numbers change a little from run to run.
 5. Evidence: open `/api/claims/<claim_id>/evidence` on port 8540. Its SHA-256 equals the claim's `evidence_hash`. Run `docker compose exec api python -m app.verify http://127.0.0.1:8540 <claim_id>` to check the ruling again in a fresh browser.

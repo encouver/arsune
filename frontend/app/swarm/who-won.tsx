@@ -24,13 +24,13 @@ export type WhoWonProps = {
 
 const ROWS: [Result, string, string][] = [
   ["earned", "Earned", "proved bugs, got paid"],
-  ["lost", "Lost money", "false claims cost more than it earned"],
-  ["broke", "Went broke", "lost all bond money, stopped"],
+  ["lost", "Lost money", "fake reports cost more than it earned"],
+  ["broke", "Went broke", "lost all its deposit money, stopped"],
   ["none", "Nothing yet", "no proven bug so far"],
 ];
 
 function rowTotal(result: Result, agents: Agent[]): string {
-  if (result === "none") return "bonds back";
+  if (result === "none") return "deposits back";
   return `${signedUsdc(agents.reduce((sum, a) => sum + net(a), 0))} USDC`;
 }
 

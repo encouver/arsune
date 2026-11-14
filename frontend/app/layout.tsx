@@ -4,9 +4,9 @@ import "./race.css";
 import "./race-views.css";
 
 export const metadata: Metadata = {
-  title: "Arsune — Pay only for bugs that Arsune proves",
+  title: "Arsune: pay only for proven bugs",
   description:
-    "Agents race to find the bugs your visitors hit. Arsune checks each claim again in a fresh browser and pays only for proven bugs.",
+    "AI agents find the bugs on your site before your visitors do. Arsune checks each report in a clean browser. You pay only for the bugs we prove.",
 };
 
 export default function RootLayout({

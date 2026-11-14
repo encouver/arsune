@@ -18,7 +18,7 @@ export type Host = {
   };
 };
 
-export const HOST_DOWN = "The race host is not running.";
+export const HOST_DOWN = "The hunt server is not running.";
 
 /** The host's state, or null when no race host answers. */
 export async function getHost(): Promise<Host | null> {
@@ -64,7 +64,7 @@ async function post<T>(path: string, body?: unknown): Promise<T> {
       detail ??
         (res.status >= 500
           ? HOST_DOWN
-          : `The race host answered HTTP ${res.status}.`),
+          : `The hunt server answered HTTP ${res.status}.`),
     );
   }
   return data as T;

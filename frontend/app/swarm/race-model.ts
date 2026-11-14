@@ -85,8 +85,8 @@ export function rareText(counts: LineCounts): string {
   if (counts.unchecked)
     bondBack.push(`${counts.unchecked} could not be checked`);
   if (counts.unfunded)
-    bondBack.push(`${counts.unfunded} proven, but the pool was empty`);
-  if (bondBack.length) parts.push(...bondBack, "bond back");
+    bondBack.push(`${counts.unfunded} proven, but the budget ran out`);
+  if (bondBack.length) parts.push(...bondBack, "deposit back");
   return parts.join(" · ");
 }
 
@@ -175,12 +175,12 @@ export function latestSentence(
   if (stage === "paid")
     text = paidSentence(c, ledger, nameOf, `${who} proved ${title}${on}`);
   else if (stage === "lost")
-    text = `${who} claimed ${title}${on} → it was not true, bond lost`;
+    text = `${who} reported ${title}${on} → it was fake, deposit lost`;
   else if (stage === "repeat")
-    text = `${who} sent a bug that was already proven → bond back`;
+    text = `${who} sent a bug that was already proven → deposit back`;
   else if (c.status === "unfunded")
-    text = `${who} proved ${title}, but the pool was empty → bond back`;
-  else text = `${who}: Arsune could not check ${title} → bond back`;
+    text = `${who} proved ${title}, but the budget ran out → deposit back`;
+  else text = `${who}: Arsune could not check ${title} → deposit back`;
   return { claimId: c.id, text };
 }
 
@@ -191,11 +191,11 @@ function counted(n: number, one: string, many: string): string {
 
 /** The running race in one line. */
 export function runningStory(agents: number, site: string): string {
-  return `${counted(agents, "agent searches", "agents search")} ${site}. Each claim locks a bond. Arsune checks it in a fresh browser.`;
+  return `${counted(agents, "agent searches", "agents search")} ${site}. Each report needs a deposit. Arsune checks it in a clean browser.`;
 }
 
 function uncheckedSentence(n: number): string {
-  return `${n} could not be checked: ${n === 1 ? "its bond" : "their bonds"} came back.`;
+  return `${n} could not be checked: ${n === 1 ? "its deposit" : "their deposits"} came back.`;
 }
 
 /** The finished race as sentences. The false-claim sentences are left out when none lost a bond. */
@@ -205,8 +205,8 @@ export function finishedStory(counts: LineCounts): string {
   ];
   if (counts.lost)
     parts.push(
-      `${counted(counts.lost, "false claim lost its", "false claims lost their")} bond.`,
-      "False claims cost the owner nothing.",
+      `${counted(counts.lost, "fake report lost its", "fake reports lost their")} deposit.`,
+      "Fake reports cost the owner nothing.",
     );
   if (counts.unchecked) parts.push(uncheckedSentence(counts.unchecked));
   return parts.join(" ");
@@ -217,7 +217,7 @@ export function resultStory(counts: LineCounts): string | null {
   const proven = counts.paid + counts.paying + counts.unfunded;
   if (proven + counts.lost + counts.repeat + counts.unchecked === 0)
     return null;
-  const parts = [`Your race found ${counted(proven, "bug", "bugs")}.`];
+  const parts = [`Your hunt found ${counted(proven, "bug", "bugs")}.`];
   if (counts.paid)
     parts.push(
       `${counted(counts.paid, "is", "are")} paid (${usdc(counts.paidAmount)} USDC).`,
@@ -233,11 +233,11 @@ export function resultStory(counts: LineCounts): string | null {
     );
   if (counts.lost)
     parts.push(
-      `${counted(counts.lost, "false claim cost you nothing: its bond", "false claims cost you nothing: their bonds")} went into your pool.`,
+      `${counted(counts.lost, "fake report cost you nothing: its deposit", "fake reports cost you nothing: their deposits")} went into your budget.`,
     );
   if (counts.repeat)
     parts.push(
-      `${counted(counts.repeat, "repeat got its", "repeats got their")} bond back.`,
+      `${counted(counts.repeat, "repeat got its", "repeats got their")} deposit back.`,
     );
   if (counts.unchecked) parts.push(uncheckedSentence(counts.unchecked));
   return parts.join(" ");

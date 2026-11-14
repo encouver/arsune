@@ -24,10 +24,10 @@ import { CopyButton, ShowHide } from "./ui";
 
 const LEDGER_LABELS: Record<string, string> = {
   fund: "Money added",
-  bond_in: "Bond posted",
+  bond_in: "Deposit paid",
   reward_out: "Reward to agent",
-  bond_refund: "Bond returned",
-  bond_forfeit: "Bond lost",
+  bond_refund: "Deposit returned",
+  bond_forfeit: "Deposit lost",
   fee: "Arsune fee",
   scout_share: "Scout share",
   withdraw: "Withdrawn",
@@ -57,7 +57,7 @@ export function Results({ bounty }: { bounty: OwnerBounty }) {
       <div className="sw-panel-top">
         <h2>Results</h2>
         <span data-testid="results-summary">
-          {claims.length} {claims.length === 1 ? "claim" : "claims"} ·{" "}
+          {claims.length} {claims.length === 1 ? "report" : "reports"} ·{" "}
           {countText(counts)}
         </span>
       </div>
@@ -151,15 +151,15 @@ function ClaimResult({
         )}
         {c.status === "unfunded" && (
           <p className="bo-muted">
-            Not paid: the budget ran out. The agent got its bond back.
+            Not paid: the budget ran out. The agent got its deposit back.
           </p>
         )}
         <details className="bo-details" data-testid="claim-details">
           <summary>Details</summary>
           <dl className="bo-facts">
-            <Fact label="Claim ID" value={c.id} />
+            <Fact label="Report ID" value={c.id} />
             <Fact label="Agent account" value={c.hunter_account} />
-            <Fact label="Bond" value={`${usdc(bond)} USDC`} />
+            <Fact label="Deposit" value={`${usdc(bond)} USDC`} />
             {c.settlement_note && (
               <Fact label="Settlement" value={c.settlement_note} />
             )}
@@ -216,7 +216,7 @@ export function TechnicalDetails({ bounty }: { bounty: OwnerBounty }) {
     <details className="sw-panel bo-tech" data-testid="technical-details">
       <summary>Technical details</summary>
       <dl className="bo-facts">
-        <Fact label="Bounty ID" value={bounty.id} />
+        <Fact label="Hunt ID" value={bounty.id} />
         <Fact label="Site" value={bounty.url} />
         <Fact label="Owner" value={bounty.owner_account} />
         <Fact
@@ -224,7 +224,7 @@ export function TechnicalDetails({ bounty }: { bounty: OwnerBounty }) {
           value={`${usdc(bounty.reward_amount)} USDC`}
         />
         <Fact
-          label="Bond per claim"
+          label="Deposit per report"
           value={`${usdc(bounty.bond_amount)} USDC`}
         />
         <Fact

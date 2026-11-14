@@ -310,7 +310,7 @@ test("dry mode labels money as simulation and has no NearBlocks links", async ({
     "hunter-01 · crawl forms and check mobile layout · +2.125 USDC",
   );
   await expect(
-    page.getByRole("link", { name: "Live race", exact: true }),
+    page.getByRole("link", { name: "Watch live", exact: true }),
   ).toHaveAttribute("aria-current", "page");
 });
 
@@ -336,7 +336,7 @@ test("the line shows rare results in one small line", async ({ page }) => {
   await page.goto("/swarm");
   await expect(page.getByTestId("line-claims")).toHaveText("5");
   await expect(page.getByTestId("line-rare")).toHaveText(
-    "1 could not be checked · 1 proven, but the pool was empty · bond back",
+    "1 could not be checked · 1 proven, but the budget ran out · deposit back",
   );
   await expect(page.getByTestId("line-paid")).toHaveText("1");
   await expect(page.getByTestId("line-lost")).toHaveText("1");
@@ -377,15 +377,15 @@ test("Latest names the newest decided claim", async ({ page }) => {
   );
   await expect(latest).toHaveAttribute("aria-live", "polite");
   const all = page.getByTestId("line-see-all");
-  await expect(all).toHaveText("See all 3 claims ↓");
+  await expect(all).toHaveText("See all 3 reports ↓");
   await expect(all).toHaveAttribute("href", "#claims");
-  await expect(page.locator("#claims h2")).toHaveText("Claims");
+  await expect(page.locator("#claims h2")).toHaveText("Reports");
 });
 
 test("the header says the race state in few words", async ({ page }) => {
   await mock(page);
   await page.goto("/swarm");
-  await expect(page.getByText("Race running · 12 agents")).toBeVisible();
+  await expect(page.getByText("Hunt running · 12 agents")).toBeVisible();
   await expect(page.getByText("Live swarm board")).toHaveCount(0);
   await expect(page.locator("h1")).toHaveText("shop.example");
 });
@@ -484,7 +484,7 @@ test("no dots move when the race is finished", async ({ page }) => {
       ++polls <= 1 ? {} : { claims: [newClaim(1), newClaim(2), ...old] },
   });
   await page.goto("/swarm");
-  await expect(page.getByText("Race finished", { exact: true })).toBeVisible();
+  await expect(page.getByText("Hunt finished", { exact: true })).toBeVisible();
   await expect(page.getByTestId("line-claims")).toHaveText("4");
   const at = polls;
   await expect.poll(() => polls).toBeGreaterThan(at + 1);
@@ -562,7 +562,7 @@ test("claim rows use plain titles and keep the evidence hash in a tooltip", asyn
   const rejected = page.locator(
     '[data-testid="claim-row"][data-status="rejected"]',
   );
-  await expect(rejected).toContainText("False claim");
+  await expect(rejected).toContainText("Fake report");
   await expect(rejected.getByTestId("claim-evidence")).toHaveCount(0);
 });
 
@@ -622,7 +622,7 @@ test("agents show by name; a 64-hex account stays in the tooltip", async ({
   // A hex account as the agent filter: the bar shows the name only.
   await mark.click();
   await expect(page.getByTestId("agent-filter")).toHaveText(
-    "Claims by hunter-048 · Show all",
+    "Reports by hunter-048 · Show all",
   );
   await expect(page.getByTestId("claim-row")).toHaveCount(1);
 });
@@ -634,20 +634,20 @@ test("a board for one bounty says so when the race runs for another", async ({
   await page.goto("/swarm?bounty=b1");
   const banner = page.getByTestId("other-race-banner");
   await expect(banner).toContainText(
-    "The race that runs now is for another bounty.",
+    "Another hunt is running now.",
   );
   await expect(
-    banner.getByRole("link", { name: "Watch the race that runs now" }),
+    banner.getByRole("link", { name: "Watch the live hunt" }),
   ).toHaveAttribute("href", "/swarm?bounty=other");
   await expect(
-    banner.getByRole("link", { name: "Start a race for this bounty" }),
+    banner.getByRole("link", { name: "Start a hunt for this site" }),
   ).toHaveAttribute("href", "/bounties/b1");
   // Agents come from this bounty's records, not from the other race.
   await expect(page.getByTestId("agent-mark")).toHaveCount(2);
   await expect(page.getByTestId("race-dot")).toHaveCount(0);
   await openDetails(page);
   await expect(page.getByTestId("tips")).toContainText("No scout tips yet.");
-  await expect(page.getByText("No race for this bounty now")).toBeVisible();
+  await expect(page.getByText("No hunt for this site now")).toBeVisible();
 });
 
 test("an idle race host before the first race shows no race", async ({
@@ -664,7 +664,7 @@ test("an idle race host before the first race shows no race", async ({
     },
   });
   await page.goto("/swarm");
-  await expect(page.getByText("No race has run yet").first()).toBeVisible();
+  await expect(page.getByText("No hunt has run yet").first()).toBeVisible();
   // Agents come from the newest bounty's records; no rings without a race.
   await expect(page.getByTestId("agent-mark")).toHaveCount(2);
   await expect(page.locator("[data-working]")).toHaveCount(0);
@@ -803,7 +803,7 @@ test("Who won groups agents by result, most money first", async ({
     bounty: { hunters: [] },
   });
   await page.goto("/swarm");
-  await expect(page.getByText("Race finished", { exact: true })).toBeVisible();
+  await expect(page.getByText("Hunt finished", { exact: true })).toBeVisible();
   const marks = page.getByTestId("agent-mark");
   await expect(marks).toHaveCount(7);
   const row = (r: string) =>
@@ -827,7 +827,7 @@ test("Who won groups agents by result, most money first", async ({
     ["earned", "3", "+8.20 USDC"],
     ["lost", "2", "−0.40 USDC"],
     ["broke", "1", "−0.90 USDC"],
-    ["none", "1", "bonds back"],
+    ["none", "1", "deposits back"],
   ];
   for (const [r, count, total] of totals) {
     await expect(row(r).getByTestId("who-count")).toHaveText(count);
@@ -836,10 +836,10 @@ test("Who won groups agents by result, most money first", async ({
   await expect(row("earned")).toContainText("Earned");
   await expect(row("earned")).toContainText("proved bugs, got paid");
   await expect(row("lost")).toContainText(
-    "Lost money" + "false claims cost more than it earned",
+    "Lost money" + "fake reports cost more than it earned",
   );
   await expect(row("broke")).toContainText(
-    "Went broke" + "lost all bond money, stopped",
+    "Went broke" + "lost all its deposit money, stopped",
   );
   await expect(row("none")).toContainText(
     "Nothing yet" + "no proven bug so far",
@@ -1030,11 +1030,11 @@ test("a click on a mark filters the claim list", async ({ page }) => {
     "aria-pressed",
     "true",
   );
-  await expect(bar).toHaveText("Claims by hunter-01 · Show all");
+  await expect(bar).toHaveText("Reports by hunter-01 · Show all");
   await expect(rows).toHaveCount(2);
   for (const r of await rows.all()) await expect(r).toContainText("hunter-01");
   await expect(page.getByTestId("filter-all")).toHaveText("All (2)");
-  await expect(page.getByTestId("filter-rejected")).toHaveText("False (1)");
+  await expect(page.getByTestId("filter-rejected")).toHaveText("Fake (1)");
 
   // The chip and the agent filter both apply, and they stay across polls.
   await page.getByTestId("filter-rejected").click();
@@ -1052,7 +1052,7 @@ test("a click on a mark filters the claim list", async ({ page }) => {
 
   // A scout mark shows the claims that the scout sourced.
   await markOf(page, "scout-01").click();
-  await expect(bar).toHaveText("Claims by scout-01 · Show all");
+  await expect(bar).toHaveText("Reports by scout-01 · Show all");
   await expect(rows).toHaveCount(2);
   await expect(
     page.locator('[data-testid="claim-row"][data-status="duplicate"]'),
@@ -1088,10 +1088,10 @@ test("the agent filter survives the fallback to Arsune's records", async ({
 
   // An agent with no claims.
   await markOf(page, "hunter-005").click();
-  await expect(bar).toHaveText("Claims by hunter-005 · Show all");
+  await expect(bar).toHaveText("Reports by hunter-005 · Show all");
   await expect(rows).toHaveCount(0);
   await expect(page.getByTestId("claim-stream")).toContainText(
-    "No claims match.",
+    "No reports match.",
   );
 
   await markOf(page, "hunter-001").click();
@@ -1101,9 +1101,9 @@ test("the agent filter survives the fallback to Arsune's records", async ({
   // The page keeps the last good race state while the host does not answer.
   phase = "down";
   await expect(page.getByTestId("error-banner")).toContainText(
-    "Live race data is not answering.",
+    "Live hunt data is not answering.",
   );
-  await expect(bar).toHaveText("Claims by hunter-001 · Show all");
+  await expect(bar).toHaveText("Reports by hunter-001 · Show all");
   await expect(rows).toHaveCount(1);
 
   phase = "idle";
@@ -1112,7 +1112,7 @@ test("the agent filter survives the fallback to Arsune's records", async ({
     "aria-pressed",
     "true",
   );
-  await expect(bar).toHaveText("Claims by hunter-001 · Show all");
+  await expect(bar).toHaveText("Reports by hunter-001 · Show all");
   await expect(rows).toHaveCount(1);
   await expect(rows.first()).toContainText("hunter1.testnet");
 });
@@ -1166,13 +1166,13 @@ test("More details is closed and keeps payments, scout tips and activity", async
     "Arsune fees0.125 USDC",
   );
   await expect(page.getByTestId("pay-forfeited")).toHaveText(
-    "Bonds forfeited0.10 USDC",
+    "Deposits lost0.10 USDC",
   );
   await expect(page.getByTestId("pay-scouts")).toHaveText(
     "Paid to scouts0.375 USDC",
   );
   await expect(page.getByTestId("pay-false-cost")).toHaveText(
-    "Cost of false claims to you0.00 USDC",
+    "Cost of fake reports to you0.00 USDC",
   );
 });
 
@@ -1191,7 +1191,7 @@ test("claim stream filter shows only the chosen status", async ({ page }) => {
   await page.getByTestId("filter-duplicate").click();
   await expect(rows).toHaveCount(0);
   await expect(page.getByTestId("claim-stream")).toContainText(
-    "No claims match",
+    "No reports match",
   );
   await page.getByTestId("filter-all").click();
   await expect(rows).toHaveCount(2);
@@ -1246,7 +1246,7 @@ test("Who won agrees with Paid after the race ends", async ({ page }) => {
   await expect(row("none").getByTestId("who-count")).toHaveText("1");
   await expect(page.getByTestId("race-story")).toHaveText(
     "1 bug proven and paid (2.50 USDC). " +
-      "1 false claim lost its bond. False claims cost the owner nothing.",
+      "1 fake report lost its deposit. Fake reports cost the owner nothing.",
   );
 });
 
@@ -1257,7 +1257,7 @@ test("the story line tells the running race in one sentence", async ({
   await page.goto("/swarm");
   const story = page.getByTestId("race-story");
   await expect(story).toHaveText(
-    "12 agents search shop.example. Each claim locks a bond. Arsune checks it in a fresh browser.",
+    "12 agents search shop.example. Each report needs a deposit. Arsune checks it in a clean browser.",
   );
   // It sits under the header, above the pool and the line.
   const head = (await page.locator(".rv-head").boundingBox())!;
@@ -1297,7 +1297,7 @@ test("a race that ended with no agents says so", async ({ page }) => {
   });
   await page.goto("/swarm");
   await expect(page.getByTestId("race-story")).toHaveText(
-    "The race ended before any agent started. Site is slow.",
+    "The hunt ended before any agent started. Site is slow.",
   );
   await expect(page.getByTestId("race-story")).not.toContainText("bugs proven");
 });
@@ -1348,7 +1348,7 @@ test("the live race page shows this race only", async ({ page }) => {
   await expect(page.getByTestId("line-claims")).toHaveText("2");
   await expect(page.getByTestId("line-paid-amount")).toHaveText("+2.50 USDC");
   await expect(page.getByTestId("race-story")).toHaveText(
-    "1 bug proven and paid (2.50 USDC). 1 false claim lost its bond. False claims cost the owner nothing.",
+    "1 bug proven and paid (2.50 USDC). 1 fake report lost its deposit. Fake reports cost the owner nothing.",
   );
   await expect(page.getByTestId("claim-row")).toHaveCount(2);
   await expect(page.getByTestId("filter-all")).toHaveText("All (2)");
@@ -1516,7 +1516,7 @@ test("the agent filter goes away when the race moves to another bounty", async (
   await page.goto("/swarm");
   const bar = page.getByTestId("agent-filter");
   await markOf(page, "hunter-01").click();
-  await expect(bar).toHaveText("Claims by hunter-01 · Show all");
+  await expect(bar).toHaveText("Reports by hunter-01 · Show all");
   markPicked = true;
   await expect(page.getByTestId("agent-filter")).toHaveCount(0);
 });

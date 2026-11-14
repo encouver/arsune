@@ -38,18 +38,18 @@ import WhoWon from "./who-won";
 
 const POLL_MS = 1800;
 const LEDGER_LABELS: Record<string, string> = {
-  fund: "Bounty funded",
-  bond_in: "Bond posted",
+  fund: "Budget funded",
+  bond_in: "Deposit paid",
   reward_out: "Reward to hunter",
-  bond_refund: "Bond refunded",
-  bond_forfeit: "Bond forfeited",
+  bond_refund: "Deposit returned",
+  bond_forfeit: "Deposit lost",
   fee: "Arsune fee",
   scout_share: "Scout share",
 };
 const CLAIM_FILTERS: [string, string][] = [
   ["all", "All"],
   ["paid", "Proven"],
-  ["rejected", "False"],
+  ["rejected", "Fake"],
   ["duplicate", "Repeats"],
 ];
 
@@ -192,7 +192,7 @@ export default function SwarmPage() {
         if (!stop) setSwarmDown(true);
         if (swarmRef.current)
           errs.push(
-            "Live race data is not answering. Showing the last good state.",
+            "Live hunt data is not answering. Showing the last good state.",
           );
       }
       try {
@@ -282,7 +282,7 @@ export default function SwarmPage() {
     !swarm || !bounty || siteFailed
       ? null
       : finished && swarm.agents.length === 0
-        ? `The race ended before any agent started.${reason ? ` ${reason}` : ""}`
+        ? `The hunt ended before any agent started.${reason ? ` ${reason}` : ""}`
         : finished
           ? finishedStory(lineCounts(raceClaims, raceRows))
           : swarm.agents.length
@@ -301,18 +301,18 @@ export default function SwarmPage() {
       <div className="sw">
         <div className="rv-head">
           <h1 className="rv-site">
-            {bounty ? siteName(bounty.url) : "Bug race"}
+            {bounty ? siteName(bounty.url) : "Bug hunt"}
           </h1>
           <span className="sw-live" aria-live="polite">
             <i className={swarm && !finished ? "sw-pulse" : ""} />
             {other
-              ? "No race for this bounty now"
+              ? "No hunt for this site now"
               : idle
-                ? "No race has run yet"
+                ? "No hunt has run yet"
                 : swarm
                   ? finished
-                    ? "Race finished"
-                    : `Race running · ${swarm.agents.length} agents`
+                    ? "Hunt finished"
+                    : `Hunt running · ${swarm.agents.length} agents`
                   : swarmDown
                     ? "Live data offline"
                     : "Connecting"}
@@ -334,17 +334,17 @@ export default function SwarmPage() {
 
         {other && (
           <div className="notice" role="status" data-testid="other-race-banner">
-            The race that runs now is for another bounty. This board shows{" "}
-            {bounty ? siteName(bounty.url) : "this bounty"} from Arsune&apos;s
+            Another hunt is running now. This board shows{" "}
+            {bounty ? siteName(bounty.url) : "this hunt"} from Arsune&apos;s
             records only.{" "}
             <a
               href={`/swarm?bounty=${encodeURIComponent(rawSwarm?.bounty_id ?? "")}`}
             >
-              Watch the race that runs now
+              Watch the live hunt
             </a>{" "}
             ·{" "}
             <a href={`/bounties/${encodeURIComponent(wanted ?? "")}`}>
-              Start a race for this bounty
+              Start a hunt for this site
             </a>
           </div>
         )}
@@ -364,18 +364,18 @@ export default function SwarmPage() {
         )}
         {bounty?.status === "paused" && (
           <div className="sw-error" role="alert" data-testid="paused-banner">
-            The bounty is paused: Arsune cannot check this site, so agents stop
-            until Arsune can load the site again. {bounty.paused_reason}
+            The hunt is paused: Arsune cannot load this site, so agents wait
+            until the site loads again. {bounty.paused_reason}
           </div>
         )}
         {loaded && !bounty && errors.length === 0 && (
           <div className="notice">
-            No race yet. <a href="/">Start a race</a>, then come back here.
+            No hunt yet. <a href="/">Start a hunt</a>, then come back here.
           </div>
         )}
 
         {bounty && (
-          <section className="rv-card" aria-label="Race">
+          <section className="rv-card" aria-label="Hunt">
             <PoolBar pool={poolOf(bounty.budget_amount, rows)} />
             {swarm?.ai && swarm.ai.agents > 0 && (
               <p className="rv-ai" data-testid="ai-usage">
@@ -414,12 +414,12 @@ export default function SwarmPage() {
           onPick={pickAgent}
         />
 
-        <section className="sw-panel" aria-label="Claims" id="claims">
+        <section className="sw-panel" aria-label="Reports" id="claims">
           <div className="sw-panel-top">
-            <h2>Claims</h2>
-            <span>{raceClaims.length} claims</span>
+            <h2>Reports</h2>
+            <span>{raceClaims.length} reports</span>
           </div>
-          <div className="sw-filters" role="group" aria-label="Claim filter">
+          <div className="sw-filters" role="group" aria-label="Report filter">
             {CLAIM_FILTERS.map(([key, label]) => (
               <button
                 key={key}
@@ -437,7 +437,7 @@ export default function SwarmPage() {
           </div>
           {agentFilter && (
             <p className="rv-agent-filter" data-testid="agent-filter">
-              Claims by <b>{agentFilter.name}</b> ·{" "}
+              Reports by <b>{agentFilter.name}</b> ·{" "}
               <button type="button" onClick={() => setAgentFilter(null)}>
                 Show all
               </button>
@@ -447,8 +447,8 @@ export default function SwarmPage() {
             {shownClaims.length === 0 && (
               <li className="sw-empty">
                 {raceClaims.length === 0
-                  ? "No claims yet."
-                  : "No claims match."}
+                  ? "No reports yet."
+                  : "No reports match."}
               </li>
             )}
             {shownClaims.slice(0, 60).map((c) => (
@@ -470,11 +470,11 @@ export default function SwarmPage() {
                     ["pay-fees", "Arsune fees", sum(rows, "fee")],
                     [
                       "pay-forfeited",
-                      "Bonds forfeited",
+                      "Deposits lost",
                       sum(rows, "bond_forfeit"),
                     ],
                     ["pay-scouts", "Paid to scouts", sum(rows, "scout_share")],
-                    ["pay-false-cost", "Cost of false claims to you", 0],
+                    ["pay-false-cost", "Cost of fake reports to you", 0],
                   ] as const
                 ).map(([id, label, amount]) => (
                   <div key={id} data-testid={id}>

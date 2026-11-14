@@ -46,8 +46,8 @@ export default function RacesPage() {
         for (const d of details)
           if (d)
             next[d.id] = d.claims.length
-              ? `${d.claims.length} claims · ${countText(countGroups(d.claims))}`
-              : "No claims yet";
+              ? `${d.claims.length} report${d.claims.length === 1 ? "" : "s"} · ${countText(countGroups(d.claims))}`
+              : "No reports yet";
         setCounts(next);
       })
       .catch((e) => !stop && setError(errorText(e)));
@@ -65,28 +65,28 @@ export default function RacesPage() {
         <div className="sw">
           <div className="sw-head">
             <div>
-              <p className="eyebrow">Races</p>
-              <h1>Your bug races</h1>
+              <p className="eyebrow">Hunts</p>
+              <h1>Your bug hunts</h1>
               <p className="sw-sub">
-                Open a race to see its proven bugs, or to fund it and start it
+                Open a hunt to see its proven bugs, or to fund it and run it
                 again.
               </p>
             </div>
             <div className="sw-meta">
               <SimTag show={dry} />
               <a className="bo-board-link" href="/">
-                Start a new race →
+                Start a new hunt →
               </a>
             </div>
           </div>
           <Message kind="error" text={error} testId="races-error" />
           {items && items.length === 0 && (
             <p className="bo-text" data-testid="races-empty">
-              No races yet. <a href="/">Start the first one.</a>
+              No hunts yet. <a href="/">Start the first one.</a>
             </p>
           )}
           {items === null && !error && (
-            <p className="bo-muted">Loading the races…</p>
+            <p className="bo-muted">Loading your hunts…</p>
           )}
           <ul className="ra-list" data-testid="races">
             {items?.map((b) => (
@@ -100,7 +100,7 @@ export default function RacesPage() {
                   <span className="ra-status">
                     {racing === b.id && (
                       <span className="ra-live" data-testid="racing-now">
-                        Racing now
+                        Hunting now
                       </span>
                     )}
                     <span

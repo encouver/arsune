@@ -50,7 +50,7 @@ const SITE_STATUS: Record<SiteCheck["state"], [StepState, string]> = {
 function siteStep(b: OwnerBounty, proofDone: boolean): [StepState, string] {
   if (!proofDone) return ["locked", "After the proof"];
   if (b.site_check) return SITE_STATUS[b.site_check.state];
-  return ["active", "Checked when a race starts"];
+  return ["active", "Checked when a hunt starts"];
 }
 
 function fundStep(b: OwnerBounty): [StepState, string] {
@@ -72,13 +72,13 @@ const RACE_STATE: Record<RacePhase, StepState> = {
 
 function lockedText(b: OwnerBounty): string {
   if (b.status === "pending_proof")
-    return "First prove that you own the site. Arsune then loads it.";
+    return "First show that you own the site. Arsune then loads it.";
   if (b.status === "paused")
-    return "The bounty is paused. Check your site in step 2 to resume it.";
+    return "The hunt is paused. Check your site in step 2 to resume it.";
   if (b.status === "closed" && b.closed_reason === "budget_spent")
-    return "The budget is spent. Add money in step 3 to open the bounty again.";
-  if (b.status === "closed") return "This bounty is closed.";
-  return "Fund the race in step 3 first.";
+    return "The budget is spent. Add money in step 3 to open the hunt again.";
+  if (b.status === "closed") return "This hunt is closed.";
+  return "Fund the hunt in step 3 first.";
 }
 
 export default function BountyPage({
@@ -172,12 +172,12 @@ export default function BountyPage({
                 {loadError}{" "}
                 {notFound && (
                   <a className="bo-link" href="/">
-                    Start a new race
+                    Start a new hunt
                   </a>
                 )}
               </div>
             ) : (
-              <p className="bo-muted">Loading the race…</p>
+              <p className="bo-muted">Loading the hunt…</p>
             )}
           </div>
         </main>
@@ -197,13 +197,13 @@ export default function BountyPage({
   const fund = fundStep(bounty);
   const glance: [string, StepState, string][] = [
     [
-      "Prove you own the site",
+      "Show you own the site",
       proofDone ? "done" : "active",
       proofDone ? "Done" : "Waiting for proof",
     ],
     ["Arsune loads your site", ...site],
-    ["Fund the race", ...fund],
-    ["Start the race", RACE_STATE[phase], PHASE_STATUS[phase]],
+    ["Fund the hunt", ...fund],
+    ["Start the hunt", RACE_STATE[phase], PHASE_STATUS[phase]],
   ];
 
   return (
@@ -213,13 +213,13 @@ export default function BountyPage({
         <div className="sw">
           <div className="sw-head">
             <div>
-              <p className="eyebrow">Bug race</p>
+              <p className="eyebrow">Bug hunt</p>
               <h1>
                 <span className="sw-site">{siteName(bounty.url)}</span>
               </h1>
               <p className="sw-sub">
                 {usdc(bounty.reward_amount)} USDC for each proven bug · agents
-                bond {usdc(bounty.bond_amount)} USDC per claim
+                pay a {usdc(bounty.bond_amount)} USDC deposit per report
               </p>
             </div>
             <div className="sw-meta">
@@ -271,7 +271,7 @@ export default function BountyPage({
           <ol className="bo-steps" aria-label="Steps">
             <Step
               n={1}
-              title="Prove that you own the site"
+              title="Show that you own the site"
               state={proofDone ? "done" : "active"}
               status={proofDone ? "Done" : "Waiting for proof"}
               collapse
@@ -296,10 +296,10 @@ export default function BountyPage({
                 onChange={refresh}
               />
             </Step>
-            <Step n={3} title="Fund the race" state={fund[0]} status={fund[1]}>
+            <Step n={3} title="Fund the hunt" state={fund[0]} status={fund[1]}>
               {fund[0] === "locked" ? (
                 <p className="bo-muted">
-                  You fund the race after Arsune loads your site.
+                  You fund the hunt after Arsune loads your site.
                 </p>
               ) : (
                 <FundStep
@@ -313,7 +313,7 @@ export default function BountyPage({
             </Step>
             <Step
               n={4}
-              title="Start the race"
+              title="Start the hunt"
               state={RACE_STATE[phase]}
               status={PHASE_STATUS[phase]}
             >
@@ -482,7 +482,7 @@ function ProveStep({
       <Message
         kind="ok"
         testId="proof-done"
-        text="Ownership proven. Arsune found the token on your site."
+        text="Ownership proven. Arsune found the code on your site."
       />
     );
 
@@ -501,7 +501,7 @@ function ProveStep({
               : "Demo site: set proof automatically"}
           </button>
           <span className="bo-muted" data-testid="demo-proof-note">
-            This is the demo shop. Arsune sets the proof for you.
+            This is our demo shop. We do this step for you.
           </span>
         </div>
         <Message kind="info" text={info} testId="proof-info" />
@@ -582,8 +582,8 @@ function SiteStep({
   if (!proofDone)
     return (
       <p className="bo-muted">
-        After the proof, Arsune loads your site in a fresh browser on desktop
-        and mobile. Agents never start on a site that Arsune cannot check.
+        Next, Arsune opens your site in a clean browser, on desktop and mobile.
+        Agents start only when your site loads.
       </p>
     );
 
@@ -632,8 +632,8 @@ function SiteCheckResult({ check }: { check: SiteCheck | null }) {
   if (!check)
     return (
       <p className="bo-muted" data-testid="site-check" data-state="none">
-        Arsune loads your site again when a race starts, so agents never work on
-        a site that it cannot check.
+        Arsune loads your site again when a hunt starts. Agents start only when
+        your site loads.
       </p>
     );
   const kind =
@@ -644,7 +644,7 @@ function SiteCheckResult({ check }: { check: SiteCheck | null }) {
         : "info";
   const text =
     check.state === "checking"
-      ? "Arsune is loading your site in a fresh browser, at 1280 and 390 pixels wide…"
+      ? "Arsune is loading your site in a clean browser, at 1280 and 390 pixels wide…"
       : check.reason;
   return (
     <div data-testid="site-check" data-state={check.state}>
@@ -694,8 +694,8 @@ function PausedBanner({
       data-testid="paused-banner"
     >
       <div className="sw-error" role="alert">
-        Arsune paused this bounty and takes no new claims, so agents do not
-        spend time on claims that it cannot check. {bounty.paused_reason}
+        Arsune paused this hunt because it cannot load your site. Agents send
+        no new reports until it loads again. {bounty.paused_reason}
       </div>
       <div className="bo-actions">
         <button

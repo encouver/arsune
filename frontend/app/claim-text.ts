@@ -23,9 +23,9 @@ export const GROUPS: Record<
     mark: "✓",
   },
   false: {
-    title: "False claims (bond lost)",
-    count: "false",
-    chip: "False claim",
+    title: "Fake reports (deposit lost)",
+    count: "fake",
+    chip: "Fake report",
     mark: "✕",
   },
   repeat: {
@@ -174,11 +174,11 @@ export function claimGroup(c: ClaimText): Group {
 export function claimReason(c: ClaimText): string {
   const reason = (c.checker_reason ?? "").replace(
     new RegExp(`\\bClaim ${UUID.source}`, "gi"),
-    "An earlier claim",
+    "An earlier report",
   );
   if (reason) return reason;
   return claimGroup(c) === "pending"
-    ? "Arsune is checking this claim in a fresh browser."
+    ? "Arsune is checking this report in a clean browser."
     : "";
 }
 
@@ -207,7 +207,7 @@ export function countGroups(claims: ClaimText[]): Record<Group, number> {
   return counts;
 }
 
-/** "7 proven · 3 false · 4 repeats", with the empty optional groups left out. */
+/** "7 proven · 3 fake · 4 repeats", with the empty optional groups left out. */
 export function countText(counts: Record<Group, number>): string {
   const text = (g: Group) =>
     `${counts[g]} ${g === "repeat" && counts[g] === 1 ? "repeat" : GROUPS[g].count}`;
