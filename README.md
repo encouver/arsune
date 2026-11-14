@@ -396,3 +396,7 @@ npm --prefix frontend run build
 - The escrow contract is deployed on mainnet (`escrow.arsune.near`, locked) but not audited. The public site still runs in `dry` mode; escrow mode is tested on a local NEAR sandbox and with mocked RPC.
 - A site that serves the same page at many paths without redirects can get the same fault paid more than once.
 - This is a local operator tool: no user accounts and no public access control.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
